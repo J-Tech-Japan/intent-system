@@ -62,6 +62,14 @@ public sealed class OrcaRunBindingWriteTests : IDisposable
         var orcaRun = after.RootElement.GetProperty("roles").GetProperty("steward").GetProperty("orca_run");
         Assert.Equal(OrcaRunTestSupport.RunId, orcaRun.GetProperty("run_id").GetString());
         Assert.Equal("orca-push", orcaRun.GetProperty("receive_policy").GetString());
+        var expected = JsonNode.Parse(beforeText) as JsonObject ?? new JsonObject();
+        expected["roles"]!["steward"]!.AsObject()["orca_run"] = new JsonObject
+        {
+            ["run_id"] = OrcaRunTestSupport.RunId,
+            ["receive_policy"] = "orca-push",
+        };
+        var expectedText = expected.ToJsonString(SessionLayerTopologyWriter.FileJsonOptionsPublic) + Environment.NewLine;
+        Assert.Equal(expectedText, afterText);
         Assert.NotEqual(beforeBytes, workspace.TopologyBytes());
         OrcaRunTestSupport.AssertOrcaLogEmpty(workspace.FakeBin);
     }

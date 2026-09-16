@@ -77,9 +77,11 @@ public sealed class OrcaRunValidateTests : IDisposable
             "session-layer", "topology", "validate",
             "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--format", "json");
         Assert.Equal(1, exitCode);
-        Assert.Contains(
-            result.GetProperty("findings").EnumerateArray(),
-            finding => finding.GetProperty("cause").GetString() == "orca-run-id-malformed");
+        var finding = result.GetProperty("findings").EnumerateArray()
+            .Single(item => item.GetProperty("cause").GetString() == "orca-run-id-malformed");
+        Assert.Equal(
+            "Role 'steward' orca_run run_id 'bad-id' does not match ^run_[0-9a-f]{12}$.",
+            finding.GetProperty("message").GetString());
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -66,7 +67,7 @@ internal static class OrcaRunBindingHealth
         return Build(causes);
     }
 
-    public static IReadOnlyList<(string Role, string Cause)> EvaluateTopologyValidateFindings(
+    public static IReadOnlyList<(string Role, string Cause, string Message)> EvaluateTopologyValidateFindings(
         string routingRoot,
         string domain,
         string team,
@@ -74,7 +75,7 @@ internal static class OrcaRunBindingHealth
         bool storeValidationValid,
         bool topologyResolved)
     {
-        var findings = new List<(string Role, string Cause)>();
+        var findings = new List<(string Role, string Cause, string Message)>();
         var shape = topologyResolved
             ? OrcaRunTeamShape.Resolve(routingRoot, domain, team)
             : null;
@@ -99,7 +100,7 @@ internal static class OrcaRunBindingHealth
 
             foreach (var cause in causes)
             {
-                findings.Add((roleKey, cause));
+                findings.Add((roleKey, cause, MessageForTopologyValidate(cause, roleKey, record, binding, shape)));
             }
         }
 
@@ -113,13 +114,16 @@ internal static class OrcaRunBindingHealth
                 .FirstOrDefault(key => LogicalRoleNormalizer.TryNormalize(key, out var canonical, out _)
                     && string.Equals(canonical, shape.RequiredSeat, StringComparison.Ordinal))
                 ?? shape.RequiredSeat!;
-            findings.Add((requiredKey, "orca-run-binding-absent"));
+            findings.Add((
+                requiredKey,
+                "orca-run-binding-absent",
+                $"No Orca Run binding is recorded on the required seat '{requiredKey}'; record one with {OrcaRunBinding.BuildRecordOrcaRunCommand(domain, team, requiredKey)}."));
         }
 
         return findings;
     }
 
-    public static IReadOnlyList<(string Role, string Cause)> EvaluateTopologyValidateFindingsFromRawFile(
+    public static IReadOnlyList<(string Role, string Cause, string Message)> EvaluateTopologyValidateFindingsFromRawFile(
         string routingRoot,
         string domain,
         string team,
@@ -146,7 +150,7 @@ internal static class OrcaRunBindingHealth
                 return [];
             }
 
-            var findings = new List<(string Role, string Cause)>();
+            var findings = new List<(string Role, string Cause, string Message)>();
             foreach (var property in roles.EnumerateObject())
             {
                 if (!property.Value.TryGetProperty("orca_run", out _))
@@ -155,14 +159,16 @@ internal static class OrcaRunBindingHealth
                 }
 
                 var roleObject = JsonNode.Parse(property.Value.GetRawText()) as JsonObject ?? new JsonObject();
-                var binding = OrcaRunBinding.ParseRoleBindingNode(roleObject["orca_run"]!);
+                roleObject.TryGetPropertyValue("orca_run", out var orcaRunNode);
+                var binding = OrcaRunBinding.ParseRoleBindingNode(orcaRunNode ?? JsonValue.Create((object?)null)!);
+                var record = BuildRecordFromRoleObject(roleObject);
                 var causes = new List<string>();
                 AddRow1(binding, causes);
                 AddRow3(binding.RunId, causes);
                 AddRow4(binding.ReceivePolicy, causes);
                 foreach (var cause in causes)
                 {
-                    findings.Add((property.Name, cause));
+                    findings.Add((property.Name, cause, MessageForTopologyValidate(cause, property.Name, record, binding, null)));
                 }
             }
 
@@ -733,6 +739,30 @@ internal static class OrcaRunBindingHealth
         return new NotifyRecordedRole(resident, null, null, null, null, null, null, frontend);
     }
 
+    public static string MessageForTopologyValidate(
+        string cause,
+        string roleKey,
+        NotifyRecordedRole record,
+        OrcaRunRoleBinding binding,
+        OrcaRunTeamShapeResult? shape) =>
+        cause switch
+        {
+            "orca-run-binding-malformed" => $"Role '{roleKey}' orca_run is absent, null, or not an object.",
+            "orca-run-id-malformed" => $"Role '{roleKey}' orca_run run_id '{binding.RunId}' does not match ^run_[0-9a-f]{{12}}$.",
+            "receive-policy-invalid" => $"Role '{roleKey}' orca_run receive_policy '{binding.ReceivePolicy}' is not orca-push or inbox-pull.",
+            "team-shape-unreadable" => shape?.Message ?? "team mode could not be read.",
+            "team-shape-unrecorded" => shape?.Message ?? "team mode is unrecorded.",
+            "team-shape-not-bindable" => shape?.Message ?? "team mode is not bindable.",
+            "team-shape-unrecognized" => shape?.Message ?? "team shape is unrecognized.",
+            "binding-location-not-allowed" => $"Role '{roleKey}' records an Orca Run binding that is not allowed for the current team shape.",
+            "binding-seat-not-allowed" => $"Role '{roleKey}' is not the required seat for the recorded team shape.",
+            "receive-policy-herdr-seat" => $"Role '{roleKey}' is a herdr seat and cannot record a receive policy.",
+            "receive-policy-seat-kind-unrecorded" => $"Role '{roleKey}' frontend is not orca, claude-app, or codex-app.",
+            "receive-policy-seat-mismatch" => $"Role '{roleKey}' receive_policy does not match the recorded frontend.",
+            "binding-duplicate" => $"Another role already records orca_run before '{roleKey}'.",
+            _ => cause,
+        };
+
     private static string MessageForTeamModeValidate(
         string cause,
         string domain,
@@ -787,6 +817,8 @@ internal sealed record BootstrapOrcaRunBinding
     public string? RunId { get; init; }
     public string? ReceivePolicy { get; init; }
     public string? ReceiveInstruction { get; init; }
-    public required string Domain { get; init; }
-    public required string Team { get; init; }
+    [JsonIgnore]
+    public string Domain { get; init; } = string.Empty;
+    [JsonIgnore]
+    public string Team { get; init; } = string.Empty;
 }

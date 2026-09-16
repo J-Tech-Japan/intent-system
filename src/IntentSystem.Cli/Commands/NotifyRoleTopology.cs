@@ -484,13 +484,10 @@ internal static class NotifyRoleTopologyStore
                 }
 
                 OrcaRunRoleBinding? orcaRun = null;
-                if (property.Value.TryGetProperty("orca_run", out _))
+                if (property.Value.TryGetProperty("orca_run", out var orcaRunElement))
                 {
-                    var roleObject = JsonNode.Parse(property.Value.GetRawText()) as JsonObject;
-                    if (roleObject is not null && OrcaRunBinding.TryParseRoleBinding(roleObject, out var parsed))
-                    {
-                        orcaRun = parsed;
-                    }
+                    orcaRun = OrcaRunBinding.ParseRoleBindingNode(
+                        JsonNode.Parse(orcaRunElement.GetRawText())!);
                 }
 
                 roles.Add(property.Name, new NotifyRecordedRole(

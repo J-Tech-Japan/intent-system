@@ -114,7 +114,7 @@ internal static class TeamModeOrcaRunGuard
                 continue;
             }
 
-            if (bound is not null)
+            if (bound is not null && seen.Add(team))
             {
                 yield return bound;
             }

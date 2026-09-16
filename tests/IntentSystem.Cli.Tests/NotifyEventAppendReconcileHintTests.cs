@@ -18,6 +18,7 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
     private readonly OrcaRunTestSupport.FakeBinFixture fakeBin;
     private readonly DateTimeOffset now = new(2026, 9, 15, 18, 0, 0, TimeSpan.Zero);
     private readonly string? previousPath;
+    private readonly string? previousFakeOrcaLog;
 
     public NotifyEventAppendReconcileHintTests()
     {
@@ -25,6 +26,7 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
         OrcaRunTestSupport.ResetSeams();
         fakeBin = OrcaRunTestSupport.CreateFakeBinFixture(root);
         var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        previousFakeOrcaLog = Environment.GetEnvironmentVariable("FAKE_ORCA_LOG");
         Environment.SetEnvironmentVariable("PATH", $"{fakeBin.BinDirectory}:{existing}");
         Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", fakeBin.OrcaLogPath);
         OrcaRunTestSupport.ClearFakeLogs(fakeBin);
@@ -39,6 +41,7 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
     {
         NotifyCommand.ProcessRunnerFactory = null;
         Environment.SetEnvironmentVariable("PATH", previousPath);
+        Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", previousFakeOrcaLog);
         OrcaRunTestSupport.ResetSeams();
         if (Directory.Exists(root))
         {

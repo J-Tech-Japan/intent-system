@@ -68,14 +68,11 @@ internal static class OrcaRunRecordCommand
 
         FileStream? teamModeLock = null;
         FileStream? topologyLock = null;
-        var createdPaths = new List<string>();
         try
         {
             if (request.Write)
             {
                 OrcaRunTeamModeLock.EnsureLockDirectory(context.RepoRoot);
-                createdPaths.Add(OrcaRunTeamModeLock.RelativeIgnorePath);
-                createdPaths.Add(OrcaRunTeamModeLock.RelativeLockPath);
                 teamModeLock = OrcaRunTeamModeLock.TryAcquire(context.RepoRoot, out var busyMessage);
                 if (teamModeLock is null)
                 {
@@ -113,13 +110,6 @@ internal static class OrcaRunRecordCommand
             {
                 SessionLayerTopologyWriter.EnsureLocalIgnorePublic(context.RepoRoot);
                 var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, request.Domain, request.Team);
-                var ignorePath = NotifyRoleTopologyStore.ResolveLocalIgnorePath(context.RepoRoot);
-                if (!File.Exists(ignorePath) || !string.Equals(File.ReadAllText(ignorePath), "*\n", StringComparison.Ordinal))
-                {
-                    createdPaths.Add(".intent-cli/topology/.gitignore");
-                }
-
-                createdPaths.Add($"{recordPath}.lock");
                 try
                 {
                     topologyLock = SessionLayerTopologyWriter.AcquireCasLockPublic(topologyPath);
@@ -247,7 +237,15 @@ internal static class OrcaRunRecordCommand
                     OrcaRunSoloStore.Delete(context.RepoRoot, request.Domain, request.Team);
                 }
 
-                WriteResult(writer, Success(request, shape, recordPath, soloCanonical!, absentCurrent, "absent", applied: request.Write, changed: soloRead.Exists));
+                WriteResult(writer, Success(
+                    request,
+                    shape,
+                    recordPath,
+                    soloCanonical!,
+                    absentCurrent,
+                    "absent",
+                    applied: request.Write && soloRead.Exists,
+                    changed: soloRead.Exists));
                 return 0;
             }
 
@@ -672,7 +670,7 @@ internal static class OrcaRunRecordCommand
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 

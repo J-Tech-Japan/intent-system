@@ -201,28 +201,16 @@ internal static class SessionLayerTopologyCommand
                         team!,
                         validation.Valid)
                     : [];
-            foreach (var (role, cause) in orcaFindings)
+            foreach (var (role, cause, message) in orcaFindings)
             {
-                if (string.Equals(cause, "orca-run-binding-absent", StringComparison.Ordinal))
+                findings.Add(new SessionLayerTopologyFinding(
+                    role,
+                    "orca_run",
+                    cause,
+                    message)
                 {
-                    var shape = OrcaRunTeamShape.Resolve(context.RepoRoot, domain!, team!);
-                    findings.Add(new SessionLayerTopologyFinding(
-                        role,
-                        "orca_run",
-                        cause,
-                        $"No Orca Run binding is recorded on the required seat '{role}'; record one with {OrcaRunBinding.BuildRecordOrcaRunCommand(domain!, team!, role)}.")
-                    {
-                        IsInformational = true,
-                    });
-                }
-                else
-                {
-                    findings.Add(new SessionLayerTopologyFinding(
-                        role,
-                        "orca_run",
-                        cause,
-                        cause));
-                }
+                    IsInformational = string.Equals(cause, "orca-run-binding-absent", StringComparison.Ordinal),
+                });
             }
         }
 
@@ -3074,12 +3062,13 @@ internal static class SessionLayerTopologyWriter
     private static void EnsureLocalIgnore(string routingRoot)
     {
         var path = NotifyRoleTopologyStore.ResolveLocalIgnorePath(routingRoot);
-        if (File.Exists(path))
+        var content = "*" + Environment.NewLine;
+        if (File.Exists(path) && string.Equals(File.ReadAllText(path), content, StringComparison.Ordinal))
         {
             return;
         }
 
-        WriteAtomically(path, "*" + Environment.NewLine);
+        WriteAtomically(path, content);
     }
 
     private static SessionLayerTopologyResidenceUpdateResult ResidenceConflict(

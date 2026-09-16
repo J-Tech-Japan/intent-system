@@ -113,7 +113,7 @@ public sealed class OrcaRunShowHandoverTests : IDisposable
     }
 
     [Fact]
-    public void Bootstrap_NoBinding_IsByteIdenticalForRecordedShapes_G837()
+    public void Bootstrap_NoBinding_HasNoOrcaRunBindingForRecordedShapes_G837()
     {
         AssertNoBindingByteIdentical(() => workspace.InstallFourSeatDeliveryFixture());
         using (var five = new OrcaRunTestSupport.OrcaRunWorkspace("handover-five"))
