@@ -14,7 +14,6 @@ public sealed class OrcaRunBindingWriteTests : IDisposable
 
     public OrcaRunBindingWriteTests()
     {
-        OrcaRunTestSupport.ClearFakeLogs();
     }
 
     public void Dispose() => workspace.Dispose();
@@ -38,14 +37,15 @@ public sealed class OrcaRunBindingWriteTests : IDisposable
         Assert.Contains(OrcaRunTestSupport.RecordedOnlySuffix, result.GetProperty("summary").GetString(), StringComparison.Ordinal);
         Assert.Equal(before, workspace.TopologyBytes());
         workspace.AssertOnlyNewPaths([], beforePaths);
-        OrcaRunTestSupport.AssertOrcaLogEmpty();
+        OrcaRunTestSupport.AssertOrcaLogEmpty(workspace.FakeBin);
     }
 
     [Fact]
     public void FiveSeat_WriteAddsOnlyOrcaRun_G837()
     {
-        workspace.InstallFiveSeatDeliveryFixture();
+        InstallCliWrittenFiveSeat(workspace);
         var beforeText = File.ReadAllText(workspace.TopologyPath);
+        var beforeBytes = workspace.TopologyBytes();
 
         var (exitCode, result) = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
             workspace, "steward", "absent", OrcaRunTestSupport.RunId, "orca-push", write: true));
@@ -56,12 +56,14 @@ public sealed class OrcaRunBindingWriteTests : IDisposable
         Assert.True(result.GetProperty("changed").GetBoolean());
         Assert.False(result.GetProperty("already_recorded").GetBoolean());
         var afterText = File.ReadAllText(workspace.TopologyPath);
+        Assert.EndsWith(Environment.NewLine, afterText, StringComparison.Ordinal);
         workspace.AssertTopologyDeepEqualsExceptOrcaRun(beforeText, afterText);
         using var after = JsonDocument.Parse(afterText);
         var orcaRun = after.RootElement.GetProperty("roles").GetProperty("steward").GetProperty("orca_run");
         Assert.Equal(OrcaRunTestSupport.RunId, orcaRun.GetProperty("run_id").GetString());
         Assert.Equal("orca-push", orcaRun.GetProperty("receive_policy").GetString());
-        OrcaRunTestSupport.AssertOrcaLogEmpty();
+        Assert.NotEqual(beforeBytes, workspace.TopologyBytes());
+        OrcaRunTestSupport.AssertOrcaLogEmpty(workspace.FakeBin);
     }
 
     [Fact]
@@ -100,12 +102,35 @@ public sealed class OrcaRunBindingWriteTests : IDisposable
     {
         workspace.InstallFiveSeatDeliveryFixture();
         workspace.RunRecordOrcaRun("steward", "absent", OrcaRunTestSupport.RunId, "orca-push", write: true);
+        var root = JsonNode.Parse(File.ReadAllText(workspace.TopologyPath))!.AsObject();
+        root["roles"]!["steward"]!.AsObject()["orca_run"]!["receive_policy"] = "inbox-pull";
+        File.WriteAllText(workspace.TopologyPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
 
         var (exitCode, result) = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
             workspace, "steward", OrcaRunTestSupport.RunId, OrcaRunTestSupport.RunId, "orca-push", write: true));
 
         Assert.Equal(0, exitCode);
+        Assert.False(result.GetProperty("already_recorded").GetBoolean());
+        Assert.True(result.GetProperty("applied").GetBoolean());
+        using var after = JsonDocument.Parse(File.ReadAllText(workspace.TopologyPath));
+        Assert.Equal("orca-push", after.RootElement.GetProperty("roles").GetProperty("steward").GetProperty("orca_run").GetProperty("receive_policy").GetString());
+    }
+
+    [Fact]
+    public void Solo_EqualRerunDoesNotRewriteSidecar_G837()
+    {
+        workspace.InstallSoloFixture();
+        workspace.RunRecordOrcaRun("design", "absent", OrcaRunTestSupport.RunId, "inbox-pull", frontend: "claude-app", write: true);
+        var beforeBytes = File.ReadAllBytes(workspace.SoloBindingPath);
+        var beforeWrite = File.GetLastWriteTimeUtc(workspace.SoloBindingPath);
+
+        var (exitCode, result) = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
+            workspace, "design", OrcaRunTestSupport.RunId, OrcaRunTestSupport.RunId, "inbox-pull", frontend: "claude-app", write: true));
+
+        Assert.Equal(0, exitCode);
         Assert.True(result.GetProperty("already_recorded").GetBoolean());
+        Assert.Equal(beforeBytes, File.ReadAllBytes(workspace.SoloBindingPath));
+        Assert.Equal(beforeWrite, File.GetLastWriteTimeUtc(workspace.SoloBindingPath));
     }
 
     [Fact]
@@ -139,5 +164,15 @@ public sealed class OrcaRunBindingWriteTests : IDisposable
         workspace.AssertTopologyDeepEqualsExceptOrcaRun(
             node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
             File.ReadAllText(workspace.TopologyPath));
+    }
+
+    private static void InstallCliWrittenFiveSeat(OrcaRunTestSupport.OrcaRunWorkspace workspace)
+    {
+        workspace.WriteTeamModeFile(TeamMode.Delivery, workspace.Team);
+        workspace.RecordHerdr("orchestration", "w1:p1");
+        workspace.RecordHerdr("implementation", "w1:p2");
+        workspace.RecordHerdr("review", "w1:p3");
+        workspace.RecordExternal("design", "claude-app");
+        workspace.RecordExternal("steward", "orca");
     }
 }

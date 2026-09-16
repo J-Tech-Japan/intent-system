@@ -11,7 +11,9 @@ public sealed class OrcaRunValidateTests : IDisposable
 {
     private readonly OrcaRunTestSupport.OrcaRunWorkspace workspace = new("validate");
 
-    public OrcaRunValidateTests() => OrcaRunTestSupport.ClearFakeLogs();
+    public OrcaRunValidateTests()
+    {
+    }
 
     public void Dispose() => workspace.Dispose();
 

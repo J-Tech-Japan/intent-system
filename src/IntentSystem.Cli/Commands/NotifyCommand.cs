@@ -2666,14 +2666,20 @@ internal static class NotifyCommand
                 }
 
                 var reconciliationCommand = BuildFailureReconciliationCommand(operation, options, cause);
+                var useReconciliationSummary = (string.Equals(operation, OperationReport, StringComparison.Ordinal)
+                        || string.Equals(operation, OperationCollect, StringComparison.Ordinal))
+                    && !routingWriteFailure;
                 var summary = routingWriteFailure
                     ? $"Could not append notification to external role '{options.ToRole}' through recorded reader "
                       + $"'{delivery.ReaderPath}' in the current execution context: {exception.Message} "
                       + $"The attempted host-root write failed, so the sender-local report handoff is retained at '{outboxEntryPath}'. "
                       + "This measured write failure is a delegation-level routing fault, not an implementation-seat stall."
-                    : $"Could not append notification to external role '{options.ToRole}' through recorded reader "
-                      + $"'{delivery.ReaderPath}': {exception.Message} "
-                      + $"The report is retained at '{outboxEntryPath}' and marked undelivered; orchestration reconciles with '{reconciliationCommand}', which names the notify collect recovery while the report is undelivered.";
+                    : useReconciliationSummary
+                        ? $"Could not append notification to external role '{options.ToRole}' through recorded reader "
+                          + $"'{delivery.ReaderPath}': {exception.Message} "
+                          + $"The report is retained at '{outboxEntryPath}' and marked undelivered; orchestration reconciles with '{reconciliationCommand}', which names the notify collect recovery while the report is undelivered."
+                        : $"Could not append notification to external role '{options.ToRole}' through recorded reader "
+                          + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.";
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
@@ -5290,12 +5296,8 @@ internal static class NotifyEventWriter
 
     public static void Append(string path, NotifyDesignEvent designEvent)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var line = JsonSerializer.Serialize(designEvent);
-        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
-        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        writer.Write(line);
-        writer.Write('\n');
+        GuardedFileWrite.AppendLine(path, line);
     }
 
     public static string NormalizeSummary(string summary) =>

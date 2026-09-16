@@ -12,13 +12,24 @@ namespace IntentSystem.Cli.Tests;
 public sealed class OrcaRunDiscoveryTests : IDisposable
 {
     private readonly string hostRoot = Directory.CreateTempSubdirectory("orca-run-discovery-host-").FullName;
+    private readonly OrcaRunTestSupport.FakeBinFixture fakeBin;
+    private readonly string? previousPath;
 
-    public OrcaRunDiscoveryTests() => OrcaRunTestSupport.ClearFakeLogs();
+    public OrcaRunDiscoveryTests()
+    {
+        previousPath = Environment.GetEnvironmentVariable("PATH");
+        fakeBin = OrcaRunTestSupport.CreateFakeBinFixture(hostRoot);
+        var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        Environment.SetEnvironmentVariable("PATH", $"{fakeBin.BinDirectory}:{existing}");
+        Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", fakeBin.OrcaLogPath);
+        OrcaRunTestSupport.ClearFakeLogs(fakeBin);
+    }
 
     public void Dispose()
     {
         GuardedFileRead.ReadAllTextFactory = null;
         OrcaRunTestSupport.ResetSeams();
+        Environment.SetEnvironmentVariable("PATH", previousPath);
         if (Directory.Exists(hostRoot))
         {
             Directory.Delete(hostRoot, recursive: true);
@@ -53,12 +64,16 @@ public sealed class OrcaRunDiscoveryTests : IDisposable
         unreadable.InstallFiveSeatDeliveryFixture();
         unreadable.WriteTopologyOrcaRun("steward", OrcaRunTestSupport.RunId, "orca-push");
 
+        using var noBinding = CreateWorkspace("no-binding", "no-binding-team");
+        noBinding.InstallFourSeatDeliveryFixture();
+
         CopyWorkspaceIntoHost(five);
         CopyWorkspaceIntoHost(solo);
         CopyWorkspaceIntoHost(malformed);
         CopyWorkspaceIntoHost(unresolved);
         CopyWorkspaceIntoHost(unparseable);
         CopyWorkspaceIntoHost(unreadable);
+        CopyWorkspaceIntoHost(noBinding);
         var unreadableHostTopology = NotifyRoleTopologyStore.ResolvePath(hostRoot, OrcaRunTestSupport.Domain, "unreadable-team");
         GuardedFileRead.ReadAllTextFactory = path =>
             string.Equals(path, unreadableHostTopology, StringComparison.Ordinal)
@@ -102,7 +117,8 @@ public sealed class OrcaRunDiscoveryTests : IDisposable
         Assert.Contains(result.GetProperty("bindings").EnumerateArray(), row => row.GetProperty("health").GetString() == "topology-unresolved");
         Assert.Contains(result.GetProperty("unreadable_records").EnumerateArray(), row => row.GetProperty("cause").GetString() == "topology-file-unparseable");
         Assert.DoesNotContain(result.GetProperty("bindings").EnumerateArray(), row => row.GetProperty("team").GetString() == "no-binding-team");
-        OrcaRunTestSupport.AssertOrcaLogEmpty();
+        OrcaRunTestSupport.AssertFakeOrcaLive(fakeBin);
+        OrcaRunTestSupport.AssertOrcaLogEmpty(fakeBin);
     }
 
     [Fact]

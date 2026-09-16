@@ -97,17 +97,9 @@ internal static class TeamModeCommand
 
         try
         {
-            var state = TeamModeStore.TryRead(context.RepoRoot);
-            var newStatePreview = BuildUpdatedState(state, options);
-            var guard = TeamModeOrcaRunGuard.Evaluate(context.RepoRoot, options.Domain!, state, newStatePreview);
-            if (guard.Refused)
-            {
-                writer.WriteLine(guard.RefusalLine);
-                return 1;
-            }
-
             FileStream? teamModeLock = null;
             string? digestBefore = null;
+            TeamModeState? state;
             try
             {
                 if (options.Write)
@@ -120,7 +112,30 @@ internal static class TeamModeCommand
                         return 1;
                     }
 
+                    TeamModeOrcaRunGuard.AfterLockHook?.Invoke();
+                }
+
+                try
+                {
+                    state = TeamModeStore.TryRead(context.RepoRoot);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    writer.WriteLine($"team-mode-write-refused: {exception.Message}");
+                    return 1;
+                }
+
+                if (options.Write)
+                {
                     digestBefore = OrcaRunTeamModeLock.ComputeDigest(context.RepoRoot);
+                }
+
+                var newStatePreview = BuildUpdatedState(state, options);
+                var guard = TeamModeOrcaRunGuard.Evaluate(context.RepoRoot, options.Domain!, state, newStatePreview);
+                if (guard.Refused)
+                {
+                    writer.WriteLine(guard.RefusalLine);
+                    return 1;
                 }
 
                 TeamModeOrcaRunGuard.BeforeWriteHook?.Invoke();

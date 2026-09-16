@@ -11,7 +11,9 @@ public sealed class OrcaRunShowHandoverTests : IDisposable
 {
     private readonly OrcaRunTestSupport.OrcaRunWorkspace workspace = new("handover");
 
-    public OrcaRunShowHandoverTests() => OrcaRunTestSupport.ClearFakeLogs();
+    public OrcaRunShowHandoverTests()
+    {
+    }
 
     public void Dispose() => workspace.Dispose();
 

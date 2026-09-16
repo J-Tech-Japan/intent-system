@@ -357,7 +357,7 @@ internal static class OrcaRunBindingHealth
         OrcaRunTeamShapeResult shape,
         List<string> causes)
     {
-        if (file.OrcaRunAbsent || file.OrcaRunNull || !file.HasOrcaRunObject)
+        if (file.OrcaRunAbsent || file.OrcaRunNull || !file.HasOrcaRunObject || file.RunId is null)
         {
             causes.Add("orca-run-binding-malformed");
         }

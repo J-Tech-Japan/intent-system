@@ -10,7 +10,9 @@ public sealed class OrcaRunBindingAliasTests : IDisposable
 {
     private readonly OrcaRunTestSupport.OrcaRunWorkspace workspace = new("alias");
 
-    public OrcaRunBindingAliasTests() => OrcaRunTestSupport.ClearFakeLogs();
+    public OrcaRunBindingAliasTests()
+    {
+    }
 
     public void Dispose() => workspace.Dispose();
 

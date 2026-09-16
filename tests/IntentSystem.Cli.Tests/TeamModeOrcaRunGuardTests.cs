@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using IntentSystem.Cli.Commands;
 
 namespace IntentSystem.Cli.Tests;
@@ -10,8 +11,6 @@ namespace IntentSystem.Cli.Tests;
 public sealed class TeamModeOrcaRunGuardTests : IDisposable
 {
     private readonly OrcaRunTestSupport.OrcaRunWorkspace workspace = new("guard");
-
-    public TeamModeOrcaRunGuardTests() => OrcaRunTestSupport.ClearFakeLogs();
 
     public void Dispose() => workspace.Dispose();
 
@@ -79,6 +78,39 @@ public sealed class TeamModeOrcaRunGuardTests : IDisposable
     }
 
     [Fact]
+    public void WriteGuardRefusal_CreatesLocksDirectory_G837()
+    {
+        workspace.InstallSoloFixture();
+        workspace.RunRecordOrcaRun("design", "absent", OrcaRunTestSupport.RunId, "inbox-pull", frontend: "claude-app", write: true);
+        var locksPath = Path.Combine(workspace.Root, ".intent-cli/locks");
+        if (Directory.Exists(locksPath))
+        {
+            Directory.Delete(locksPath, recursive: true);
+        }
+
+        var (exitCode, output) = workspace.RunRaw(
+            "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.Delivery, "--write", "--format", "json");
+        Assert.Equal(1, exitCode);
+        Assert.Contains("team-mode-write-refused: orca-run-binding-present:", output, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(locksPath));
+        Assert.True(File.Exists(Path.Combine(locksPath, ".gitignore")));
+    }
+
+    [Fact]
+    public void HeldLockWithBoundTeam_RefusesLockBusyNotBindingPresent_G837()
+    {
+        workspace.InstallSoloFixture();
+        workspace.RunRecordOrcaRun("design", "absent", OrcaRunTestSupport.RunId, "inbox-pull", frontend: "claude-app", write: true);
+        using var held = OrcaRunTeamModeLock.TryAcquire(workspace.Root, out _);
+        Assert.NotNull(held);
+        var (exitCode, output) = workspace.RunRaw(
+            "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.Delivery, "--write", "--format", "json");
+        Assert.Equal(1, exitCode);
+        Assert.Contains("team-mode-write-refused: team-mode-lock-busy:", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("orca-run-binding-present:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DomainWideRepeatDelivery_AppliesWhenBindingHealthStaysRecorded_G837()
     {
         workspace.InstallFiveSeatDeliveryFixture();
@@ -114,12 +146,15 @@ public sealed class TeamModeOrcaRunGuardTests : IDisposable
     public void InterleavingHook_TeamModeCasLost_G837()
     {
         workspace.InstallSoloFixture();
+        var hookInvoked = false;
         TeamModeOrcaRunGuard.BeforeWriteHook = () =>
         {
+            hookInvoked = true;
             File.WriteAllText(workspace.TeamModePath, File.ReadAllText(workspace.TeamModePath) + "\n");
         };
         var (exitCode, output) = workspace.RunRaw(
             "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.Delivery, "--write", "--format", "json");
+        Assert.True(hookInvoked);
         Assert.Equal(1, exitCode);
         Assert.Contains("team-mode-write-refused: team-mode-cas-lost:", output, StringComparison.Ordinal);
     }
@@ -128,8 +163,10 @@ public sealed class TeamModeOrcaRunGuardTests : IDisposable
     public void InterleavingHook_RecordOrcaRunBusyThenSetApplies_G837()
     {
         workspace.InstallSoloFixture();
+        var hookInvoked = false;
         TeamModeOrcaRunGuard.BeforeWriteHook = () =>
         {
+            hookInvoked = true;
             var refusal = workspace.RunRecordOrcaRunExpectFailure(
                 "design", "absent", OrcaRunTestSupport.RunId, "inbox-pull", frontend: "claude-app", write: true);
             Assert.Equal("record-lock-busy", refusal.GetProperty("cause").GetString());
@@ -137,6 +174,26 @@ public sealed class TeamModeOrcaRunGuardTests : IDisposable
         };
         var (exitCode, _) = workspace.RunJson(
             "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.Delivery, "--write", "--format", "json");
+        Assert.True(hookInvoked);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void AfterLockHook_RecordOrcaRunBetweenLockAndGuard_IsBlocked_G837()
+    {
+        workspace.InstallSoloFixture();
+        var hookInvoked = false;
+        TeamModeOrcaRunGuard.AfterLockHook = () =>
+        {
+            hookInvoked = true;
+            var refusal = workspace.RunRecordOrcaRunExpectFailure(
+                "design", "absent", OrcaRunTestSupport.RunId, "inbox-pull", frontend: "claude-app", write: true);
+            Assert.Equal("record-lock-busy", refusal.GetProperty("cause").GetString());
+            Assert.Equal("team-mode-lock", refusal.GetProperty("field").GetString());
+        };
+        var (exitCode, _) = workspace.RunJson(
+            "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.Delivery, "--write", "--format", "json");
+        Assert.True(hookInvoked);
         Assert.Equal(0, exitCode);
     }
 
@@ -154,16 +211,56 @@ public sealed class TeamModeOrcaRunGuardTests : IDisposable
                 ? throw new IOException("denied")
                 : File.ReadAllText(path);
 
-        var dry = workspace.RunRaw(
+        var (dryExit, dry) = workspace.RunJson(
             "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.Delivery, "--format", "json");
-        Assert.Equal(0, dry.ExitCode);
-        Assert.Contains(OrcaRunTestSupport.GuardUnreadableSummaryPrefix, dry.Output, StringComparison.Ordinal);
-        Assert.Contains(".intent-cli/topology/intent-cli/unreadable.json", dry.Output, StringComparison.Ordinal);
-        Assert.Contains(unparseablePath, dry.Output, StringComparison.Ordinal);
+        Assert.Equal(0, dryExit);
+        var expectedPaths = new[]
+        {
+            ".intent-cli/topology/intent-cli/unreadable.json",
+            unparseablePath,
+        };
+        var expectedSentence =
+            $"Orca Run binding guard: {expectedPaths.Length} affected topology record(s) could not be read or parsed and were not checked: {string.Join(", ", expectedPaths.OrderBy(path => path, StringComparer.Ordinal))}.";
+        Assert.EndsWith(expectedSentence, dry.GetProperty("summary").GetString(), StringComparison.Ordinal);
+
+        var (writeExit, write) = workspace.RunJson(
+            "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.Delivery, "--write", "--format", "json");
+        Assert.Equal(0, writeExit);
+        Assert.EndsWith(expectedSentence, write.GetProperty("summary").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void SetWithoutBinding_IsByteIdenticalToBase_G837()
+    public void MalformedTopologyBinding_GuardRefusesModeChange_G837()
+    {
+        workspace.InstallFiveSeatDeliveryFixture();
+        var root = JsonNode.Parse(File.ReadAllText(workspace.TopologyPath))!.AsObject();
+        root["roles"]!["steward"]!.AsObject()["orca_run"] = new JsonObject();
+        File.WriteAllText(workspace.TopologyPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        var (exitCode, output) = workspace.RunRaw(
+            "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.SoloConductor, "--write", "--format", "json");
+        Assert.Equal(1, exitCode);
+        Assert.Contains("team-mode-write-refused: orca-run-binding-present:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MalformedSoloBinding_GuardRefusesModeChange_G837()
+    {
+        workspace.InstallSoloFixture();
+        workspace.WriteSoloBinding(new
+        {
+            schema_version = "1",
+            domain = OrcaRunTestSupport.Domain,
+            team = workspace.Team,
+            orca_run = new { role = "design", receive_policy = "inbox-pull", frontend = "claude-app" },
+        });
+        var (exitCode, output) = workspace.RunRaw(
+            "team-mode", "set", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--mode", TeamMode.Delivery, "--write", "--format", "json");
+        Assert.Equal(1, exitCode);
+        Assert.Contains("team-mode-write-refused: orca-run-binding-present:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SetWithoutBinding_MatchesMainHeadDryRun_G837()
     {
         const string sharedTeam = "g837-guard-shared";
         using var baseline = new OrcaRunTestSupport.OrcaRunWorkspace("guard-base", sharedTeam);

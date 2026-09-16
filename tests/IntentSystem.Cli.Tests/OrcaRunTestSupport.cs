@@ -14,10 +14,6 @@ internal static class OrcaRunTestSupport
 {
     public const string Domain = "intent-cli";
     public const string RunId = "run_585adfc0e774";
-    public const string FakeBinPath =
-        "/private/tmp/claude-501/-Users-tomohisa-dev-GitHub-MyIntentHost/eab52c36-c616-4d07-b445-3f1e73eaaea5/scratchpad/fakebin";
-    public const string FakeOrcaLogPath =
-        "/private/tmp/claude-501/-Users-tomohisa-dev-GitHub-MyIntentHost/eab52c36-c616-4d07-b445-3f1e73eaaea5/scratchpad/g837-work/fake-orca.log";
 
     public const string RecordedOnlySuffix =
         "Recorded only; intent-cli did not run orca or verify the Run.";
@@ -40,9 +36,11 @@ internal static class OrcaRunTestSupport
 
     public static void ResetSeams()
     {
+        TeamModeOrcaRunGuard.AfterLockHook = null;
         TeamModeOrcaRunGuard.BeforeWriteHook = null;
         OrcaRunRecordCommand.AfterTopologyLockHook = null;
         GuardedFileRead.ReadAllTextFactory = null;
+        GuardedFileWrite.AppendLineFactory = null;
         TeamModeCommand.UtcNowFactory = null;
         NotifyCommand.ProcessRunnerFactory = null;
         NotifyCommand.UtcNowFactory = null;
@@ -50,29 +48,75 @@ internal static class OrcaRunTestSupport
         AutomationHostLoopNextActionCommand.IdentityCaptureFactory = null;
     }
 
-    public static void PrependFakePath()
+    public static FakeBinFixture CreateFakeBinFixture(string workspaceRoot)
     {
-        var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        Environment.SetEnvironmentVariable("PATH", $"{FakeBinPath}:{existing}");
-        Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", FakeOrcaLogPath);
+        var fakeBinDir = Directory.CreateTempSubdirectory("orca-fakebin-").FullName;
+        var orcaPath = Path.Combine(fakeBinDir, "orca");
+        var ghPath = Path.Combine(fakeBinDir, "gh");
+        var orcaLogPath = Path.Combine(workspaceRoot, "fake-orca.log");
+        var ghLogPath = Path.Combine(workspaceRoot, "fake-gh.log");
+        File.WriteAllText(orcaPath, "#!/bin/sh\n"
+            + "echo \"$(date -u +%FT%TZ) orca $*\" >> \"${FAKE_ORCA_LOG}\"\n"
+            + "echo \"fake orca: refusing to run (intent-cli must never invoke orca)\" >&2\n"
+            + "exit 97\n");
+        File.WriteAllText(ghPath, "#!/bin/sh\n"
+            + "echo \"$PPID $*\" >> \"${FAKE_GH_LOG}\"\n"
+            + "echo \"fake gh refused\" >&2\n"
+            + "exit 1\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            var execute = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+            File.SetUnixFileMode(orcaPath, execute);
+            File.SetUnixFileMode(ghPath, execute);
+        }
+
+        return new FakeBinFixture(fakeBinDir, orcaLogPath, ghLogPath);
     }
 
-    public static void ClearFakeLogs()
+    public static void ClearFakeLogs(FakeBinFixture fixture)
     {
-        if (File.Exists(FakeOrcaLogPath))
+        File.WriteAllText(fixture.OrcaLogPath, string.Empty);
+        File.WriteAllText(fixture.GhLogPath, string.Empty);
+    }
+
+    public static void AssertFakeOrcaLive(FakeBinFixture fixture)
+    {
+        var probeLog = fixture.OrcaLogPath + ".probe";
+        File.WriteAllText(probeLog, string.Empty);
+        var previousOrcaLog = Environment.GetEnvironmentVariable("FAKE_ORCA_LOG");
+        Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", probeLog);
+        try
         {
-            File.WriteAllText(FakeOrcaLogPath, string.Empty);
+            var startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = Path.Combine(fixture.BinDirectory, "orca"),
+                Arguments = "probe",
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            using var process = System.Diagnostics.Process.Start(startInfo);
+            process?.WaitForExit();
+            Assert.True(File.Exists(probeLog), "fake orca probe log must exist");
+            Assert.Contains("orca probe", File.ReadAllText(probeLog), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", previousOrcaLog);
+            if (File.Exists(probeLog))
+            {
+                File.Delete(probeLog);
+            }
         }
     }
 
-    public static void AssertOrcaLogEmpty()
+    public static void AssertOrcaLogEmpty(FakeBinFixture fixture)
     {
-        if (File.Exists(FakeOrcaLogPath))
-        {
-            Assert.True(string.IsNullOrWhiteSpace(File.ReadAllText(FakeOrcaLogPath)),
-                $"fake orca log must be empty but contained: {File.ReadAllText(FakeOrcaLogPath)}");
-        }
+        Assert.True(File.Exists(fixture.OrcaLogPath), "fake orca log must exist (fake must be on PATH)");
+        Assert.True(string.IsNullOrWhiteSpace(File.ReadAllText(fixture.OrcaLogPath)),
+            $"fake orca log must be empty but contained: {File.ReadAllText(fixture.OrcaLogPath)}");
     }
+
+    internal sealed record FakeBinFixture(string BinDirectory, string OrcaLogPath, string GhLogPath);
 
     public static string[] RecordOrcaRunArgs(
         OrcaRunWorkspace workspace,
@@ -123,16 +167,25 @@ internal static class OrcaRunTestSupport
     {
         private readonly string? previousPath;
         private readonly string? previousFakeLog;
+        private readonly string? previousFakeGhLog;
+        private readonly string fakeBinDir;
 
         public OrcaRunWorkspace(string suffix, string? team = null)
         {
             previousPath = Environment.GetEnvironmentVariable("PATH");
             previousFakeLog = Environment.GetEnvironmentVariable("FAKE_ORCA_LOG");
+            previousFakeGhLog = Environment.GetEnvironmentVariable("FAKE_GH_LOG");
             ResetSeams();
-            PrependFakePath();
-            ClearFakeLogs();
 
             Root = Directory.CreateTempSubdirectory($"orca-run-g837-{suffix}-").FullName;
+            FakeBin = CreateFakeBinFixture(Root);
+            fakeBinDir = FakeBin.BinDirectory;
+            var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            Environment.SetEnvironmentVariable("PATH", $"{FakeBin.BinDirectory}:{existing}");
+            Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", FakeBin.OrcaLogPath);
+            Environment.SetEnvironmentVariable("FAKE_GH_LOG", FakeBin.GhLogPath);
+            ClearFakeLogs(FakeBin);
+
             Team = team ?? $"g837-{suffix}";
             Context = new CliContext
             {
@@ -151,6 +204,7 @@ internal static class OrcaRunTestSupport
 
         public string Root { get; }
         public string Team { get; }
+        public FakeBinFixture FakeBin { get; }
         public CliContext Context { get; }
         public string TopologyPath => NotifyRoleTopologyStore.ResolvePath(Root, Domain, Team);
         public string TeamModePath => TeamModeStore.ResolvePath(Root);
@@ -522,6 +576,21 @@ internal static class OrcaRunTestSupport
             ResetSeams();
             Environment.SetEnvironmentVariable("PATH", previousPath);
             Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", previousFakeLog);
+            Environment.SetEnvironmentVariable("FAKE_GH_LOG", previousFakeGhLog);
+            if (Directory.Exists(fakeBinDir))
+            {
+                try
+                {
+                    Directory.Delete(fakeBinDir, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+
             if (Directory.Exists(Root))
             {
                 try

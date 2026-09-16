@@ -39,10 +39,10 @@ internal static class OrcaRunRecordCommand
             return 1;
         }
 
-        if (!ValidateRunIdField(request.NewRunId, "new", out error)
-            || !ValidateRunIdField(request.CurrentToken, "current", out error))
+        if (!ValidateRunIdField(request.NewRunId, "new", out error, out var malformedField)
+            || !ValidateRunIdField(request.CurrentToken, "current", out error, out malformedField))
         {
-            writer.WriteLine(JsonSerializer.Serialize(Conflict(request!, cause: "orca-run-id-malformed", field: error.Contains("new") ? "new" : "current", summary: error), JsonOptions));
+            writer.WriteLine(JsonSerializer.Serialize(Conflict(request!, cause: "orca-run-id-malformed", field: malformedField, summary: error), JsonOptions));
             return 1;
         }
 
@@ -174,7 +174,7 @@ internal static class OrcaRunRecordCommand
 
                 if (!string.Equals(request.NewRunId, "absent", StringComparison.Ordinal))
                 {
-                    var policyError = ValidateReceivePolicy(roleRecord, request.ReceivePolicy!, request.Domain, request.Team, request.Role);
+                    var policyError = ValidateReceivePolicy(request, roleRecord, request.ReceivePolicy!);
                     if (policyError is not null)
                     {
                         WriteResult(writer, policyError);
@@ -183,9 +183,10 @@ internal static class OrcaRunRecordCommand
                 }
 
                 var duplicateKeys = OrcaRunBindingHealth.FindTopologyBindingRoleKeys(context.RepoRoot, request.Domain, request.Team);
-                if (duplicateKeys.Count > 0 && !duplicateKeys.Contains(request.Role, StringComparer.Ordinal))
+                var conflictingRole = duplicateKeys.FirstOrDefault(key => !string.Equals(key, request.Role, StringComparison.Ordinal));
+                if (conflictingRole is not null)
                 {
-                    WriteResult(writer, Conflict(request, "binding-duplicate", summary: $"Another role already records orca_run: '{duplicateKeys[0]}'."));
+                    WriteResult(writer, Conflict(request, "binding-duplicate", summary: $"Another role already records orca_run: '{conflictingRole}'."));
                     return 1;
                 }
 
@@ -206,7 +207,7 @@ internal static class OrcaRunRecordCommand
                     }
                 }
 
-                return FinishTopologyWrite(context, writer, request, shape, roleRecord, recordPath, canonical!, createdPaths);
+                return FinishTopologyWrite(context, writer, request, shape, roleRecord, recordPath, canonical!);
             }
 
             // solo-conductor path
@@ -220,10 +221,18 @@ internal static class OrcaRunRecordCommand
             if (string.Equals(request.NewRunId, "absent", StringComparison.Ordinal))
             {
                 var soloRead = OrcaRunSoloStore.TryRead(context.RepoRoot, request.Domain, request.Team);
-                var current = soloRead.Exists && !soloRead.IsUnparseable ? soloRead.RunId ?? "absent" : "absent";
-                if (!CurrentMatches(request.CurrentToken, current, soloRead.Exists && !soloRead.IsUnparseable && soloRead.RunId is null ? "malformed" : current))
+                if (soloRead.Exists && !soloRead.IsUnparseable
+                    && (!string.Equals(soloRead.Domain, request.Domain, StringComparison.Ordinal)
+                        || !string.Equals(soloRead.Team, request.Team, StringComparison.Ordinal)))
                 {
-                    WriteResult(writer, Conflict(request, "current-mismatch", summary: CurrentMismatchMessage(request.CurrentToken, current)));
+                    WriteResult(writer, Conflict(request, "binding-identity-mismatch", summary: "solo binding file names another domain or team."));
+                    return 1;
+                }
+
+                var absentCurrent = ReadSoloCurrent(soloRead);
+                if (!CurrentMatches(request.CurrentToken, absentCurrent))
+                {
+                    WriteResult(writer, Conflict(request, "current-mismatch", summary: CurrentMismatchMessage(request.CurrentToken, absentCurrent)));
                     return 1;
                 }
 
@@ -238,7 +247,7 @@ internal static class OrcaRunRecordCommand
                     OrcaRunSoloStore.Delete(context.RepoRoot, request.Domain, request.Team);
                 }
 
-                WriteResult(writer, Success(request, shape, recordPath, soloCanonical!, current, "absent", applied: request.Write, changed: soloRead.Exists));
+                WriteResult(writer, Success(request, shape, recordPath, soloCanonical!, absentCurrent, "absent", applied: request.Write, changed: soloRead.Exists));
                 return 0;
             }
 
@@ -250,7 +259,7 @@ internal static class OrcaRunRecordCommand
 
             var soloRecord = new NotifyRecordedRole(
                 NotifyRecordedRole.ExternalResident, null, null, null, null, null, null, request.Frontend);
-            var soloPolicyError = ValidateReceivePolicy(soloRecord, request.ReceivePolicy!, request.Domain, request.Team, request.Role);
+            var soloPolicyError = ValidateReceivePolicy(request, soloRecord, request.ReceivePolicy!);
             if (soloPolicyError is not null)
             {
                 WriteResult(writer, soloPolicyError);
@@ -272,16 +281,20 @@ internal static class OrcaRunRecordCommand
                 return 1;
             }
 
-            var soloCurrent = existingSolo.Exists && !existingSolo.IsUnparseable
-                ? existingSolo.RunId ?? "malformed"
-                : "absent";
+            var soloCurrent = ReadSoloCurrent(existingSolo);
             if (!CurrentMatches(request.CurrentToken, soloCurrent))
             {
                 WriteResult(writer, Conflict(request, "current-mismatch", summary: CurrentMismatchMessage(request.CurrentToken, soloCurrent)));
                 return 1;
             }
 
-            if (request.Write)
+            var alreadyRecorded = existingSolo.Exists
+                && !existingSolo.IsUnparseable
+                && string.Equals(existingSolo.RunId, request.NewRunId, StringComparison.Ordinal)
+                && string.Equals(existingSolo.ReceivePolicy, request.ReceivePolicy, StringComparison.Ordinal)
+                && string.Equals(existingSolo.Frontend, request.Frontend, StringComparison.Ordinal);
+
+            if (request.Write && !alreadyRecorded)
             {
                 if (!string.Equals(OrcaRunSoloStore.ComputeDigest(context.RepoRoot, request.Domain, request.Team), soloDigest, StringComparison.Ordinal))
                 {
@@ -299,11 +312,6 @@ internal static class OrcaRunRecordCommand
                     request.Frontend);
             }
 
-            var alreadyRecorded = existingSolo.Exists
-                && !existingSolo.IsUnparseable
-                && string.Equals(existingSolo.RunId, request.NewRunId, StringComparison.Ordinal)
-                && string.Equals(existingSolo.ReceivePolicy, request.ReceivePolicy, StringComparison.Ordinal)
-                && string.Equals(existingSolo.Frontend, request.Frontend, StringComparison.Ordinal);
             WriteResult(writer, Success(
                 request,
                 shape,
@@ -337,17 +345,10 @@ internal static class OrcaRunRecordCommand
         OrcaRunTeamShapeResult shape,
         NotifyRecordedRole roleRecord,
         string recordPath,
-        string canonicalRole,
-        List<string> createdPaths)
+        string canonicalRole)
     {
         var current = ReadTopologyCurrent(roleRecord);
         var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, request.Domain, request.Team);
-        var root = JsonNode.Parse(File.Exists(topologyPath) ? GuardedFileRead.ReadAllText(topologyPath) : "{}") as JsonObject ?? new JsonObject();
-        if (!NotifyRoleTopologyStore.TrySelectTeamPublic(JsonDocument.Parse(root.ToJsonString()).RootElement, request.Team, out _))
-        {
-            // rebuild via writer helper below
-        }
-
         var beforeText = File.Exists(topologyPath) ? GuardedFileRead.ReadAllText(topologyPath) : null;
         var document = JsonNode.Parse(beforeText ?? "{}") as JsonObject ?? new JsonObject();
         JsonObject teamObject;
@@ -391,9 +392,11 @@ internal static class OrcaRunRecordCommand
             };
         }
 
-        var content = document.ToJsonString(SessionLayerTopologyWriter.FileJsonOptionsPublic);
-        var alreadyRecorded = string.Equals(current, request.NewRunId, StringComparison.Ordinal)
-            || (string.Equals(request.NewRunId, "absent", StringComparison.Ordinal) && string.Equals(current, "absent", StringComparison.Ordinal));
+        var content = document.ToJsonString(SessionLayerTopologyWriter.FileJsonOptionsPublic) + Environment.NewLine;
+        var alreadyRecorded = string.Equals(request.NewRunId, "absent", StringComparison.Ordinal)
+            ? string.Equals(current, "absent", StringComparison.Ordinal)
+            : string.Equals(current, request.NewRunId, StringComparison.Ordinal)
+                && string.Equals(roleRecord.OrcaRun?.ReceivePolicy, request.ReceivePolicy, StringComparison.Ordinal);
         if (request.Write && !alreadyRecorded)
         {
             SessionLayerTopologyWriter.WriteAtomicallyPublic(topologyPath, content);
@@ -415,11 +418,9 @@ internal static class OrcaRunRecordCommand
     }
 
     private static OrcaRunRecordResult? ValidateReceivePolicy(
+        RecordOrcaRunRequest request,
         NotifyRecordedRole record,
-        string policy,
-        string domain,
-        string team,
-        string role)
+        string policy)
     {
         OrcaRunBinding.EvaluateReceivePolicyForSeat(record, policy, out var cause, out var fix);
         if (cause is null)
@@ -428,9 +429,11 @@ internal static class OrcaRunRecordCommand
         }
 
         return Conflict(
-            new RecordOrcaRunRequest(domain, team, role, "absent", "absent", policy, null, false, FormatJson, true),
+            request,
             cause,
-            fix: cause == "receive-policy-herdr-seat" ? OrcaRunBinding.BuildHerdrFix(domain, team, role) : fix,
+            fix: cause == "receive-policy-herdr-seat"
+                ? OrcaRunBinding.BuildHerdrFix(request.Domain, request.Team, request.Role)
+                : fix,
             summary: cause);
     }
 
@@ -446,39 +449,64 @@ internal static class OrcaRunRecordCommand
             return "malformed";
         }
 
-        return record.OrcaRun.RunId ?? "malformed";
+        if (record.OrcaRun.RunId is null || !OrcaRunBinding.IsValidRunId(record.OrcaRun.RunId))
+        {
+            return "malformed";
+        }
+
+        return record.OrcaRun.RunId;
     }
 
-    private static bool CurrentMatches(string stated, string recorded, string? actualRecorded = null)
+    private static string ReadSoloCurrent(SoloBindingReadResult read)
     {
-        actualRecorded ??= recorded;
-        if (string.Equals(stated, "malformed", StringComparison.Ordinal))
+        if (!read.Exists || read.IsUnparseable)
         {
-            return string.Equals(recorded, "malformed", StringComparison.Ordinal);
+            return read.Exists && read.IsUnparseable ? "malformed" : "absent";
         }
 
-        if (string.Equals(stated, "absent", StringComparison.Ordinal))
+        if (read.OrcaRunAbsent || read.OrcaRunNull || !read.HasOrcaRunObject || read.RunId is null)
         {
-            return string.Equals(actualRecorded, "absent", StringComparison.Ordinal);
+            return "malformed";
         }
 
-        return string.Equals(stated, actualRecorded, StringComparison.Ordinal);
+        if (!OrcaRunBinding.IsValidRunId(read.RunId))
+        {
+            return "malformed";
+        }
+
+        return read.RunId;
+    }
+
+    private static bool CurrentMatches(string stated, string recorded)
+    {
+        return string.Equals(stated, recorded, StringComparison.Ordinal);
     }
 
     private static string CurrentMismatchMessage(string stated, string recorded) =>
         $"Recorded current is '{recorded}', not stated '{stated}'.";
 
-    private static bool ValidateRunIdField(string? value, string field, out string error)
+    private static bool ValidateRunIdField(string? value, string field, out string error, out string invalidField)
     {
         error = string.Empty;
+        invalidField = field;
         if (value is null)
         {
             error = $"{field} is required.";
             return false;
         }
 
-        if (string.Equals(value, "absent", StringComparison.Ordinal)
-            || string.Equals(value, "malformed", StringComparison.Ordinal))
+        if (string.Equals(value, "malformed", StringComparison.Ordinal))
+        {
+            if (string.Equals(field, "new", StringComparison.Ordinal))
+            {
+                error = "new value 'malformed' is reserved for --current.";
+                return false;
+            }
+
+            return true;
+        }
+
+        if (string.Equals(value, "absent", StringComparison.Ordinal))
         {
             return true;
         }

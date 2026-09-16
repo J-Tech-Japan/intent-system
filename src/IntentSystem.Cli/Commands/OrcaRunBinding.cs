@@ -47,30 +47,38 @@ internal static partial class OrcaRunBinding
             return new OrcaRunRoleBinding(null, null, false, "orca-run-binding-malformed");
         }
 
+        obj.TryGetPropertyValue("run_id", out var runIdNode);
+        obj.TryGetPropertyValue("receive_policy", out var policyNode);
+
         string? runId = null;
         string? policy = null;
-        if (obj.TryGetPropertyValue("run_id", out var runIdNode))
+        var malformed = false;
+
+        if (runIdNode is null)
         {
-            runId = runIdNode switch
-            {
-                JsonValue { } v when v.TryGetValue<string>(out var s) => s,
-                JsonValue { } v when v.TryGetValue(out string? s) => s,
-                _ => null,
-            };
+            malformed = true;
+        }
+        else if (runIdNode is JsonValue runIdValue && runIdValue.TryGetValue(out string? parsedRunId))
+        {
+            runId = parsedRunId;
+        }
+        else
+        {
+            malformed = true;
         }
 
-        if (obj.TryGetPropertyValue("receive_policy", out var policyNode))
+        if (policyNode is not null)
         {
-            policy = policyNode switch
+            if (policyNode is JsonValue policyValue && policyValue.TryGetValue(out string? parsedPolicy))
             {
-                JsonValue { } v when v.TryGetValue<string>(out var s) => s,
-                JsonValue { } v when v.TryGetValue(out string? s) => s,
-                _ => null,
-            };
+                policy = parsedPolicy;
+            }
+            else
+            {
+                malformed = true;
+            }
         }
 
-        var malformed = runIdNode is not null and not JsonValue
-            || policyNode is not null and not JsonValue;
         return new OrcaRunRoleBinding(runId, policy, !malformed, malformed ? "orca-run-binding-malformed" : null);
     }
 

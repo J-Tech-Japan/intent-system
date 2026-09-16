@@ -6,6 +6,7 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class TeamModeOrcaRunGuard
 {
+    public static Action? AfterLockHook { get; set; }
     public static Action? BeforeWriteHook { get; set; }
 
     public sealed record GuardResult(bool Refused, string? RefusalLine, IReadOnlyList<string> UnreadableTopologyPaths);
@@ -72,15 +73,20 @@ internal static class TeamModeOrcaRunGuard
 
                 seen.Add(name);
                 var read = OrcaRunSoloStore.TryRead(routingRoot, domain, name);
-                if (!read.Exists || read.IsUnparseable || string.IsNullOrWhiteSpace(read.RunId))
+                if (!read.Exists)
                 {
                     continue;
                 }
 
+                var runId = read.IsUnparseable
+                    ? "malformed"
+                    : read.RunId is null || !OrcaRunBinding.IsValidRunId(read.RunId)
+                        ? "malformed"
+                        : read.RunId;
                 yield return new BoundTeamRecord(
                     name,
                     OrcaRunSoloStore.RelativePathFor(domain, name),
-                    read.RunId,
+                    runId,
                     read.Role ?? "design");
             }
         }
@@ -138,13 +144,25 @@ internal static class TeamModeOrcaRunGuard
 
             foreach (var property in roles.EnumerateObject())
             {
-                if (property.Value.TryGetProperty("orca_run", out var orcaRun)
-                    && orcaRun.ValueKind == JsonValueKind.Object
+                if (!property.Value.TryGetProperty("orca_run", out var orcaRun))
+                {
+                    continue;
+                }
+
+                string? runId = null;
+                if (orcaRun.ValueKind == JsonValueKind.Object
                     && orcaRun.TryGetProperty("run_id", out var runIdElement)
                     && runIdElement.ValueKind == JsonValueKind.String)
                 {
-                    return new BoundTeamRecord(team, relative, runIdElement.GetString(), property.Name);
+                    runId = runIdElement.GetString();
                 }
+
+                if (runId is null || !OrcaRunBinding.IsValidRunId(runId))
+                {
+                    runId = "malformed";
+                }
+
+                return new BoundTeamRecord(team, relative, runId, property.Name);
             }
         }
         catch (Exception)

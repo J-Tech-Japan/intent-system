@@ -15,13 +15,19 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
     private const string Team = "g837-notify";
     private const string TaskId = "G837-report";
     private readonly string root = Directory.CreateTempSubdirectory("g837-notify-").FullName;
+    private readonly OrcaRunTestSupport.FakeBinFixture fakeBin;
     private readonly DateTimeOffset now = new(2026, 9, 15, 18, 0, 0, TimeSpan.Zero);
+    private readonly string? previousPath;
 
     public NotifyEventAppendReconcileHintTests()
     {
+        previousPath = Environment.GetEnvironmentVariable("PATH");
         OrcaRunTestSupport.ResetSeams();
-        OrcaRunTestSupport.PrependFakePath();
-        OrcaRunTestSupport.ClearFakeLogs();
+        fakeBin = OrcaRunTestSupport.CreateFakeBinFixture(root);
+        var existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        Environment.SetEnvironmentVariable("PATH", $"{fakeBin.BinDirectory}:{existing}");
+        Environment.SetEnvironmentVariable("FAKE_ORCA_LOG", fakeBin.OrcaLogPath);
+        OrcaRunTestSupport.ClearFakeLogs(fakeBin);
         NotifyCommand.UtcNowFactory = () => now;
         NotifyCommand.ProcessRunnerFactory = () => new NotifyProcessRunnerStub();
         WriteTopology();
@@ -32,6 +38,7 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
     public void Dispose()
     {
         NotifyCommand.ProcessRunnerFactory = null;
+        Environment.SetEnvironmentVariable("PATH", previousPath);
         OrcaRunTestSupport.ResetSeams();
         if (Directory.Exists(root))
         {
@@ -42,15 +49,14 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
     [Fact]
     public void EqualRootReport_UnwritableReader_EmitsReconciliationCommandAndSummary_G837()
     {
-        if (OperatingSystem.IsWindows())
+        var readerPath = Path.Combine(root, ".intent-cli", "events", Domain, $"{Team}-orchestration.jsonl");
+        GuardedFileWrite.AppendLineFactory = (path, _) =>
         {
-            return;
-        }
-
-        var eventDir = Path.Combine(root, ".intent-cli", "events", Domain);
-        Directory.CreateDirectory(eventDir);
-        var originalMode = File.GetUnixFileMode(eventDir);
-        File.SetUnixFileMode(eventDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            if (string.Equals(path, readerPath, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException("denied");
+            }
+        };
         Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, Pending()).Written);
 
         var (exitCode, result) = RunReport();
@@ -65,23 +71,69 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
         Assert.Contains("' and marked undelivered; orchestration reconciles with '", summary, StringComparison.Ordinal);
         Assert.Contains(reconciliation, summary, StringComparison.Ordinal);
         Assert.Contains("which names the notify collect recovery while the report is undelivered.", summary, StringComparison.Ordinal);
-        File.SetUnixFileMode(eventDir, originalMode);
-        OrcaRunTestSupport.AssertOrcaLogEmpty();
+        OrcaRunTestSupport.AssertOrcaLogEmpty(fakeBin);
+    }
+
+    [Fact]
+    public void Delegate_UnwritableReader_KeepsBaseSummary_G837()
+    {
+        var readerPath = Path.Combine(root, ".intent-cli", "events", Domain, $"{Team}-impl.jsonl");
+        GuardedFileWrite.AppendLineFactory = (path, _) =>
+        {
+            if (string.Equals(path, readerPath, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException("denied");
+            }
+        };
+        Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, new NotifyPendingDelegation
+        {
+            Domain = Domain,
+            Team = Team,
+            TaskId = "G837-delegate",
+            ResultNonce = "delegate-nonce",
+            DelegatingRole = "orchestration",
+            RecipientRole = "implementation",
+            ReportToRole = "orchestration",
+            RecipientIdentity = $"role=implementation;reader=.intent-cli/events/{Domain}/{Team}-impl.jsonl",
+            ExpectedArtifact = "artifact",
+            DispatchedAt = now.AddMinutes(-1),
+            TransportMode = SessionLayerMode.HerdrOnly,
+            Resident = NotifyRecordedRole.ExternalResident,
+            Reader = $".intent-cli/events/{Domain}/{Team}-impl.jsonl",
+        }).Written);
+        var (exitCode, result) = Run([
+            "notify", "delegate",
+            "--domain", Domain, "--team", Team,
+            "--from", "orchestration", "--to", "implementation", "--report-to", "orchestration",
+            "--task-id", "G837-delegate",
+            "--objective", "do work",
+            "--expected-artifact", "artifact",
+            "--result-nonce", "delegate-nonce",
+            "--routing-root", root,
+            "--write", "--format", "json",
+        ]);
+        Assert.Equal(1, exitCode);
+        Assert.Equal("event-append-failed", result.GetProperty("cause").GetString());
+        Assert.False(result.TryGetProperty("reconciliation_command", out _));
+        Assert.EndsWith("Fix reader access and retry notify.", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
     public void ReconcileCollectChain_ConvergesWithoutDuplicateEvent_G837()
     {
-        if (OperatingSystem.IsWindows())
+        var readerPath = Path.Combine(root, ".intent-cli", "events", Domain, $"{Team}-orchestration.jsonl");
+        var appendBlocked = true;
+        GuardedFileWrite.AppendLineFactory = (path, line) =>
         {
-            return;
-        }
+            if (appendBlocked && string.Equals(path, readerPath, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException("denied");
+            }
 
+            GuardedFileWrite.AppendLineFactory = null;
+            GuardedFileWrite.AppendLine(path, line);
+        };
         Assert.True(NotifyPendingDelegationStore.WriteDispatch(root, Pending()).Written);
-        var eventDir = Path.Combine(root, ".intent-cli", "events", Domain);
-        Directory.CreateDirectory(eventDir);
-        var originalMode = File.GetUnixFileMode(eventDir);
-        File.SetUnixFileMode(eventDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         var (reportExit, report) = RunReport();
         Assert.Equal(1, reportExit);
         Assert.Equal("event-append-failed", report.GetProperty("cause").GetString());
@@ -95,7 +147,7 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
         Assert.Equal(1, firstExit);
         Assert.Equal("sender-local-report-not-delivered", first.GetProperty("cause").GetString());
 
-        File.SetUnixFileMode(eventDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        appendBlocked = false;
         var (collectExit, collect) = Run([
             "notify", "collect", "--domain", Domain, "--team", Team, "--task-id", TaskId,
             "--routing-root", root, "--report-root", root, "--write", "--format", "json",
@@ -103,20 +155,18 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
         Assert.Equal(0, collectExit);
         Assert.True(collect.GetProperty("delivered").GetBoolean());
 
-        var eventPath = Path.Combine(eventDir, $"{Team}-orchestration.jsonl");
-        Assert.Single(File.ReadAllLines(eventPath));
+        Assert.Single(File.ReadAllLines(readerPath));
 
         var (secondExit, second) = Run(reconcileArgs);
         Assert.Equal(0, secondExit);
         Assert.True(
             second.GetProperty("reconciled").GetBoolean()
             || second.GetProperty("already_converged").GetBoolean());
-        Assert.Single(File.ReadAllLines(eventPath));
-        File.SetUnixFileMode(eventDir, originalMode);
+        Assert.Single(File.ReadAllLines(readerPath));
     }
 
     [Fact]
-    public void EscalateFailure_RemainsByteIdenticalToBase_G837()
+    public void EscalateFailure_OutputStableAcrossRoots_G837()
     {
         var baselineRoot = Directory.CreateTempSubdirectory("g837-notify-base-").FullName;
         try
@@ -276,6 +326,12 @@ public sealed class NotifyEventAppendReconcileHintTests : IDisposable
                 {
                     resident = "external",
                     reader = $".intent-cli/events/{Domain}/{Team}-orchestration.jsonl",
+                    frontend = "codex",
+                },
+                ["implementation"] = new
+                {
+                    resident = "external",
+                    reader = $".intent-cli/events/{Domain}/{Team}-impl.jsonl",
                     frontend = "codex",
                 },
             },

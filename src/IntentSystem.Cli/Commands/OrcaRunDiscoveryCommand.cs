@@ -59,7 +59,7 @@ internal static class OrcaRunDiscoveryCommand
             Emit(writer, format, result);
             return 0;
         }
-        catch (IOException exception)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             writer.WriteLine($"orca-runs-unreadable: {exception.Message}");
             return 1;

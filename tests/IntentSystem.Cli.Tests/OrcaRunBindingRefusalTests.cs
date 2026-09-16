@@ -11,7 +11,9 @@ public sealed class OrcaRunBindingRefusalTests : IDisposable
 {
     private readonly OrcaRunTestSupport.OrcaRunWorkspace workspace = new("refusal");
 
-    public OrcaRunBindingRefusalTests() => OrcaRunTestSupport.ClearFakeLogs();
+    public OrcaRunBindingRefusalTests()
+    {
+    }
 
     public void Dispose() => workspace.Dispose();
 
@@ -345,9 +347,29 @@ public sealed class OrcaRunBindingRefusalTests : IDisposable
         var text = File.ReadAllText(workspace.TopologyPath);
         text = text.Replace(OrcaRunTestSupport.RunId, "not-a-run-id");
         File.WriteAllText(workspace.TopologyPath, text);
-        var malformed = workspace.RunRecordOrcaRunExpectFailure(
-            "steward", "malformed", OrcaRunTestSupport.RunId, "orca-push", write: true);
-        Assert.Equal("current-mismatch", malformed.GetProperty("cause").GetString());
+        var absentMismatch = workspace.RunRecordOrcaRunExpectFailure(
+            "steward", "absent", OrcaRunTestSupport.RunId, "orca-push", write: true);
+        Assert.Equal("current-mismatch", absentMismatch.GetProperty("cause").GetString());
+
+        var repaired = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
+            workspace, "steward", "malformed", OrcaRunTestSupport.RunId, "orca-push", write: true));
+        Assert.Equal(0, repaired.ExitCode);
+        Assert.True(repaired.Result.GetProperty("applied").GetBoolean());
+
+        var cleared = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
+            workspace, "steward", OrcaRunTestSupport.RunId, "absent", write: true));
+        Assert.Equal(0, cleared.ExitCode);
+        Assert.True(cleared.Result.GetProperty("applied").GetBoolean());
+    }
+
+    [Fact]
+    public void ReceivePolicyRefusal_ReportsWriteMode_G837()
+    {
+        workspace.InstallFiveSeatDeliveryFixture();
+        var result = workspace.RunRecordOrcaRunExpectFailure(
+            "steward", "absent", OrcaRunTestSupport.RunId, "inbox-pull", write: true);
+        Assert.Equal("receive-policy-seat-mismatch", result.GetProperty("cause").GetString());
+        Assert.Equal("write", result.GetProperty("mode").GetString());
     }
 
     [Fact]

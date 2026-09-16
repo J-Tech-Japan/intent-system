@@ -11,7 +11,9 @@ public sealed class OrcaRunBindingSoloTests : IDisposable
 {
     private readonly OrcaRunTestSupport.OrcaRunWorkspace workspace = new("solo");
 
-    public OrcaRunBindingSoloTests() => OrcaRunTestSupport.ClearFakeLogs();
+    public OrcaRunBindingSoloTests()
+    {
+    }
 
     public void Dispose() => workspace.Dispose();
 
@@ -36,7 +38,7 @@ public sealed class OrcaRunBindingSoloTests : IDisposable
         Assert.True(File.Exists(OrcaRunSoloStore.ResolveIgnorePath(workspace.Root)));
         Assert.Equal(teamModeBefore, workspace.TeamModeBytes());
         Assert.False(File.Exists(workspace.TopologyPath));
-        OrcaRunTestSupport.AssertOrcaLogEmpty();
+        OrcaRunTestSupport.AssertOrcaLogEmpty(workspace.FakeBin);
     }
 
     [Fact]

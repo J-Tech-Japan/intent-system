@@ -20,7 +20,7 @@ internal static class OrcaRunTeamModeLock
         var content = "*" + Environment.NewLine;
         var directory = Path.GetDirectoryName(ignorePath)!;
         Directory.CreateDirectory(directory);
-        if (!File.Exists(ignorePath) || !string.Equals(File.ReadAllText(ignorePath), content, StringComparison.Ordinal))
+        if (!File.Exists(ignorePath))
         {
             File.WriteAllText(ignorePath, content);
         }

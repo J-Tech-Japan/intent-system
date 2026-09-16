@@ -3074,13 +3074,12 @@ internal static class SessionLayerTopologyWriter
     private static void EnsureLocalIgnore(string routingRoot)
     {
         var path = NotifyRoleTopologyStore.ResolveLocalIgnorePath(routingRoot);
-        var content = "*" + Environment.NewLine;
-        if (File.Exists(path) && string.Equals(File.ReadAllText(path), content, StringComparison.Ordinal))
+        if (File.Exists(path))
         {
             return;
         }
 
-        WriteAtomically(path, content);
+        WriteAtomically(path, "*" + Environment.NewLine);
     }
 
     private static SessionLayerTopologyResidenceUpdateResult ResidenceConflict(

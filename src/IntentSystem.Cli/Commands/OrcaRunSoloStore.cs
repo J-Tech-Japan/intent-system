@@ -12,7 +12,6 @@ internal static class OrcaRunSoloStore
     private static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     public static string RelativePathFor(string domain, string team) =>
@@ -28,7 +27,7 @@ internal static class OrcaRunSoloStore
     {
         var path = ResolveIgnorePath(routingRoot);
         var content = "*" + Environment.NewLine;
-        if (File.Exists(path) && string.Equals(GuardedFileRead.ReadAllText(path), content, StringComparison.Ordinal))
+        if (File.Exists(path))
         {
             return;
         }
@@ -119,7 +118,7 @@ internal static class OrcaRunSoloStore
                 receive_policy = receivePolicy,
                 frontend,
             },
-        }, Options);
+        }, Options) + Environment.NewLine;
 
     public static void Write(string routingRoot, string domain, string team, string role, string runId, string receivePolicy, string frontend)
     {
