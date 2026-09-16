@@ -72,12 +72,14 @@ public sealed partial class G839ByteIdentityTests
         Assert.Equal(expected, actual);
     }
 
-    [Fact(Skip = "Run manually with G839_CAPTURE=1 against base ba496314 to refresh fixtures.")]
+    [Fact(Skip = "Set G839_CAPTURE=1 and remove Skip while checked out at base ba496314; running on head overwrites committed base fixtures.")]
     public void Capture_BaseFixtures()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("G839_CAPTURE"), "1", StringComparison.Ordinal))
         {
-            return;
+            throw new InvalidOperationException(
+                "Set G839_CAPTURE=1, remove the Skip attribute on this test, and run against base commit ba496314 "
+                + "to refresh tests/IntentSystem.Cli.Tests/Fixtures/G839/base/*.txt. Do not capture on head.");
         }
 
         Directory.CreateDirectory(FixtureRoot);
@@ -96,6 +98,10 @@ public sealed partial class G839ByteIdentityTests
         {
             File.WriteAllText(FixturePath(fixtureId), G839ByteIdentityHarness.CapturePlannedLabelsConsumer(fixtureId));
         }
+
+        File.WriteAllText(
+            Path.Combine(FixtureRoot, "planned-labels-worker-pr-comment-preflight.txt"),
+            G839PlannedLabelsPreflightByteIdentityTests.Capture());
     }
 
     public static TheoryData<string> PrTransitionRefusalTextFixtureIds() =>

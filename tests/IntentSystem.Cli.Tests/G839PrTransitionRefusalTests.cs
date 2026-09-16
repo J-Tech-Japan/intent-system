@@ -73,14 +73,16 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
         Assert.Equal(1, exitCode);
         using var document = JsonDocument.Parse(output);
         var rootElement = document.RootElement;
+        var expectedCause = ExpectedCause(scenario);
         var cause = rootElement.GetProperty("cross_runtime_review").GetProperty("cause").GetString();
+        Assert.Equal(expectedCause, cause);
 
         Assert.Empty(rootElement.GetProperty("add_labels").EnumerateArray());
         Assert.Empty(rootElement.GetProperty("remove_labels").EnumerateArray());
         Assert.Empty(rootElement.GetProperty("addLabels").EnumerateArray());
         Assert.Empty(rootElement.GetProperty("removeLabels").EnumerateArray());
         Assert.Equal(
-            $"Refused host PR transition 'approved' on PR #{Pr} in {Repo}: {cause}. No labels were changed.",
+            $"Refused host PR transition 'approved' on PR #{Pr} in {Repo}: {expectedCause}. No labels were changed.",
             rootElement.GetProperty("summary").GetString());
     }
 
@@ -114,9 +116,17 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
         Assert.False(rootElement.GetProperty("may_have_applied").GetBoolean());
         Assert.True(rootElement.GetProperty("current_labels").EnumerateArray().Any());
         Assert.Equal($"{cause}: {gate.GetProperty("detail").GetString()}", rootElement.GetProperty("error").GetString());
-        Assert.Equal("refused", gate.GetProperty("decision").GetString());
+        Assert.Equal(ExpectedGateDecision(scenario), gate.GetProperty("decision").GetString());
         Assert.Empty(mutator.Applied);
     }
+
+    private static string ExpectedGateDecision(string scenario) =>
+        scenario switch
+        {
+            "missing" => "missing",
+            "blocked" => "blocked",
+            _ => "refused",
+        };
 
     private void ConfigureScenario(string scenario)
     {
@@ -126,17 +136,17 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
                 RecordVerdict("claude", "approve", H2);
                 break;
             case "blocked":
-                RecordVerdict("claude", "approve", H2);
-                RecordVerdict("codex", "request-changes", H2);
+                RecordVerdict("claude", "approve", H2, offsetSeconds: 0);
+                RecordVerdict("codex", "request-changes", H2, offsetSeconds: 1);
                 break;
             case "rereview-missing":
-                RecordVerdict("cursor", "request-changes", H1);
-                RecordVerdict("claude", "approve", H2);
-                RecordVerdict("codex", "approve", H2);
+                RecordVerdict("cursor", "request-changes", H1, offsetSeconds: 0);
+                RecordVerdict("claude", "approve", H2, offsetSeconds: 1);
+                RecordVerdict("codex", "approve", H2, offsetSeconds: 2);
                 break;
             case "record-unreadable":
-                RecordVerdict("claude", "approve", H2);
-                RecordVerdict("codex", "approve", H2);
+                RecordVerdict("claude", "approve", H2, offsetSeconds: 0);
+                RecordVerdict("codex", "approve", H2, offsetSeconds: 1);
                 File.WriteAllText(Path.Combine(CrossRuntimeReviewPaths.PrDirectory(root, Repo, Pr), "zz.json"), "{}");
                 break;
             case "team-unresolved":
@@ -147,6 +157,8 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
 
     private static string[] ScenarioArgs(string scenario) =>
         scenario == "head-required" ? Array.Empty<string>() : ["--head-sha", H2];
+
+    private static string ExpectedCause(string scenario) => "cross-runtime-review-" + scenario;
 
     private void WritePacket(string unit, string? domain)
     {
@@ -194,7 +206,7 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
     private void WriteQueue((string Unit, string? LinkedPr) item)
     {
         var queuePath = Path.Combine(root, ".intent-cli", "queue-state.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(queuePath)!);
+        var linkedPrJson = item.LinkedPr is null ? "null" : $"\"{item.LinkedPr}\"";
         File.WriteAllText(queuePath, $$"""
             {
               "schema_version": "1",
@@ -202,42 +214,43 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
               "items": [
                 {
                   "execution_unit": "{{item.Unit}}",
-                  "linked_pr": {{(item.LinkedPr is null ? "null" : $"\"{item.LinkedPr}\"")}},
-                  "status": "queued",
-                  "created_at": "2026-09-16T12:00:00Z"
+                  "title": "{{item.Unit}} title",
+                  "state": "active",
+                  "dependencies": [],
+                  "blocked_by": [],
+                  "clarification_return_path": "",
+                  "packet_paths": {
+                    "yaml": ".intent-cli/issues/{{item.Unit}}/packet.yaml",
+                    "implementation": ".intent-cli/issues/{{item.Unit}}/implementation.md",
+                    "review_context": ".intent-cli/issues/{{item.Unit}}/review-context.md"
+                  },
+                  "linked_issue": {
+                    "repo": "{{Repo}}",
+                    "number": 839,
+                    "url": "https://github.com/{{Repo}}/issues/839"
+                  },
+                  "linked_pr": {{linkedPrJson}},
+                  "worker_role": "builder",
+                  "review_role": "reviewer",
+                  "priority": "normal"
                 }
               ]
             }
             """);
     }
 
-    private void RecordVerdict(string runtime, string verdict, string head)
-    {
-        var recordDir = CrossRuntimeReviewPaths.PrDirectory(root, Repo, Pr);
-        Directory.CreateDirectory(recordDir);
-        var recordFile = Path.Combine(recordDir, $"{runtime}-{head[..7]}.json");
-        File.WriteAllText(recordFile, JsonSerializer.Serialize(new
-        {
-            artifact_kind = "cross-runtime-review-record",
-            repo = Repo,
-            pr = Pr,
-            head_sha = head,
-            execution_unit = Unit,
-            domain = Domain,
-            team = Team,
-            kind = "implementation",
+    private void RecordVerdict(string runtime, string verdict, string head, int offsetSeconds = 0) =>
+        G839CrossRuntimeReviewRecordWriter.WriteImplementationRecord(
+            root,
+            Repo,
+            Pr,
+            Unit,
+            Domain,
+            Team,
             runtime,
-            runtime_version = "fixture",
-            conductor_runtime = "claude",
-            relation = "cross-runtime",
             verdict,
-            blocking_findings = Array.Empty<string>(),
-            notes = string.Empty,
-            recorded_at = "2026-09-16T12:00:00Z",
-            raw_verdict_file = "fixture.json",
-            raw_verdict_sha256 = H1,
-        }));
-    }
+            head,
+            DateTimeOffset.Parse("2026-09-16T12:00:00Z").AddSeconds(offsetSeconds));
 
     private sealed class RecordingMutator : IGitHubLabelMutator
     {

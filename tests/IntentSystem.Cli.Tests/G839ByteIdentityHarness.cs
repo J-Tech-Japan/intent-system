@@ -53,6 +53,28 @@ internal static class G839ByteIdentityHarness
         "recovery-label-removal-failed-write-json",
         "recovery-label-readback-failed-write-json",
         "recovery-superseded-event-append-failed-write-json",
+        "recovery-in-progress-present-refusal-json",
+        "recovery-in-progress-present-refusal-markdown",
+        "recovery-claim-held-refusal-json",
+        "recovery-claim-held-refusal-markdown",
+        "recovery-claim-unavailable-refusal-json",
+        "recovery-claim-unavailable-refusal-markdown",
+        "recovery-pr-open-refusal-json",
+        "recovery-pr-open-refusal-markdown",
+        "recovery-open-closing-pr-refusal-json",
+        "recovery-open-closing-pr-refusal-markdown",
+        "recovery-queue-item-missing-refusal-json",
+        "recovery-queue-item-missing-refusal-markdown",
+        "recovery-queue-item-ambiguous-refusal-json",
+        "recovery-queue-item-ambiguous-refusal-markdown",
+        "recovery-unit-mismatch-refusal-json",
+        "recovery-unit-mismatch-refusal-markdown",
+        "recovery-runs-log-unreadable-refusal-json",
+        "recovery-runs-log-unreadable-refusal-markdown",
+        "recovery-host-state-missing-refusal-json",
+        "recovery-host-state-missing-refusal-markdown",
+        "recovery-started-ambiguous-refusal-json",
+        "recovery-started-ambiguous-refusal-markdown",
     ];
 
     internal static readonly string[] PrTransitionRefusalTextScenarioIds =
@@ -66,14 +88,26 @@ internal static class G839ByteIdentityHarness
 
     internal static readonly string[] PrTransitionNonRefusalScenarioIds =
     [
+        "pr-transition-help",
+        "pr-transition-parse-error",
         "pr-transition-review-start-dry-run-json",
         "pr-transition-review-start-dry-run-text",
+        "pr-transition-review-start-write-json",
+        "pr-transition-review-start-write-text",
         "pr-transition-approved-ungated-dry-run-json",
         "pr-transition-review-release-write-text",
+        "pr-transition-review-release-write-json",
         "pr-transition-request-update-dry-run-json",
+        "pr-transition-request-update-dry-run-text",
+        "pr-transition-request-update-write-json",
         "pr-transition-approved-undeclared-dry-run-json",
-        "pr-transition-review-start-write-json",
+        "pr-transition-approved-undeclared-write-json",
+        "pr-transition-approved-satisfied-dry-run-json",
+        "pr-transition-approved-satisfied-dry-run-text",
+        "pr-transition-approved-satisfied-write-json",
+        "pr-transition-approved-satisfied-write-text",
         "pr-transition-failure-may-have-applied-write-json",
+        "pr-transition-failure-known-unapplied-write-json",
     ];
 
     internal static readonly string[] PlannedLabelsConsumerScenarioIds =
@@ -81,10 +115,7 @@ internal static class G839ByteIdentityHarness
         "planned-labels-automation-summary",
         "planned-labels-automation-doctor",
         "planned-labels-worker-next-action",
-        "planned-labels-worker-pr-comment-preflight",
     ];
-
-
 
     internal static string CapturePlannedLabelsConsumer(string fixtureId) =>
         fixtureId switch
@@ -92,7 +123,6 @@ internal static class G839ByteIdentityHarness
             "planned-labels-automation-summary" => CaptureAutomationSummary(),
             "planned-labels-automation-doctor" => CaptureAutomationDoctor(),
             "planned-labels-worker-next-action" => G839RecoveryByteIdentityTests.CaptureWorkerNextAction(),
-            "planned-labels-worker-pr-comment-preflight" => WorkerPrCommentPreflightCommandTests.G839PlannedLabelsPreflightCapture.Capture(),
             _ => throw new ArgumentOutOfRangeException(nameof(fixtureId), fixtureId, "unknown planned-labels consumer"),
         };
 
@@ -216,6 +246,67 @@ internal static class G839ByteIdentityHarness
         MergedAt = null,
     };
 
+    internal static GitHubPrLookupResult OpenPr(int pr) => new()
+    {
+        Number = pr,
+        State = "OPEN",
+        Merged = false,
+        MergedAt = null,
+    };
+
+    internal static GitHubAutomationPrCandidate OpenClosingPr(int pr, int issue) => new()
+    {
+        Number = pr,
+        Title = "closing PR",
+        Url = $"https://github.com/{Repo}/pull/{pr}",
+        CreatedAt = "2026-04-30T00:00:00Z",
+        UpdatedAt = "2026-04-30T00:00:00Z",
+        State = "OPEN",
+        Labels = [new GitHubAutomationLabel { Name = "intent-target" }],
+        ClosingIssuesReferences =
+        [
+            new GitHubPrClosingIssueReference
+            {
+                Number = issue,
+                Repository = new GitHubPrClosingIssueRepository
+                {
+                    Name = "intent-system",
+                    Owner = new GitHubPrClosingIssueRepositoryOwner { Login = "J-Tech-Japan" },
+                },
+            },
+        ],
+    };
+
+    internal static ClaimOwnershipVerification UnheldClaim() => new(
+        Passed: true,
+        Status: ClaimOwnershipVerification.StatusUnheldAvailable,
+        Scope: $"execution-unit:{Unit}",
+        StoreConfigured: true,
+        InvokingTeam: Team,
+        Holder: null,
+        HolderTeam: null,
+        Detail: "unheld");
+
+    internal static ClaimOwnershipVerification HeldClaim() => new(
+        Passed: false,
+        Status: ClaimOwnershipVerification.StatusOwned,
+        Scope: $"execution-unit:{Unit}",
+        StoreConfigured: true,
+        InvokingTeam: Team,
+        Holder: "builder",
+        HolderTeam: Team,
+        Detail: "owned");
+
+    internal static ClaimOwnershipVerification ClaimUnavailable(string status) => new(
+        Passed: false,
+        Status: status,
+        Scope: $"execution-unit:{Unit}",
+        StoreConfigured: false,
+        InvokingTeam: Team,
+        Holder: null,
+        HolderTeam: null,
+        Detail: "unavailable");
+
     internal static GitHubPrLookupResult Merged(int pr) => new()
     {
         Number = pr,
@@ -224,9 +315,9 @@ internal static class G839ByteIdentityHarness
         MergedAt = "2026-01-01T00:00:00Z",
     };
 
-    internal static RunEvent BuildRecoveryEvent(string eventName, int pr, string? reason = null) => new()
+    internal static RunEvent BuildRecoveryEvent(string eventName, int pr, string? reason = null, DateTimeOffset? ts = null) => new()
     {
-        Ts = FixedNow.AddMinutes(-10),
+        Ts = ts ?? FixedNow.AddMinutes(-10),
         ExecutionUnit = Unit,
         Event = eventName,
         By = AutomationPrCreatedStaleRecoveryCommand.By,
@@ -288,10 +379,10 @@ internal static class G839ByteIdentityHarness
 
 
 
-    private static QueueItem BuildQueueItem(string? linkedPr) =>
+    private static QueueItem BuildQueueItem(string? linkedPr, string? executionUnit = null) =>
         new()
         {
-            ExecutionUnit = Unit,
+            ExecutionUnit = executionUnit ?? Unit,
             Title = $"{Unit} title",
             State = QueueItemState.Queued,
             Dependencies = Array.Empty<string>(),
@@ -319,7 +410,12 @@ internal static class G839ByteIdentityHarness
     {
         public RecoveryWorkspace()
         {
-            RootPath = Directory.CreateTempSubdirectory("g839-byte-recovery-").FullName;
+            RootPath = Path.Combine(Path.GetTempPath(), "g839-byte-recovery-fixture");
+            if (Directory.Exists(RootPath))
+            {
+                Directory.Delete(RootPath, recursive: true);
+            }
+
             Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
             Context = new CliContext
             {
@@ -340,9 +436,18 @@ internal static class G839ByteIdentityHarness
 
         public CliContext Context { get; }
 
-        public void WriteProceedHostState(int linkedPr, int? publishPr = null)
+        public void WriteProceedHostState(
+            int linkedPr,
+            int? publishPr = null,
+            bool duplicateQueueItem = false,
+            bool includeQueueItem = true,
+            string? queueExecutionUnit = null)
         {
-            WriteQueueState(linkedPr);
+            if (includeQueueItem)
+            {
+                WriteQueueState(linkedPr, publishPr ?? linkedPr, duplicateQueueItem, queueExecutionUnit);
+            }
+
             var issueDir = Path.Combine(RootPath, ".intent-cli", "issues", Unit);
             Directory.CreateDirectory(issueDir);
             File.WriteAllText(
@@ -361,15 +466,25 @@ internal static class G839ByteIdentityHarness
                 }));
         }
 
-        public void WriteQueueState(int linkedPr, int publishPr = Pr)
+        public void WriteQueueState(
+            int linkedPr,
+            int publishPr = Pr,
+            bool duplicateQueueItem = false,
+            string? queueExecutionUnit = null)
         {
+            var items = new List<QueueItem> { BuildQueueItem($"https://github.com/{Repo}/pull/{linkedPr}", queueExecutionUnit) };
+            if (duplicateQueueItem)
+            {
+                items.Add(BuildQueueItem($"https://github.com/{Repo}/pull/{linkedPr}", $"{Unit}-dup"));
+            }
+
             File.WriteAllText(
                 Context.GetQueueStatePath(),
                 QueueStateSerializer.Serialize(new QueueState
                 {
                     SchemaVersion = "1",
                     UpdatedAt = FixedNow,
-                    Items = [BuildQueueItem($"https://github.com/{Repo}/pull/{linkedPr}")],
+                    Items = items,
                 }));
 
             var issueDir = Path.Combine(RootPath, ".intent-cli", "issues", Unit);
@@ -388,6 +503,21 @@ internal static class G839ByteIdentityHarness
                     LinkedPrNumber = publishPr,
                     LinkedPrUrl = $"https://github.com/{Repo}/pull/{publishPr}",
                 }));
+        }
+
+        public void WriteUnreadableRunsLog()
+        {
+            var runsPath = Context.GetRunLogPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(runsPath)!);
+            File.WriteAllText(runsPath, string.Empty);
+            if (OperatingSystem.IsWindows())
+            {
+                File.SetAttributes(runsPath, FileAttributes.ReadOnly);
+            }
+            else
+            {
+                RunChmod(runsPath, "000");
+            }
         }
 
         public void EnsureClaimsStore() =>

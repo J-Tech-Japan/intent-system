@@ -1,0 +1,8 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839-BYTE
+- mode: dry-run
+- outcome: refused
+- cause: runs-log-unreadable
+- applied: false
+- summary: refusing: runs.jsonl is unreadable (Access to the path '/var/folders/bs/1qh88g953fx8dccvxc9p5rhr0000gn/T/g839-byte-recovery-fixture/.intent-cli/runs.jsonl' is denied.).

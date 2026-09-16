@@ -11,8 +11,22 @@ public sealed partial class G839RecoveryByteIdentityTests
     internal static string CaptureRecovery(string fixtureId)
     {
         using var scope = new RecoverySeams();
-        using var workspace = G839ByteIdentityHarness.CreateProceedWorkspace();
-        SeedRecoveryGitHubFakes(workspace);
+        using var workspace = fixtureId.StartsWith("recovery-host-state-missing", StringComparison.Ordinal)
+            ? new G839ByteIdentityHarness.RecoveryWorkspace()
+            : G839ByteIdentityHarness.CreateProceedWorkspace();
+        if (!fixtureId.StartsWith("recovery-host-state-missing", StringComparison.Ordinal))
+        {
+            SeedRecoveryGitHubFakes(workspace);
+        }
+        else
+        {
+            AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+                new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-target", "intent-pr-created"));
+            AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
+                new FakePrLookup(G839ByteIdentityHarness.ClosedUnmerged(G839ByteIdentityHarness.Pr));
+            AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = () => new FakeLister();
+        }
+
         ConfigureRecoveryScenario(workspace, fixtureId);
         return G839ByteIdentityHarness.RunRecovery(workspace, G839ByteIdentityHarness.BuildRecoveryArgs(fixtureId));
     }
@@ -104,6 +118,60 @@ public sealed partial class G839RecoveryByteIdentityTests
             case "recovery-proceed-dry-run-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () =>
                     new RecordingLabelMutator("intent-target", "intent-pr-created");
+                return;
+            case "recovery-in-progress-present-refusal-json":
+            case "recovery-in-progress-present-refusal-markdown":
+                AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+                    new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-target", "intent-pr-created", "intent-issue-in-progress"));
+                return;
+            case "recovery-claim-held-refusal-json":
+            case "recovery-claim-held-refusal-markdown":
+                AutomationPrCreatedStaleRecoveryCommand.ClaimVerifierFactory =
+                    new SequencedClaimVerifier(G839ByteIdentityHarness.HeldClaim()).Verify;
+                return;
+            case "recovery-claim-unavailable-refusal-json":
+            case "recovery-claim-unavailable-refusal-markdown":
+                AutomationPrCreatedStaleRecoveryCommand.ClaimVerifierFactory =
+                    new SequencedClaimVerifier(G839ByteIdentityHarness.ClaimUnavailable(ClaimOwnershipVerification.StatusNotConfigured)).Verify;
+                return;
+            case "recovery-pr-open-refusal-json":
+            case "recovery-pr-open-refusal-markdown":
+                AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
+                    new FakePrLookup(G839ByteIdentityHarness.OpenPr(G839ByteIdentityHarness.Pr));
+                return;
+            case "recovery-open-closing-pr-refusal-json":
+            case "recovery-open-closing-pr-refusal-markdown":
+                AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = () =>
+                    new FakeLister(prs: [G839ByteIdentityHarness.OpenClosingPr(902, G839ByteIdentityHarness.Issue)]);
+                return;
+            case "recovery-queue-item-missing-refusal-json":
+            case "recovery-queue-item-missing-refusal-markdown":
+                workspace.WriteProceedHostState(G839ByteIdentityHarness.Pr, includeQueueItem: false);
+                return;
+            case "recovery-queue-item-ambiguous-refusal-json":
+            case "recovery-queue-item-ambiguous-refusal-markdown":
+                workspace.WriteProceedHostState(G839ByteIdentityHarness.Pr, duplicateQueueItem: true);
+                return;
+            case "recovery-unit-mismatch-refusal-json":
+            case "recovery-unit-mismatch-refusal-markdown":
+                workspace.WriteProceedHostState(G839ByteIdentityHarness.Pr, queueExecutionUnit: "G999");
+                return;
+            case "recovery-runs-log-unreadable-refusal-json":
+            case "recovery-runs-log-unreadable-refusal-markdown":
+                workspace.WriteUnreadableRunsLog();
+                return;
+            case "recovery-host-state-missing-refusal-json":
+            case "recovery-host-state-missing-refusal-markdown":
+                return;
+            case "recovery-started-ambiguous-refusal-json":
+            case "recovery-started-ambiguous-refusal-markdown":
+                workspace.AppendRunEvent(G839ByteIdentityHarness.BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, G839ByteIdentityHarness.Pr));
+                workspace.AppendRunEvent(G839ByteIdentityHarness.BuildRecoveryEvent(
+                    AutomationPrCreatedStaleRecoveryCommand.EventStarted,
+                    G839ByteIdentityHarness.Pr,
+                    ts: G839ByteIdentityHarness.FixedNow.AddMinutes(1)));
+                AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+                    new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-target"));
                 return;
             default:
                 throw new ArgumentOutOfRangeException(nameof(fixtureId), fixtureId, "unknown recovery scenario");

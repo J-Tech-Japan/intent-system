@@ -17,11 +17,16 @@ public sealed partial class G839ByteIdentityTests
 
     private sealed class PrTransitionSeams : IDisposable
     {
-    private readonly string root = Directory.CreateTempSubdirectory("g839-pr-transition-").FullName;
+    private readonly string root = Path.Combine(Path.GetTempPath(), "g839-pr-transition-fixture");
     private readonly Dictionary<string, string?> claims = new(StringComparer.Ordinal) { [G839ByteIdentityHarness.Unit] = G839ByteIdentityHarness.Team };
 
         public PrTransitionSeams(string fixtureId)
         {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+
             CrossRuntimeReviewTeamResolver.ClaimReader = (_, scope) =>
             {
                 var unit = scope["execution-unit:".Length..];
@@ -40,21 +45,15 @@ public sealed partial class G839ByteIdentityTests
                     Path.Combine(root, ".intent-cli", "config.toml"),
                     "default_domain = \"intent-cli\"\nartifact_root = \".intent-cli\"\n");
             }
-            else if (fixtureId.Contains("undeclared", StringComparison.Ordinal))
+            else if (fixtureId.Contains("undeclared", StringComparison.Ordinal)
+                || fixtureId.Contains("satisfied", StringComparison.Ordinal)
+                || fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal))
             {
-                claims[G839ByteIdentityHarness.Unit] = "some-other-team";
-                File.WriteAllText(
-                    Path.Combine(root, ".intent-cli", "config.toml"),
-                    "default_domain = \"intent-cli\"\nartifact_root = \".intent-cli\"\n\n"
-                    + "[[cross_runtime_review.teams]]\n"
-                    + "team = \"intent-cli/intent-cli-dev\"\n"
-                    + "conductor_runtime = \"claude\"\n"
-                    + "repos = [\"J-Tech-Japan/intent-system\"]\n");
-                WriteQueue((G839ByteIdentityHarness.Unit, $"https://github.com/{G839ByteIdentityHarness.Repo}/pull/{G839ByteIdentityHarness.Pr}"));
-                WritePacket(G839ByteIdentityHarness.Unit, G839ByteIdentityHarness.Domain);
-            }
-            else if (fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal))
-            {
+                if (fixtureId.Contains("undeclared", StringComparison.Ordinal))
+                {
+                    claims[G839ByteIdentityHarness.Unit] = "some-other-team";
+                }
+
                 File.WriteAllText(
                     Path.Combine(root, ".intent-cli", "config.toml"),
                     "default_domain = \"intent-cli\"\nartifact_root = \".intent-cli\"\n\n"
@@ -79,12 +78,9 @@ public sealed partial class G839ByteIdentityTests
             var args = BuildPrTransitionArgs(fixtureId);
             using var writer = new StringWriter();
             var exit = CommandRouter.Execute(args, Context(), writer);
-            if (exit != 0 && fixtureId.Contains("failure", StringComparison.Ordinal))
-            {
-                return writer.ToString();
-            }
-
-            if (exit != 0 && fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal))
+            if (exit != 0 && (fixtureId.Contains("failure", StringComparison.Ordinal)
+                || fixtureId.Contains("parse-error", StringComparison.Ordinal)
+                || fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal)))
             {
                 return writer.ToString();
             }
@@ -140,6 +136,25 @@ public sealed partial class G839ByteIdentityTests
                         ReplaceLabelSetFailureCertainty = LabelSetReplacementFailureCertainty.MayHaveApplied,
                     };
                     break;
+                case "pr-transition-failure-known-unapplied-write-json":
+                    AutomationPrTransitionCommand.MutatorFactory = () => new G839ByteIdentityHarness.ThrowingPrMutator
+                    {
+                        Labels = ["intent-target", "intent-pr-rereview-ready"],
+                        ReplaceLabelSetFailureCertainty = LabelSetReplacementFailureCertainty.KnownUnapplied,
+                    };
+                    break;
+                case "pr-transition-approved-satisfied-dry-run-json":
+                case "pr-transition-approved-satisfied-dry-run-text":
+                case "pr-transition-approved-satisfied-write-json":
+                case "pr-transition-approved-satisfied-write-text":
+                    RecordVerdict("claude", "approve", G839ByteIdentityHarness.H2, offsetSeconds: 0);
+                    RecordVerdict("cursor", "approve", G839ByteIdentityHarness.H2, offsetSeconds: 1);
+                    AutomationPrTransitionCommand.PrHeadReader = (_, _) => G839ByteIdentityHarness.H2;
+                    AutomationPrTransitionCommand.MutatorFactory = () => new G839ByteIdentityHarness.RecordingPrMutator
+                    {
+                        Labels = ["intent-target", "intent-pr-reviewing"],
+                    };
+                    break;
                 case "pr-transition-review-release-write-text":
                     AutomationPrTransitionCommand.MutatorFactory = () => new G839ByteIdentityHarness.RecordingPrMutator
                     {
@@ -172,8 +187,8 @@ public sealed partial class G839ByteIdentityTests
                     RecordVerdict("claude", "approve", G839ByteIdentityHarness.H2);
                     break;
                 case "pr-transition-refusal-blocked-text":
-                    RecordVerdict("claude", "approve", G839ByteIdentityHarness.H2);
-                    RecordVerdict("codex", "request-changes", G839ByteIdentityHarness.H2);
+                    RecordVerdict("claude", "approve", G839ByteIdentityHarness.H2, offsetSeconds: 0);
+                    RecordVerdict("codex", "request-changes", G839ByteIdentityHarness.H2, offsetSeconds: 1);
                     break;
                 case "pr-transition-refusal-team-unresolved-text":
                     claims.Remove(G839ByteIdentityHarness.Unit);
@@ -183,6 +198,16 @@ public sealed partial class G839ByteIdentityTests
 
     private static string[] BuildPrTransitionArgs(string fixtureId)
         {
+            if (fixtureId == "pr-transition-help")
+            {
+                return ["automation", "pr-transition", "--help"];
+            }
+
+            if (fixtureId == "pr-transition-parse-error")
+            {
+                return ["automation", "pr-transition", "--repo", G839ByteIdentityHarness.Repo];
+            }
+
             var transition = fixtureId switch
             {
                 var id when id.Contains("review-start", StringComparison.Ordinal) => "review-start",
@@ -209,13 +234,14 @@ public sealed partial class G839ByteIdentityTests
                 args.AddRange(["--format", "text"]);
             }
 
-            if (fixtureId.Contains("-write-", StringComparison.Ordinal))
+            if (fixtureId.Contains("-write-", StringComparison.Ordinal) || fixtureId.EndsWith("-write-json", StringComparison.Ordinal) || fixtureId.EndsWith("-write-text", StringComparison.Ordinal))
             {
                 args.Add("--write");
             }
 
-            if (fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal)
-                && fixtureId != "pr-transition-refusal-head-required-text")
+            if (fixtureId.Contains("satisfied", StringComparison.Ordinal)
+                || (fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal)
+                    && fixtureId != "pr-transition-refusal-head-required-text"))
             {
                 args.AddRange(["--head-sha", G839ByteIdentityHarness.H2]);
             }
@@ -235,7 +261,7 @@ public sealed partial class G839ByteIdentityTests
                     {
                       "execution_unit": "{{item.Unit}}",
                       "title": "{{item.Unit}} title",
-                      "state": "queued",
+                      "state": "active",
                       "dependencies": [],
                       "blocked_by": [],
                       "clarification_return_path": "",
@@ -273,32 +299,17 @@ public sealed partial class G839ByteIdentityTests
             File.WriteAllText(Path.Combine(directory, "implementation.md"), "# notes\n");
         }
 
-    private void RecordVerdict(string runtime, string verdict, string head)
-        {
-            var recordDir = CrossRuntimeReviewPaths.PrDirectory(root, G839ByteIdentityHarness.Repo, G839ByteIdentityHarness.Pr);
-            Directory.CreateDirectory(recordDir);
-            var recordFile = Path.Combine(recordDir, $"{runtime}-{head[..7]}.json");
-            File.WriteAllText(recordFile, JsonSerializer.Serialize(new
-            {
-                artifact_kind = "cross-runtime-review-record",
-                repo = G839ByteIdentityHarness.Repo,
-                pr = G839ByteIdentityHarness.Pr,
-                head_sha = head,
-                execution_unit = G839ByteIdentityHarness.Unit,
-                domain = G839ByteIdentityHarness.Domain,
-                team = G839ByteIdentityHarness.Team,
-                kind = "implementation",
-                runtime,
-                runtime_version = "fixture",
-                conductor_runtime = "claude",
-                relation = "cross-runtime",
-                verdict,
-                blocking_findings = Array.Empty<string>(),
-                notes = string.Empty,
-                recorded_at = "2026-09-16T12:00:00Z",
-                raw_verdict_file = "fixture.json",
-                raw_verdict_sha256 = G839ByteIdentityHarness.H2,
-            }));
-        }
+    private void RecordVerdict(string runtime, string verdict, string head, int offsetSeconds = 0) =>
+        G839CrossRuntimeReviewRecordWriter.WriteImplementationRecord(
+            root,
+            G839ByteIdentityHarness.Repo,
+            G839ByteIdentityHarness.Pr,
+            G839ByteIdentityHarness.Unit,
+            G839ByteIdentityHarness.Domain,
+            G839ByteIdentityHarness.Team,
+            runtime,
+            verdict,
+            head,
+            G839ByteIdentityHarness.FixedNow.AddSeconds(offsetSeconds));
     }
 }

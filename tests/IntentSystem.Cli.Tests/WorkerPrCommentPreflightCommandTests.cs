@@ -6,6 +6,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(WorkerPrCommentPreflightSharedStateCollection.Name)]
 public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
 {
     public WorkerPrCommentPreflightCommandTests()
@@ -2029,40 +2030,6 @@ This actually targets parent-host (must remain).
             if (Directory.Exists(RootPath))
             {
                 Directory.Delete(RootPath, recursive: true);
-            }
-        }
-    }
-
-    internal static class G839PlannedLabelsPreflightCapture
-    {
-        internal static string Capture()
-        {
-            using var scope = new WorkerPrCommentPreflightSeams();
-            using var workspace = new G839ByteIdentityHarness.CliWorkspace("worker-pr-comment-preflight-g839-");
-            using var writer = new StringWriter();
-            WorkerPrCommentPreflightCommand.Execute(
-                workspace.Context,
-                ["--repo", G839ByteIdentityHarness.Repo, "--pr", "616", "--format", "json"],
-                writer);
-            return writer.ToString();
-        }
-
-        private sealed class WorkerPrCommentPreflightSeams : IDisposable
-        {
-            public WorkerPrCommentPreflightSeams()
-            {
-                WorkerPrCommentPreflightCommand.PrLookupFactory = () => new G839ByteIdentityHarness.WorkerPrLookup();
-                WorkerPrCommentPreflightCommand.IssueLookupFactory = () => new G839ByteIdentityHarness.WorkerIssueLookup();
-                WorkerPrCommentPreflightCommand.CommentsLookupFactory = () => new G839ByteIdentityHarness.WorkerCommentsLookup();
-                WorkerPrCommentPreflightCommand.NestedProviderLauncher = null;
-            }
-
-            public void Dispose()
-            {
-                WorkerPrCommentPreflightCommand.PrLookupFactory = null;
-                WorkerPrCommentPreflightCommand.IssueLookupFactory = null;
-                WorkerPrCommentPreflightCommand.CommentsLookupFactory = null;
-                WorkerPrCommentPreflightCommand.NestedProviderLauncher = null;
             }
         }
     }

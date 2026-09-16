@@ -1,0 +1,8 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839-BYTE
+- mode: dry-run
+- outcome: refused
+- cause: started-ambiguous
+- applied: false
+- summary: refusing: more than one open pr-created-stale-recovery-started event exists for the current key.

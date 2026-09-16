@@ -1,7 +1,7 @@
-cross-runtime-review-record-unreadable: [cross-runtime-review-record-unreadable] record '.intent-cli/cross-runtime-reviews/j-tech-japan__intent-system/pr-1823/claude-2222222.json' failed validation and fails the gate closed: record is not a valid cross-runtime-review-record: The JSON value could not be converted to System.Collections.Generic.IReadOnlyList`1[System.String]. Path: $.notes | LineNumber: 0 | BytePositionInLine: 402. [cross-runtime-review-record-unreadable] record '.intent-cli/cross-runtime-reviews/j-tech-japan__intent-system/pr-1823/codex-2222222.json' failed validation and fails the gate closed: record is not a valid cross-runtime-review-record: The JSON value could not be converted to System.Collections.Generic.IReadOnlyList`1[System.String]. Path: $.notes | LineNumber: 0 | BytePositionInLine: 409. [cross-runtime-review-missing] head 2222222222222222222222222222222222222222 has no approve whose latest record comes from the conductor runtime 'claude' (independent same-runtime subagent review). [cross-runtime-review-missing] head 2222222222222222222222222222222222222222 has no approve whose latest record comes from a runtime other than the conductor runtime 'claude' (cross-runtime review).
+cross-runtime-review-blocked: [cross-runtime-review-blocked] the latest record on head 2222222222222222222222222222222222222222 from codex is request-changes. [cross-runtime-review-missing] head 2222222222222222222222222222222222222222 has no approve whose latest record comes from a runtime other than the conductor runtime 'claude' (cross-runtime review).
 mode: dry-run
 repo: J-Tech-Japan/intent-system
 pr: 1823
 applied: false
 ci_wait_cleared: false
-cross_runtime_review: blocked (cross-runtime-review-record-unreadable)
+cross_runtime_review: blocked (cross-runtime-review-blocked)

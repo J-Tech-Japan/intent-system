@@ -1,0 +1,32 @@
+{
+  "repo": "J-Tech-Japan/intent-system",
+  "pr": 1823,
+  "transition": "review-release",
+  "mode": "write",
+  "applied": true,
+  "add_labels": [],
+  "addLabels": [],
+  "remove_labels": [
+    "intent-pr-reviewing"
+  ],
+  "removeLabels": [
+    "intent-pr-reviewing"
+  ],
+  "current_labels": [
+    "intent-target",
+    "intent-pr-reviewing"
+  ],
+  "currentLabels": [
+    "intent-target",
+    "intent-pr-reviewing"
+  ],
+  "summary": "Would apply host PR transition \u0027review-release\u0027: add (none); remove intent-pr-reviewing.",
+  "ci_wait_cleared": true,
+  "may_have_applied": false,
+  "mayHaveApplied": false,
+  "intended_labels": null,
+  "intendedLabels": null,
+  "recovery_command": null,
+  "recoveryCommand": null,
+  "error": null
+}

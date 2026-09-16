@@ -140,7 +140,12 @@ public sealed class G839RecoveryOutputTests : IDisposable
     [Fact]
     public void ThreePaths_MarkdownRendersStandardBlock()
     {
-        foreach (var scenario in new[] { "audit-only", "completion", "abort" })
+        foreach (var (scenario, expectedCause) in new (string Scenario, string Cause)[]
+                 {
+                     ("audit-only", "recovered-event-append-failed"),
+                     ("completion", "recovered-event-append-failed"),
+                     ("abort", "aborted-event-append-failed"),
+                 })
         {
             using var workspace = scenario switch
             {
@@ -168,37 +173,29 @@ public sealed class G839RecoveryOutputTests : IDisposable
                 ConfigureAbortAppendScenario(workspace, "claim-held");
             }
 
-            SetRunLogReadOnly(workspace.Context, readOnly: true);
+            SetRunLogReadOnly(workspace.Context, readOnly: scenario != "abort");
             var (exitCode, output) = Execute(workspace, write: true, format: "markdown");
 
             Assert.Equal(1, exitCode);
             Assert.Contains("- outcome: refused", output, StringComparison.Ordinal);
             Assert.Contains("- mode: write", output, StringComparison.Ordinal);
             Assert.Contains("- applied: false", output, StringComparison.Ordinal);
-            Assert.Contains("- cause:", output, StringComparison.Ordinal);
+            Assert.Contains($"- cause: {expectedCause}", output, StringComparison.Ordinal);
             Assert.Contains("- summary:", output, StringComparison.Ordinal);
             Assert.DoesNotContain("recheck_cause", output, StringComparison.Ordinal);
         }
     }
 
     [Theory]
-    [InlineData(false, "json")]
-    [InlineData(false, "markdown")]
-    [InlineData(true, "json")]
-    [InlineData(true, "markdown")]
-    public void RecheckCause_AbsentFromEveryOtherResult(bool write, string format)
+    [MemberData(nameof(RecoverySweepFixtureIds))]
+    public void RecheckCause_AbsentFromEveryOtherResult(string fixtureId)
     {
-        using var workspace = CreateProceedWorkspace();
-        var labelMutator = new RecordingLabelMutator("intent-target", "intent-pr-created");
-        AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => labelMutator;
-
-        var (exitCode, output) = Execute(workspace, write, format);
+        var output = G839RecoveryByteIdentityTests.CaptureRecovery(fixtureId);
         Assert.DoesNotContain("recheck_cause", output, StringComparison.Ordinal);
-        if (!write)
-        {
-            Assert.Equal(0, exitCode);
-        }
     }
+
+    public static TheoryData<string> RecoverySweepFixtureIds() =>
+        new(G839ByteIdentityHarness.RecoveryScenarioIds);
 
     [Fact]
     public void RecheckCause_AbsentFromRefusalPaths()
