@@ -1,7 +1,7 @@
 # リリースノート — intent-cli v0.32.0
 
-> **PREPARED / NOT PUBLISHED。** これは `v0.32.0-preview.3` prerelease のための、測定済み
-> G795–G830 の units（この範囲のすべての番号ではありません）の prepare-only notes です。tag / GitHub Release / package publish、workflow または
+> **PREPARED / NOT PUBLISHED。** これは `v0.32.0-preview.4` prerelease のための、測定済み
+> G795–G838 の units（この範囲のすべての番号ではありません）の prepare-only notes です。tag / GitHub Release / package publish、workflow または
 > publish configuration、consumer follow-up、product source の変更は行いません。
 
 v0.32.0 の stable GitHub Release はまだ存在せず、この notes は preparation evidence だけです。
@@ -45,9 +45,38 @@ verifier は `--team` を要求する一方、`worker claim` はそれを受け�
   を dry-run で確認してから `--write --expected-remote-sha256 <digest>` で実行します。保証は
   read-compare-write-verified で、atomic ではありません。
 
+## Preview.4: preview.3 からの変更
+
+preview.3（`v0.32.0-preview.3`、2026-09-14）は preview.2 の修正と八つの post-preview.2 route を
+出荷しました。preview.4 は preview.3 以降に merge したすべてを含みます。preview.3 の
+利用者が対応すべき変更:
+
+- **`solo-conductor` は三つ目の `team-mode` 値（G833）。** `intent-cli team-mode set --mode solo-conductor --write`
+  で記録し、`intent-cli guide solo-conductor` で operating contract を読みます。solo conductor の
+  ten-step per-unit loop と blocking reviewer-independence rules を出力しますが、agent を起動・管理しません。
+  **前方互換の hazard:** G833 のない intent-cli は `solo-conductor` を含む `.intent-cli/team-mode.json` を
+  拒否し、file 全体の load 失敗により *every team on that host* に影響します。mode を記録する前に host を
+  読むすべての intent-cli を更新してください。別 seat が古い binary の preview.3 利用者は、このコマンドを
+  実行する前にこれを読む必要があります。
+- **cross-runtime review は team ごとに宣言（G834/G835）。** `.intent-cli/config.toml` に
+  `[[cross_runtime_review.teams]]` を追加し、`team`・`conductor_runtime`・`repos`（gated-repo 一覧）を
+  指定します。宣言のない team、または declaring team の一覧にない repo は ungated で、宣言のない host と
+  byte-identical です。**gated repo 上の declared team** では、`intent-cli automation pr-transition --transition approved`
+  に PR の現在 head と一致する `--head-sha <sha>` と満たされた gate（G834）が追加で必要になり、`issue publish-flow`
+  は `packet_digest` でキーされた design verdict を要求します（G835）。`intent-cli review cross-runtime request`
+  は prompt を出力し、`intent-cli review cross-runtime record` は verdict を保存します。process は実行せず、
+  seat 自身が reviewer を走らせます。`--kind design` と `--model` は宣言のあるなしに関わらず任意の caller で使えます。
+- **`intent-cli automation pr-created-stale-recovery`（G836）** は unmerged PR close 後の stale
+  `intent-pr-created` label を回復し、その label だけを外します。既定は dry-run で、claims store のない host では
+  `claim-unavailable` で拒否します。
+- **`intent-cli session-layer topology record-orca-run`（G837）** は team-shape seat または solo sidecar に
+  adopted Orca Run を結び付け、read-only の `intent-cli session-layer topology orca-runs` で読み戻します。binding がある間は
+  `intent-cli team-mode set --write` が effective-mode 変更を拒否し、これが preview.3 利用者を mid-task で
+  止める唯一の経路です。intent-cli は `orca` を実行せず Run も作成しません。
+
 ## 独自に測定した minor justification
 
-named product base は `e78b27d1e99247380fa7518d67470304fb1d7e7b` です。minor の判断は
+named product base は `cd276e20754db09337a94a8b973ddebdd1564ba3` です。minor の判断は
 v0.28.0 の auditable rule、**a command-route addition is a minor bump; option-level additions
 do not count as command routes.** に従います。G796 は新しい role への event-kind routing、G800 は
 research-delegation route を追加し、この二つの command-surface route additions が minor の測定済み
@@ -60,6 +89,9 @@ preview.2 以降、compatibility ledger には八つの command route が加わ�
 0.32.0 minor に含めて `v0.32.0-preview.3` として出します。v0.32.0 には stable release がまだ無いため、
 これらが上げるはずの minor はいま準備中のものと同じだからです。0.32.0 の中で数える route additions です。
 
+preview.3 以降、compatibility ledger には六つの command route が加わりました:
+`automation pr-created-stale-recovery`, `guide solo-conductor`, `review cross-runtime`, `review cross-runtime request`, `review cross-runtime record`, `review cross-runtime status`。Registered command table の行だけを数えます（`| Registered command |` で開き `## Durable schema と legacy inventory` で閉じる table、七行の alias table は除外）。測定した行数は EN/JA 両 mirror で 204 から 210 になりました。operator の決定（2026-09-15）により、これらは 0.33.0 を開かず、未 release の 0.32.0 minor に含めて `v0.32.0-preview.4` として出します。G837 の `session-layer topology record-orca-run` と `session-layer topology orca-runs` は既に登録済みの `session-layer topology` route の subcommand であり、route additions としては **not counted** です。
+
 merged history から route の判断を再現できます: G796 は six-kind event routing addition、G800 は
 first-class research delegation route で、後から加わった八つの route は上に列挙しました。
 
@@ -69,11 +101,11 @@ named base を clean Release build で確認しました:
 
 ```text
 $ git rev-parse HEAD
-e78b27d1e99247380fa7518d67470304fb1d7e7b
+cd276e20754db09337a94a8b973ddebdd1564ba3
 $ dotnet build IntentSystem.sln --configuration Release --no-restore; echo BUILD_RC:$?
 BUILD_RC:0
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.32.1-e78b27d-G829
+intent-cli 0.32.1-cd276e2-G837
 ```
 
 この normal identity は `nextVersion` placeholder であり、**v0.32.0 ではありません**。
@@ -83,7 +115,7 @@ intent-cli 0.32.1-e78b27d-G829
 $ dotnet build IntentSystem.sln --configuration Release --no-restore -p:Version=0.32.0; echo BUILD_RC:$?
 BUILD_RC:0
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.32.0-e78b27d-G829
+intent-cli 0.32.0-cd276e2-G837
 ```
 
 published version の third identity は local policy file ではなく `release.yml` が tag から導出します:
@@ -95,14 +127,14 @@ VERSION=0.32.0
 ```
 
 release workflow は `RAW` から `-p:Version=<tag>` を供給し、`eng/version.json` は local builds と
-dry runs だけを管理します。`v0.32.0-preview.3` のような preview release tag も同じ方法で
-`VERSION=0.32.0-preview.3` になります。この prepare-only slice は no tag（tag を作成していません）です。
+dry runs だけを管理します。`v0.32.0-preview.4` のような preview release tag も同じ方法で
+`VERSION=0.32.0-preview.4` になります。この prepare-only slice は no tag（tag を作成していません）です。
 
-## Release inventory: 正確に 26 の shipped first-parent unit
+## Release inventory: 正確に 33 の shipped first-parent unit
 
-shipped inventory は exact first-parent range から導出しました。Git は三十三の commit を測定し、
-以下の 26 の shipped unit（G813 は部分実装）には一つずつ operator-observable outcome を記録します。
-G802 と G804 の release-prep commit と五つの claim state commit は accounting table で分類しますが、
+shipped inventory は exact first-parent range から導出しました。Git は四十一の commit を測定し、
+以下の 33 の shipped unit（G813 は部分実装）には一つずつ operator-observable outcome を記録します。
+G802・G804・G830 の release-prep commit と五つの claim state commit は accounting table で分類しますが、
 shipped unit には数えません:
 
 - G795 — PR #1740 / issue #1737; merge commit `1b3c7229cfe8c8f8565034a7e2220a94ac14785b`。
@@ -157,11 +189,25 @@ shipped unit には数えません:
   **Operator-observable outcome:** supervision は opt-in になりました。`[supervision] opt_in_teams` に宣言した team だけが `supervision-setup` の推奨を受け、bootstrap の完了条件に supervision cycle が含まれます。
 - G829 — PR #1802 / issue #1801; merge commit `e78b27d1e99247380fa7518d67470304fb1d7e7b`。
   **Operator-observable outcome:** agmsg + herdr は deprecated と表示され、`session-layer show` は `mode_deprecated` と `deprecation_notice` を追加します。記録なしの既定値は `agmsg` のままです。
+- G831 — PR #1806 / issue #1805; merge commit `2f5452a00866c02e9e80949c9e80b5d2b347fd35`。
+  **Operator-observable outcome:** `guide model` は recorded session layer 上の four-thread と five-thread role models を説明します。
+- G832 — PR #1808 / issue #1807; merge commit `159952b410b6429acc03414993ac43a650df7fc7`。
+  **Operator-observable outcome:** `guide orchestrator-thread` の model summary は canonical roles と両方の thread models を名前にします。
+- G833 — PR #1810 / issue #1809; merge commit `9e461d8fda129cfb9447d99b158abb31d9c5c70b`。
+  **Operator-observable outcome:** `team-mode` は三つ目の `solo-conductor` team shape を受け入れ、新しい read-only route `guide solo-conductor` は solo conductor の ten-step per-unit loop と blocking reviewer-independence rules を出力しますが、agent を起動・管理しません。
+- G834 — PR #1812 / issue #1811; merge commit `2e6e6b62defcdcfed95f7f8036eb4a134ccc5adf`。
+  **Operator-observable outcome:** 新しい `review cross-runtime` グループ（`request`・`record`・`status`）は read-only review prompt を出力し、`repo`/`pr`/`head_sha` に結び付いた implementation verdict を記録し、`[[cross_runtime_review.teams]]` に宣言された team の approval を gate します。process は実行しません。
+- G835 — PR #1817 / issue #1813; merge commit `1ff9e75d1ee80739a9ec8aeea8d905b60a757a86`。
+  **Operator-observable outcome:** `review cross-runtime request` は `--kind design` と `--model` を得て、design artifact と reviewer model を任意の caller（gated か否かに関わらず）が選べます。別途、gated repo 上で `[[cross_runtime_review.teams]]` に宣言された team では、`packet_digest` でキーされた design verdict が `issue publish-flow` の packet 公開を gate します。宣言のない team または ungated repo は宣言のない host と byte-identical です。
+- G836 — PR #1819 / issue #1784, #1818; merge commit `75d68523739318eb97932c6f55a35e547e00b769`。
+  **Operator-observable outcome:** 新しい route `automation pr-created-stale-recovery` は unmerged PR close 後の stale `intent-pr-created` label だけを外し、既定は dry-run で、identity-bound linkage・PR state・open-closing-PR・unheld-claim の検査に失敗した場合は拒否し、claims store のない host では `claim-unavailable` で拒否します。
+- G837 — PR #1821 / issue #1820; merge commit `cd276e20754db09337a94a8b973ddebdd1564ba3`。
+  **Operator-observable outcome:** `session-layer topology record-orca-run` と read-only の `session-layer topology orca-runs` は team-shape seat または solo sidecar 上で adopted Orca Run id を記録・表示・検証・bootstrap し、binding がある間は `team-mode set --write` が effective-mode 変更を拒否します。intent-cli は `orca` を実行せず Run も作成しません。
 
 ## First-parent accounting
 
 ```text
-$ git rev-list --first-parent --reverse v0.31.0..e78b27d1e99247380fa7518d67470304fb1d7e7b
+$ git rev-list --first-parent --reverse v0.31.0..cd276e20754db09337a94a8b973ddebdd1564ba3
 1b3c7229cfe8c8f8565034a7e2220a94ac14785b
 09b1f4edca51f3acbbe3e901356866996f4be29f
 67c8578090f1a53e8894aeff88abd6cd8b83ff15
@@ -195,8 +241,16 @@ ca7272f4b88e00577e7c423d41a888f0f0defaf6
 0762312ddccf14009d3252c5101d0b893ca7be6b
 227a981d42cee28924ba34cbde3f45d12717a202
 e78b27d1e99247380fa7518d67470304fb1d7e7b
-$ git rev-list --first-parent --count v0.31.0..e78b27d1e99247380fa7518d67470304fb1d7e7b
-33
+d5f72c10a26e4844fac38dbc362ab1d6052bc237
+2f5452a00866c02e9e80949c9e80b5d2b347fd35
+159952b410b6429acc03414993ac43a650df7fc7
+9e461d8fda129cfb9447d99b158abb31d9c5c70b
+2e6e6b62defcdcfed95f7f8036eb4a134ccc5adf
+1ff9e75d1ee80739a9ec8aeea8d905b60a757a86
+75d68523739318eb97932c6f55a35e547e00b769
+cd276e20754db09337a94a8b973ddebdd1564ba3
+$ git rev-list --first-parent --count v0.31.0..cd276e20754db09337a94a8b973ddebdd1564ba3
+41
 ```
 
 | first-parent commit | classification | release inventory |
@@ -234,9 +288,17 @@ $ git rev-list --first-parent --count v0.31.0..e78b27d1e99247380fa7518d67470304f
 | `0762312ddccf14009d3252c5101d0b893ca7be6b` | G827 / PR #1796 / issue #1794 | included |
 | `227a981d42cee28924ba34cbde3f45d12717a202` | G828 / PR #1799 / issue #1798 | included |
 | `e78b27d1e99247380fa7518d67470304fb1d7e7b` | G829 / PR #1802 / issue #1801 | included |
+| `d5f72c10a26e4844fac38dbc362ab1d6052bc237` | G830 / PR #1804 / issue #1803 | prior release prep |
+| `2f5452a00866c02e9e80949c9e80b5d2b347fd35` | G831 / PR #1806 / issue #1805 | included |
+| `159952b410b6429acc03414993ac43a650df7fc7` | G832 / PR #1808 / issue #1807 | included |
+| `9e461d8fda129cfb9447d99b158abb31d9c5c70b` | G833 / PR #1810 / issue #1809 | included |
+| `2e6e6b62defcdcfed95f7f8036eb4a134ccc5adf` | G834 / PR #1812 / issue #1811 | included |
+| `1ff9e75d1ee80739a9ec8aeea8d905b60a757a86` | G835 / PR #1817 / issue #1813 | included |
+| `75d68523739318eb97932c6f55a35e547e00b769` | G836 / PR #1819 / issue #1784, #1818 | included |
+| `cd276e20754db09337a94a8b973ddebdd1564ba3` | G837 / PR #1821 / issue #1820 | included |
 
-この first-parent range はこの三十三の commit だけで、second-parent commit の changelog ではありません。
-G802 と G804 は preview.1 と preview.2 のための過去の release preparation です。五つの claim state commit
+この first-parent range はこの四十一の commit だけで、second-parent commit の changelog ではありません。
+G802・G804・G830 は preview.1・preview.2・preview.3 のための過去の release preparation です。五つの claim state commit
 は claim transaction が child の default branch に書いたもので、product change を含まず unit では
 ありません。G813 は部分実装の unit として含め、その linkage issue #1774 は open のままです。
 
@@ -271,8 +333,8 @@ claim ではありません。
 ## Prepare-only verification
 
 `ReleaseNotesV0320G802Tests` は EN/JA の unit/PR/issue/merge tuples を比較し、両 mirror の四つの
-alias statements、三つの measured identities、exact thirty-three-commit accounting を guard し、一フィールドの
-mirror mutation と preview.2 base `16267f9d58af31669252186a16ce09ab0dd47ba4` の stale measurement で意図的に fail します。
+alias statements、三つの measured identities、exact forty-one-commit accounting を guard し、一フィールドの
+mirror mutation と preview.3 base `e78b27d1e99247380fa7518d67470304fb1d7e7b` の stale measurement で意図的に fail します。
 `ReleasePackageMetadataTests` は policy shape と demanded next-version placeholder を引き続き guard します。
 diff は EN/JA v0.32.0 notes と tests に限定され、`eng/version.json` と v0.32.1 placeholders は untouched
 です。tag / GitHub Release / package publish / workflow または publish-config / product source change は
