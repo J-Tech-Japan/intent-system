@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -6,12 +5,23 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("WorkerNextActionSharedState")]
 public sealed class NotifyCollectCommandTests : IDisposable
 {
     private static readonly DateTimeOffset FixedNow = new(2026, 8, 29, 18, 0, 0, TimeSpan.Zero);
     private readonly Workspace workspace = new();
+    private readonly VirtualWaitClockHarness waitClockHarness = new();
 
-    public void Dispose() => workspace.Dispose();
+    public NotifyCollectCommandTests()
+    {
+        NotifyCommand.RoleCollectWaitClockFactory = waitClockHarness.CreateClock;
+    }
+
+    public void Dispose()
+    {
+        NotifyCommand.RoleCollectWaitClockFactory = NotifyCommand.DefaultRoleCollectWaitClockFactory;
+        workspace.Dispose();
+    }
 
     [Fact]
     public void RoleCollectUsesReturnedCursorWithoutLossOrDuplicate()
@@ -60,63 +70,91 @@ public sealed class NotifyCollectCommandTests : IDisposable
         Assert.Contains("refusing to reset or skip events", result.GetProperty("summary").GetString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The bounded wait re-reads the reader and returns events a second writer
+    /// appended after the first read came back empty. The old background appender
+    /// with a 100 ms delay against a 2000 ms timeout did not prove concurrent-append
+    /// safety for <see cref="NotifyEventWriter"/>;
+    /// that concurrency is untested and out of scope. Driving the append from the
+    /// pass-1 sleep callback follows <c>NotifyEventSupervisionG751Tests</c>.
+    /// </summary>
     [Fact]
-    public async Task WaitReturnsAfterGenuineSecondWriterAppends()
+    public void WaitReturnsAfterGenuineSecondWriterAppends()
     {
-        var appendTask = Task.Run(() =>
+        waitClockHarness.OnSleepPass = pass =>
         {
-            Thread.Sleep(100);
-            workspace.AppendEvent("G757-woken", "woken");
-        });
+            if (pass == 1)
+            {
+                workspace.AppendEvent("G757-woken", "woken");
+            }
+        };
 
-        var stopwatch = Stopwatch.StartNew();
         var (exitCode, result) = workspace.Run(RoleCollectArgs("--wait", "--timeout-ms", "2000"));
-        stopwatch.Stop();
-        await appendTask;
 
         Assert.Equal(0, exitCode);
         Assert.Equal("events", result.GetProperty("outcome").GetString());
         Assert.False(result.GetProperty("timed_out").GetBoolean());
         Assert.Equal(["G757-woken"], EventUnits(result));
-        Assert.InRange(stopwatch.ElapsedMilliseconds, 50, 1500);
-        Assert.True(appendTask.IsCompleted);
+        Assert.Equal([TimeSpan.FromMilliseconds(25)], waitClockHarness.LastClock!.Sleeps);
+        Assert.Equal(1, waitClockHarness.ConstructionCount);
     }
 
+    /// <summary>
+    /// At 75 ms the last <c>remaining</c> is 25, so clamped and unclamped sleeps
+    /// are both <c>[25, 25, 25]</c> and the clamp is unobservable. At 70 ms the
+    /// third pass has <c>remaining = 20</c>: only the clamp produces the 20 ms
+    /// sleep and the 70 ms total.
+    /// </summary>
     [Fact]
     public void WaitTimeoutIsExplicitNoNewEventsAndNonError()
     {
         workspace.CreateEmptyReader();
-        var stopwatch = Stopwatch.StartNew();
-        var (exitCode, result) = workspace.Run(RoleCollectArgs("--wait", "--timeout-ms", "75"));
-        stopwatch.Stop();
+        var (exitCode, result) = workspace.Run(RoleCollectArgs("--wait", "--timeout-ms", "70"));
 
+        Assert.Equal(
+            [
+                TimeSpan.FromMilliseconds(25),
+                TimeSpan.FromMilliseconds(25),
+                TimeSpan.FromMilliseconds(20),
+            ],
+            waitClockHarness.LastClock!.Sleeps);
+        Assert.Equal(70, waitClockHarness.LastClock!.VirtualElapsedMilliseconds);
         Assert.Equal(0, exitCode);
         Assert.Equal("no-new-events", result.GetProperty("outcome").GetString());
         Assert.Equal("no-new-events", result.GetProperty("cause").GetString());
         Assert.True(result.GetProperty("timed_out").GetBoolean());
         Assert.Empty(EventUnits(result));
-        Assert.InRange(stopwatch.ElapsedMilliseconds, 50, 1000);
     }
 
     [Fact]
     public void NonWaitMissingReaderIsNoEventsAndReturnsImmediately()
     {
-        var stopwatch = Stopwatch.StartNew();
         var (exitCode, result) = workspace.Run(RoleCollectArgs());
-        stopwatch.Stop();
 
+        Assert.Equal(0, waitClockHarness.ConstructionCount);
+        Assert.Empty(waitClockHarness.LastClock?.Sleeps ?? []);
         Assert.Equal(0, exitCode);
         Assert.Equal("no-events", result.GetProperty("outcome").GetString());
         Assert.Equal("no-events", result.GetProperty("cause").GetString());
         Assert.Empty(EventUnits(result));
         Assert.False(string.IsNullOrWhiteSpace(result.GetProperty("next_cursor").GetString()));
-        Assert.InRange(stopwatch.ElapsedMilliseconds, 0, 500);
 
         workspace.AppendEvent("G757-after-missing", "after missing reader");
         var resumed = workspace.Run(RoleCollectArgs(
             "--since", result.GetProperty("next_cursor").GetString()!));
         Assert.Equal(0, resumed.ExitCode);
         Assert.Equal(["G757-after-missing"], EventUnits(resumed.Result));
+    }
+
+    [Fact]
+    public void DisposeRestoresTheProductionWaitClockFactory()
+    {
+        using (var probe = new NotifyCollectCommandTests())
+        {
+        }
+
+        Assert.Same(NotifyCommand.DefaultRoleCollectWaitClockFactory, NotifyCommand.RoleCollectWaitClockFactory);
+        Assert.IsType<StopwatchNotifyRoleCollectWaitClock>(NotifyCommand.RoleCollectWaitClockFactory());
     }
 
     [Fact]
@@ -163,6 +201,44 @@ public sealed class NotifyCollectCommandTests : IDisposable
         };
         args.AddRange(extra);
         return args.ToArray();
+    }
+
+    private sealed class VirtualWaitClockHarness
+    {
+        private int constructionCount;
+        public Action<int>? OnSleepPass { get; set; }
+        public VirtualWaitClock? LastClock { get; private set; }
+        public int ConstructionCount => constructionCount;
+
+        public INotifyRoleCollectWaitClock CreateClock()
+        {
+            constructionCount++;
+            LastClock = new VirtualWaitClock(OnSleepPass);
+            return LastClock;
+        }
+    }
+
+    private sealed class VirtualWaitClock : INotifyRoleCollectWaitClock
+    {
+        private readonly Action<int>? onSleepPass;
+        private long virtualElapsedMilliseconds;
+        private int sleepPasses;
+
+        public VirtualWaitClock(Action<int>? onSleepPass) => this.onSleepPass = onSleepPass;
+
+        public List<TimeSpan> Sleeps { get; } = [];
+
+        public long VirtualElapsedMilliseconds => virtualElapsedMilliseconds;
+
+        long INotifyRoleCollectWaitClock.ElapsedMilliseconds => virtualElapsedMilliseconds;
+
+        public void Sleep(TimeSpan duration)
+        {
+            sleepPasses++;
+            Sleeps.Add(duration);
+            onSleepPass?.Invoke(sleepPasses);
+            virtualElapsedMilliseconds += (long)duration.TotalMilliseconds;
+        }
     }
 
     private sealed class Workspace : IDisposable

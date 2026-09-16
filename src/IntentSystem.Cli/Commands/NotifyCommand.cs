@@ -63,6 +63,12 @@ internal static class NotifyCommand
     private const int MaximumRoleCollectTimeoutMilliseconds = 300_000;
     private const int RoleCollectPollMilliseconds = 25;
 
+    internal static readonly Func<INotifyRoleCollectWaitClock> DefaultRoleCollectWaitClockFactory =
+        static () => new StopwatchNotifyRoleCollectWaitClock();
+
+    internal static Func<INotifyRoleCollectWaitClock> RoleCollectWaitClockFactory { get; set; }
+        = DefaultRoleCollectWaitClockFactory;
+
     private const string ReconcileUsage =
         "Usage: intent-cli notify reconcile --domain <d> --team <t> --task-id <id> "
         + "--routing-root <host-root> --report-root <role-work-root> [--dry-run|--write] [--format markdown|json]";
@@ -1146,7 +1152,7 @@ internal static class NotifyCommand
         // each bounded wait pass also observes a canonical file appearing
         // after a previously missing reader.
         var readerPath = string.Empty;
-        var stopwatch = options.Wait ? System.Diagnostics.Stopwatch.StartNew() : null;
+        var waitClock = options.Wait ? RoleCollectWaitClockFactory() : null;
         while (true)
         {
             if (!NotifyEventWriter.TryResolveReadPath(
@@ -1208,7 +1214,7 @@ internal static class NotifyCommand
                 return 0;
             }
 
-            var elapsedMilliseconds = stopwatch!.ElapsedMilliseconds;
+            var elapsedMilliseconds = waitClock!.ElapsedMilliseconds;
             var remainingMilliseconds = options.TimeoutMilliseconds!.Value - elapsedMilliseconds;
             if (remainingMilliseconds <= 0)
             {
@@ -1225,7 +1231,7 @@ internal static class NotifyCommand
 
             // A synchronous bounded poll keeps the command single-process and
             // leaves no watcher, timer, or background task after return.
-            Thread.Sleep((int)Math.Min(RoleCollectPollMilliseconds, remainingMilliseconds));
+            waitClock!.Sleep(TimeSpan.FromMilliseconds(Math.Min(RoleCollectPollMilliseconds, remainingMilliseconds)));
         }
     }
 
@@ -4919,6 +4925,19 @@ internal sealed record NotifyResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ContinuationChainId => ContinuationChain?.ChainId;
     [JsonPropertyName("summary")] public required string Summary { get; init; }
+}
+
+internal interface INotifyRoleCollectWaitClock
+{
+    long ElapsedMilliseconds { get; }
+    void Sleep(TimeSpan duration);
+}
+
+internal sealed class StopwatchNotifyRoleCollectWaitClock : INotifyRoleCollectWaitClock
+{
+    private readonly System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+    public long ElapsedMilliseconds => stopwatch.ElapsedMilliseconds;
+    public void Sleep(TimeSpan duration) => Thread.Sleep(duration);
 }
 
 internal sealed record NotifyRoleCollectResult

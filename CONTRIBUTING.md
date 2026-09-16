@@ -82,6 +82,13 @@ dotnet test tests/IntentSystem.Cli.Tests/IntentSystem.Cli.Tests.csproj \
 Note: the test project references sibling projects and requires
 `dotnet restore IntentSystem.sln` before running in isolation.
 
+### Timing-dependent tests
+
+A test asserts an observed condition reached through a seam or a bounded poll,
+never an elapsed wall-clock duration. A poll's timeout only bounds a hang and is
+not asserted on. Automated enforcement of this principle is a planned follow-up
+unit.
+
 ## Code of conduct
 
 Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). We expect all
