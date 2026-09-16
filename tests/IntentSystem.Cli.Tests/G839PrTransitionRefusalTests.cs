@@ -58,6 +58,7 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
     [Theory]
     [InlineData("head-required")]
     [InlineData("head-stale")]
+    [InlineData("head-unreadable")]
     [InlineData("team-unresolved")]
     [InlineData("missing")]
     [InlineData("blocked")]
@@ -66,16 +67,18 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
     public void RefusedTransition_ReportsEmptyPlanAndRefusalSummary(string scenario)
     {
         ConfigureScenario(scenario);
-        AutomationPrTransitionCommand.PrHeadReader = (_, _) => scenario == "head-stale" ? H3 : H2;
+        ConfigurePrHeadReader(scenario);
         AutomationPrTransitionCommand.MutatorFactory = () => new RecordingMutator { Labels = ["intent-pr-reviewing"] };
 
         var (exitCode, output) = RunTransition(write: false, format: "json", extraArgs: ScenarioArgs(scenario));
         Assert.Equal(1, exitCode);
         using var document = JsonDocument.Parse(output);
         var rootElement = document.RootElement;
+        var gate = rootElement.GetProperty("cross_runtime_review");
         var expectedCause = ExpectedCause(scenario);
-        var cause = rootElement.GetProperty("cross_runtime_review").GetProperty("cause").GetString();
+        var cause = gate.GetProperty("cause").GetString();
         Assert.Equal(expectedCause, cause);
+        Assert.Contains(ExpectedDetailFragment(scenario), gate.GetProperty("detail").GetString()!, StringComparison.Ordinal);
 
         Assert.Empty(rootElement.GetProperty("add_labels").EnumerateArray());
         Assert.Empty(rootElement.GetProperty("remove_labels").EnumerateArray());
@@ -95,10 +98,8 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
     public void RefusedTransition_PreservesEveryOtherField(string scenario)
     {
         ConfigureScenario(scenario);
-        AutomationPrTransitionCommand.PrHeadReader = (_, _) => scenario == "head-stale" ? H3 : H2;
+        ConfigurePrHeadReader(scenario);
         var mutator = new RecordingMutator { Labels = ["intent-pr-reviewing", "intent-target"] };
-        AutomationPrTransitionCommand.MutatorFactory = () => mutator;
-
         AutomationPrTransitionCommand.MutatorFactory = () => mutator;
         var (exitCode, output) = RunTransition(write: true, format: "json", extraArgs: ScenarioArgs(scenario));
         Assert.Equal(1, exitCode);
@@ -158,7 +159,42 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
     private static string[] ScenarioArgs(string scenario) =>
         scenario == "head-required" ? Array.Empty<string>() : ["--head-sha", H2];
 
-    private static string ExpectedCause(string scenario) => "cross-runtime-review-" + scenario;
+    private static void ConfigurePrHeadReader(string scenario)
+    {
+        AutomationPrTransitionCommand.PrHeadReader = scenario switch
+        {
+            "head-stale" => (_, _) => H3,
+            "head-unreadable" => (_, _) => throw new IOException("simulated head read failure"),
+            _ => (_, _) => H2,
+        };
+    }
+
+    private static string ExpectedCause(string scenario) =>
+        scenario switch
+        {
+            "head-required" => "cross-runtime-review-head-required",
+            "head-stale" => "cross-runtime-review-head-stale",
+            "head-unreadable" => "cross-runtime-review-head-stale",
+            "team-unresolved" => "cross-runtime-review-team-unresolved",
+            "missing" => "cross-runtime-review-missing",
+            "blocked" => "cross-runtime-review-blocked",
+            "rereview-missing" => "cross-runtime-review-rereview-missing",
+            "record-unreadable" => "cross-runtime-review-record-unreadable",
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, "unknown refusal scenario"),
+        };
+
+    private static string ExpectedDetailFragment(string scenario) =>
+        scenario switch
+        {
+            "head-stale" => "is not the current head",
+            "head-unreadable" => "could not be read",
+            "team-unresolved" => "has no held claim with a team",
+            "missing" => "[cross-runtime-review-missing]",
+            "blocked" => "[cross-runtime-review-blocked]",
+            "rereview-missing" => "[cross-runtime-review-rereview-missing]",
+            "record-unreadable" => "[cross-runtime-review-record-unreadable]",
+            _ => string.Empty,
+        };
 
     private void WritePacket(string unit, string? domain)
     {

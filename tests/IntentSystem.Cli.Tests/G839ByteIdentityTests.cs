@@ -73,7 +73,7 @@ public sealed partial class G839ByteIdentityTests
     }
 
     [Fact(Skip = "Set G839_CAPTURE=1 and remove Skip while checked out at base ba496314; running on head overwrites committed base fixtures.")]
-    public void Capture_BaseFixtures()
+    public void Capture_PrTransitionBaseFixtures()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("G839_CAPTURE"), "1", StringComparison.Ordinal))
         {
@@ -83,11 +83,6 @@ public sealed partial class G839ByteIdentityTests
         }
 
         Directory.CreateDirectory(FixtureRoot);
-        foreach (var fixtureId in G839ByteIdentityHarness.RecoveryScenarioIds)
-        {
-            File.WriteAllText(FixturePath(fixtureId), G839RecoveryByteIdentityTests.CaptureRecovery(fixtureId));
-        }
-
         foreach (var fixtureId in G839ByteIdentityHarness.PrTransitionRefusalTextScenarioIds
                      .Concat(G839ByteIdentityHarness.PrTransitionNonRefusalScenarioIds))
         {
@@ -98,10 +93,6 @@ public sealed partial class G839ByteIdentityTests
         {
             File.WriteAllText(FixturePath(fixtureId), G839ByteIdentityHarness.CapturePlannedLabelsConsumer(fixtureId));
         }
-
-        File.WriteAllText(
-            Path.Combine(FixtureRoot, "planned-labels-worker-pr-comment-preflight.txt"),
-            G839PlannedLabelsPreflightByteIdentityTests.Capture());
     }
 
     public static TheoryData<string> PrTransitionRefusalTextFixtureIds() =>

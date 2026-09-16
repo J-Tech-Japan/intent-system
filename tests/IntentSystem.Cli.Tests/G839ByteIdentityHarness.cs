@@ -114,6 +114,10 @@ internal static class G839ByteIdentityHarness
     [
         "planned-labels-automation-summary",
         "planned-labels-automation-doctor",
+    ];
+
+    internal static readonly string[] WorkerNextActionPlannedLabelsScenarioIds =
+    [
         "planned-labels-worker-next-action",
     ];
 
