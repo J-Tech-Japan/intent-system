@@ -132,10 +132,10 @@ internal static class AutomationPrTransitionCommand
                     Transition = transition!,
                     Mode = mode,
                     Applied = false,
-                    AddLabels = plan.AddLabels,
-                    RemoveLabels = removeLabels,
+                    AddLabels = Array.Empty<string>(),
+                    RemoveLabels = Array.Empty<string>(),
                     CurrentLabels = currentLabels,
-                    Summary = BuildSummary(transition!, plan.AddLabels, removeLabels),
+                    Summary = BuildRefusalSummary(transition!, pr!.Value, repo!, gate.Refusal.Cause),
                     Error = $"{gate.Refusal.Cause}: {gate.Refusal.Detail}",
                     CrossRuntimeReview = gate.Refusal,
                 };
@@ -699,6 +699,10 @@ internal static class AutomationPrTransitionCommand
         var removePart = removeLabels.Count == 0 ? "(none)" : string.Join(", ", removeLabels);
         return $"Would apply host PR transition '{transition}': add {addPart}; remove {removePart}.";
     }
+
+    private static string BuildRefusalSummary(string transition, int pr, string repo, string? cause) =>
+        $"Refused host PR transition '{transition}' on PR #{pr} in {repo}: "
+        + $"{(string.IsNullOrWhiteSpace(cause) ? "(cause unrecorded)" : cause)}. No labels were changed.";
 
     private static void WriteText(TextWriter writer, AutomationPrTransitionResult result)
     {

@@ -1,0 +1,284 @@
+{
+  "domain": "intent-cli",
+  "repo": "owner/repo",
+  "submodule_path": "submodules/repo",
+  "queue_state_path": ".intent-cli/queue-state.json",
+  "runs_log_path": ".intent-cli/runs.jsonl",
+  "packet_root": ".intent-cli/issues",
+  "execution_unit_regex": "^G[0-9]\u002B$",
+  "legacy_role_mappings": {},
+  "effective_base_branch_policy": "direct-main",
+  "implementation_base_branch": "main",
+  "same_repo_topology": false,
+  "metadata_source_branch": "",
+  "metadata_write_branch": "",
+  "issue_workflow_labels": [
+    "intent-target",
+    "intent-issue-in-progress",
+    "intent-pr-created"
+  ],
+  "pr_workflow_labels": [
+    "intent-pr-reviewing",
+    "intent-pr-request-update",
+    "intent-pr-update-in-progress",
+    "intent-pr-rereview-ready",
+    "intent-pr-approved"
+  ],
+  "host_loop_responsibilities": [
+    "Select open intent-target PRs with no PR state label or with intent-pr-rereview-ready, then set intent-pr-reviewing while processing through closeout",
+    "Request updates via intent-pr-request-update with concrete repair notes",
+    "Approve via intent-pr-approved when all checks pass; direct lanes merge\u002Bcloseout, while operator-merge lanes wait for a human merge and then resume closeout only",
+    "Cut next-slice issues only when WIP cap allows",
+    "Apply intent-target only after parent source-of-truth state is durable"
+  ],
+  "host_pr_transition_commands": [
+    "intent-cli automation pr-transition --transition review-start --write adds intent-target, intent-pr-reviewing and removes intent-pr-rereview-ready, rereview-ready when present",
+    "intent-cli automation pr-transition --transition request-update --write adds intent-pr-request-update and removes intent-pr-reviewing, intent-pr-rereview-ready, rereview-ready, intent-pr-approved when present",
+    "intent-cli automation pr-transition --transition approved --write adds intent-pr-approved and removes intent-pr-reviewing, intent-pr-rereview-ready, rereview-ready, intent-pr-request-update, intent-pr-update-in-progress when present"
+  ],
+  "automation_capability_schema_version": "1",
+  "automationCapabilitySchemaVersion": "1",
+  "automation_command_surface_version": "automation-command-surface/v1",
+  "automationCommandSurfaceVersion": "automation-command-surface/v1",
+  "automation_command_capabilities": [
+    {
+      "capability": "issue-publish",
+      "command": "intent-cli automation issue-publish",
+      "workflow_kind": "issue",
+      "workflowKind": "issue",
+      "target_kind": "issue",
+      "targetKind": "issue",
+      "transition": null,
+      "dry_run_supported": true,
+      "dryRunSupported": true,
+      "write_supported": true,
+      "writeSupported": true,
+      "add_labels": [
+        "intent-target"
+      ],
+      "addLabels": [
+        "intent-target"
+      ],
+      "remove_labels": [],
+      "removeLabels": []
+    },
+    {
+      "capability": "pr-transition.review-start",
+      "command": "intent-cli automation pr-transition",
+      "workflow_kind": "pr",
+      "workflowKind": "pr",
+      "target_kind": "pr",
+      "targetKind": "pr",
+      "transition": "review-start",
+      "dry_run_supported": true,
+      "dryRunSupported": true,
+      "write_supported": true,
+      "writeSupported": true,
+      "add_labels": [
+        "intent-target",
+        "intent-pr-reviewing"
+      ],
+      "addLabels": [
+        "intent-target",
+        "intent-pr-reviewing"
+      ],
+      "remove_labels": [
+        "intent-pr-rereview-ready",
+        "rereview-ready"
+      ],
+      "removeLabels": [
+        "intent-pr-rereview-ready",
+        "rereview-ready"
+      ]
+    },
+    {
+      "capability": "pr-transition.request-update",
+      "command": "intent-cli automation pr-transition",
+      "workflow_kind": "pr",
+      "workflowKind": "pr",
+      "target_kind": "pr",
+      "targetKind": "pr",
+      "transition": "request-update",
+      "dry_run_supported": true,
+      "dryRunSupported": true,
+      "write_supported": true,
+      "writeSupported": true,
+      "add_labels": [
+        "intent-pr-request-update"
+      ],
+      "addLabels": [
+        "intent-pr-request-update"
+      ],
+      "remove_labels": [
+        "intent-pr-reviewing",
+        "intent-pr-rereview-ready",
+        "rereview-ready",
+        "intent-pr-approved"
+      ],
+      "removeLabels": [
+        "intent-pr-reviewing",
+        "intent-pr-rereview-ready",
+        "rereview-ready",
+        "intent-pr-approved"
+      ]
+    },
+    {
+      "capability": "pr-transition.approved",
+      "command": "intent-cli automation pr-transition",
+      "workflow_kind": "pr",
+      "workflowKind": "pr",
+      "target_kind": "pr",
+      "targetKind": "pr",
+      "transition": "approved",
+      "dry_run_supported": true,
+      "dryRunSupported": true,
+      "write_supported": true,
+      "writeSupported": true,
+      "add_labels": [
+        "intent-pr-approved"
+      ],
+      "addLabels": [
+        "intent-pr-approved"
+      ],
+      "remove_labels": [
+        "intent-pr-reviewing",
+        "intent-pr-rereview-ready",
+        "rereview-ready",
+        "intent-pr-request-update",
+        "intent-pr-update-in-progress"
+      ],
+      "removeLabels": [
+        "intent-pr-reviewing",
+        "intent-pr-rereview-ready",
+        "rereview-ready",
+        "intent-pr-request-update",
+        "intent-pr-update-in-progress"
+      ]
+    }
+  ],
+  "automationCommandCapabilities": [
+    {
+      "capability": "issue-publish",
+      "command": "intent-cli automation issue-publish",
+      "workflow_kind": "issue",
+      "workflowKind": "issue",
+      "target_kind": "issue",
+      "targetKind": "issue",
+      "transition": null,
+      "dry_run_supported": true,
+      "dryRunSupported": true,
+      "write_supported": true,
+      "writeSupported": true,
+      "add_labels": [
+        "intent-target"
+      ],
+      "addLabels": [
+        "intent-target"
+      ],
+      "remove_labels": [],
+      "removeLabels": []
+    },
+    {
+      "capability": "pr-transition.review-start",
+      "command": "intent-cli automation pr-transition",
+      "workflow_kind": "pr",
+      "workflowKind": "pr",
+      "target_kind": "pr",
+      "targetKind": "pr",
+      "transition": "review-start",
+      "dry_run_supported": true,
+      "dryRunSupported": true,
+      "write_supported": true,
+      "writeSupported": true,
+      "add_labels": [
+        "intent-target",
+        "intent-pr-reviewing"
+      ],
+      "addLabels": [
+        "intent-target",
+        "intent-pr-reviewing"
+      ],
+      "remove_labels": [
+        "intent-pr-rereview-ready",
+        "rereview-ready"
+      ],
+      "removeLabels": [
+        "intent-pr-rereview-ready",
+        "rereview-ready"
+      ]
+    },
+    {
+      "capability": "pr-transition.request-update",
+      "command": "intent-cli automation pr-transition",
+      "workflow_kind": "pr",
+      "workflowKind": "pr",
+      "target_kind": "pr",
+      "targetKind": "pr",
+      "transition": "request-update",
+      "dry_run_supported": true,
+      "dryRunSupported": true,
+      "write_supported": true,
+      "writeSupported": true,
+      "add_labels": [
+        "intent-pr-request-update"
+      ],
+      "addLabels": [
+        "intent-pr-request-update"
+      ],
+      "remove_labels": [
+        "intent-pr-reviewing",
+        "intent-pr-rereview-ready",
+        "rereview-ready",
+        "intent-pr-approved"
+      ],
+      "removeLabels": [
+        "intent-pr-reviewing",
+        "intent-pr-rereview-ready",
+        "rereview-ready",
+        "intent-pr-approved"
+      ]
+    },
+    {
+      "capability": "pr-transition.approved",
+      "command": "intent-cli automation pr-transition",
+      "workflow_kind": "pr",
+      "workflowKind": "pr",
+      "target_kind": "pr",
+      "targetKind": "pr",
+      "transition": "approved",
+      "dry_run_supported": true,
+      "dryRunSupported": true,
+      "write_supported": true,
+      "writeSupported": true,
+      "add_labels": [
+        "intent-pr-approved"
+      ],
+      "addLabels": [
+        "intent-pr-approved"
+      ],
+      "remove_labels": [
+        "intent-pr-reviewing",
+        "intent-pr-rereview-ready",
+        "rereview-ready",
+        "intent-pr-request-update",
+        "intent-pr-update-in-progress"
+      ],
+      "removeLabels": [
+        "intent-pr-reviewing",
+        "intent-pr-rereview-ready",
+        "rereview-ready",
+        "intent-pr-request-update",
+        "intent-pr-update-in-progress"
+      ]
+    }
+  ],
+  "child_loop_responsibilities": [
+    "Stage 1: repair PRs labeled intent-pr-request-update and swap to intent-pr-rereview-ready",
+    "Stage 2: implement intent-target issues, open draft PRs, and mark the linked Issue with intent-pr-created (PR publication/review eligibility is handled by PR-side intent-target and PR state labels; never apply intent-pr-created to the PR itself)",
+    "Honor single-branch cap and HARD CLARIFICATION over branch cap",
+    "Raw/manual target-repository label mutation is forbidden, and host-state publication/linkage remains host-owned. The sole child exception is the installed canonical \u0060worker complete --kind issue --outcome pr-created --github-only --write\u0060, which may apply target-repository \u0060intent-target\u0060 to the PR; \u0060intent-pr-created\u0060 remains on the source issue and is never applied to the PR. For PR \u0060repair-pushed\u0060, canonical child completion changes only PR repair labels."
+  ],
+  "publish_boundary_guidance": "Raw/manual target-repository label mutation is forbidden, and host-state publication/linkage remains host-owned. The sole child exception is the installed canonical \u0060worker complete --kind issue --outcome pr-created --github-only --write\u0060, which may apply target-repository \u0060intent-target\u0060 to the PR; \u0060intent-pr-created\u0060 remains on the source issue and is never applied to the PR. For PR \u0060repair-pushed\u0060, canonical child completion changes only PR repair labels.",
+  "wip_cap_guidance": "Default child WIP cap is one in-flight branch per loop; when WIP is non-empty, defer new work until WIP drains",
+  "warnings": []
+}

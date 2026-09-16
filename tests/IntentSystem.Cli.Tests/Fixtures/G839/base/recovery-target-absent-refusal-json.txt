@@ -1,0 +1,14 @@
+{
+  "repo": "J-Tech-Japan/intent-system",
+  "issue": 839,
+  "execution_unit": "G839-BYTE",
+  "team": "intent-cli-dev",
+  "mode": "dry-run",
+  "outcome": "refused",
+  "cause": "target-absent",
+  "linked_pr": null,
+  "applied": false,
+  "planned_mutations": [],
+  "warnings": [],
+  "summary": "refusing: issue does not carry intent-target."
+}

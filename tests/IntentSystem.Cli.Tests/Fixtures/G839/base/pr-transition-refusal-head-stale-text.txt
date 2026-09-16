@@ -1,0 +1,7 @@
+cross-runtime-review-head-stale: --head-sha 2222222222222222222222222222222222222222 is not the current head of PR #1823 in J-Tech-Japan/intent-system (3333333333333333333333333333333333333333); review and CI must bind to the current head.
+mode: dry-run
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false
+cross_runtime_review: refused (cross-runtime-review-head-stale)

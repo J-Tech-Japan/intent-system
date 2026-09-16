@@ -1,0 +1,55 @@
+# Automation doctor
+status: ok
+read_only: true
+installed_cli_path: /var/folders/bs/1qh88g953fx8dccvxc9p5rhr0000gn/T/automation-doctor-g839-byte-identity/.intent-cli/bin/intent-cli
+binary_source: cwd-local-shim
+host_data_root: /var/folders/bs/1qh88g953fx8dccvxc9p5rhr0000gn/T/automation-doctor-g839-byte-identity/.intent-cli
+github_api_status: healthy
+Host automation command preflight passed: required installed automation command surfaces are available (binary_source=cwd-local-shim, host_data_root=/var/folders/bs/1qh88g953fx8dccvxc9p5rhr0000gn/T/automation-doctor-g839-byte-identity/.intent-cli). No named team is declared or discovered; topology health is unjudged until an expected team is declared.
+
+## Shared session-layer preflight
+verdict: unjudged
+ready: unjudged
+passive: unjudged
+active: skipped
+Session-layer readiness is unjudged until an expected team is declared.
+
+## Session-layer delivery topology health
+status: unjudged
+required: false
+record: .intent-cli/topology
+No named team is declared or discovered; topology health is unjudged until an expected team is declared.
+
+## Required installed automation command surfaces
+- intent-cli automation summary --format json
+  transition: 
+  available: true
+  purpose: Read-only installed command contract summary used by host runbooks.
+- intent-cli automation host-review-preflight --format json
+  transition: 
+  available: true
+  purpose: Read-only host review preflight before any host-owned PR label transition.
+- intent-cli automation issue-publish --issue <n> --write --format json
+  transition: 
+  available: true
+  purpose: Host issue-publish transition: add intent-target to a child issue.
+- intent-cli automation pr-transition --transition review-start --write --format json
+  transition: review-start
+  available: true
+  purpose: Host review-start transition: add intent-target, intent-pr-reviewing; remove intent-pr-rereview-ready, legacy rereview-ready when present
+- intent-cli automation pr-transition --transition request-update --write --format json
+  transition: request-update
+  available: true
+  purpose: Host request-update transition: add intent-pr-request-update; remove intent-pr-reviewing, intent-pr-rereview-ready, legacy rereview-ready, intent-pr-approved when present
+- intent-cli automation pr-transition --transition approved --write --format json
+  transition: approved
+  available: true
+  purpose: Host approved transition: add intent-pr-approved; remove intent-pr-reviewing, intent-pr-rereview-ready, legacy rereview-ready, intent-pr-request-update, intent-pr-update-in-progress when present
+
+## Automation command capabilities
+schema_version: 1
+surface_version: automation-command-surface/v1
+- issue-publish: command=intent-cli automation issue-publish; target=issue; transition=(none)
+- pr-transition.review-start: command=intent-cli automation pr-transition; target=pr; transition=review-start
+- pr-transition.request-update: command=intent-cli automation pr-transition; target=pr; transition=request-update
+- pr-transition.approved: command=intent-cli automation pr-transition; target=pr; transition=approved

@@ -1,0 +1,1 @@
+Usage: intent-cli automation pr-created-stale-recovery --repo <owner/repo> --issue <n> --execution-unit <unit> --team <team> --ruling <text> [--write] [--format json|markdown]

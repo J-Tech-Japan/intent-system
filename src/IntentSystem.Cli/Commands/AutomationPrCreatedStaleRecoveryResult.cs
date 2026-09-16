@@ -42,4 +42,12 @@ internal sealed record AutomationPrCreatedStaleRecoveryResult
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }
+
+    /// <summary>
+    /// G839: on <c>aborted-event-append-failed</c>, the re-check refusal cause the
+    /// aborted event was recording. Absent on every other path.
+    /// </summary>
+    [JsonPropertyName("recheck_cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecheckCause { get; init; }
 }
