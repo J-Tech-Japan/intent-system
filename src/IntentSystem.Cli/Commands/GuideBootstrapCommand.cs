@@ -199,6 +199,7 @@ internal static class GuideBootstrapCommand
                 "Recorded recipes, the G654 design deployment rule, the four-thread-plus-one-process formula, and preview boundaries are composed unchanged.",
             ],
             FinalHandoffStatement = "HANDOFF: State which recorded thread is now the design seat. The application conversation remains the operator's front door for new requests; it is not a design, orchestration, implementation, review, or supervision loop seat.",
+            OrcaRunBinding = OrcaRunBindingHealth.TryResolveBootstrapBinding(routingRoot, domainArg, teamArg),
         };
     }
 
@@ -383,6 +384,7 @@ internal static class GuideBootstrapCommand
                 "The target repository, claims, and delivery gates remain explicit prerequisites; no transport selection is inferred from team mode.",
             ],
             FinalHandoffStatement = "HANDOFF: This seat is the solo conductor. Run `intent-cli guide solo-conductor` for the per-unit loop; reviews are carried by fresh independent reviewer subagents.",
+            OrcaRunBinding = OrcaRunBindingHealth.TryResolveBootstrapBinding(routingRoot, domain, team),
         };
     }
 
@@ -571,6 +573,11 @@ internal static class GuideBootstrapCommand
         writer.WriteLine("## No-execution boundary");
         foreach (var item in result.NoExecutionBoundary) writer.WriteLine($"- {item}");
         writer.WriteLine();
+        if (result.OrcaRunBinding is not null)
+        {
+            writer.WriteLine(OrcaRunBindingHealth.BootstrapMarkdownLine(result.OrcaRunBinding));
+        }
+
         writer.WriteLine(result.FinalHandoffStatement);
     }
 
@@ -637,6 +644,8 @@ internal sealed record BootstrapGuideResult
     public required string PartialStateRule { get; init; }
     public required IReadOnlyList<string> NoExecutionBoundary { get; init; }
     public required string FinalHandoffStatement { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BootstrapOrcaRunBinding? OrcaRunBinding { get; init; }
 }
 
 internal sealed record BootstrapModelResolution

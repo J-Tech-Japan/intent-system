@@ -2665,13 +2665,15 @@ internal static class NotifyCommand
                     NotifyReportOutboxStore.MarkUndelivered(resolvedReportRoot, reportOutbox, cause);
                 }
 
+                var reconciliationCommand = BuildFailureReconciliationCommand(operation, options, cause);
                 var summary = routingWriteFailure
                     ? $"Could not append notification to external role '{options.ToRole}' through recorded reader "
                       + $"'{delivery.ReaderPath}' in the current execution context: {exception.Message} "
                       + $"The attempted host-root write failed, so the sender-local report handoff is retained at '{outboxEntryPath}'. "
                       + "This measured write failure is a delegation-level routing fault, not an implementation-seat stall."
                     : $"Could not append notification to external role '{options.ToRole}' through recorded reader "
-                      + $"'{delivery.ReaderPath}': {exception.Message} Fix reader access and retry notify.";
+                      + $"'{delivery.ReaderPath}': {exception.Message} "
+                      + $"The report is retained at '{outboxEntryPath}' and marked undelivered; orchestration reconciles with '{reconciliationCommand}', which names the notify collect recovery while the report is undelivered.";
                 Emit(writer, options.Format, FailureResult(
                     operation,
                     options,
@@ -2686,7 +2688,8 @@ internal static class NotifyCommand
                     deliveryMethod: envelopeDelivery.ResultDeliveryMethod,
                     taskFile: envelopeDelivery.TaskFile,
                     deliveryPointer: envelopeDelivery.ResultPointer,
-                    outboxEntryPath: outboxEntryPath));
+                    outboxEntryPath: outboxEntryPath,
+                    reconciliationCommand: reconciliationCommand));
                 return 1;
             }
         }
@@ -3300,6 +3303,16 @@ internal static class NotifyCommand
             .Replace("{summary}", summary, StringComparison.Ordinal);
     }
 
+    private static string? BuildFailureReconciliationCommand(string operation, NotifyOptions options, string cause) =>
+        (string.Equals(operation, OperationReport, StringComparison.Ordinal)
+            || string.Equals(operation, OperationCollect, StringComparison.Ordinal))
+        && options.ReportRoot is not null
+        && (string.Equals(cause, "event-append-failed", StringComparison.Ordinal)
+            || string.Equals(cause, "report-routing-root-write-required", StringComparison.Ordinal))
+            ? $"intent-cli notify reconcile --domain {options.Domain} --team {options.Team} --task-id {options.TaskId} "
+              + $"--routing-root {ShellQuote(options.RoutingRoot!)} --report-root {ShellQuote(options.ReportRoot)} --write --format json"
+            : BuildReconciliationCommand(operation, options);
+
     private static string? BuildReconciliationCommand(string operation, NotifyOptions options) =>
         (string.Equals(operation, OperationReport, StringComparison.Ordinal)
             || string.Equals(operation, OperationCollect, StringComparison.Ordinal))
@@ -3579,7 +3592,8 @@ internal static class NotifyCommand
         string? advisory = null,
         string? outboxEntryPath = null,
         string? deliveryBasis = null,
-        ContinuationChainRecord? continuationChain = null) => new()
+        ContinuationChainRecord? continuationChain = null,
+        string? reconciliationCommand = null) => new()
         {
             Operation = operation,
             RoutingRoot = options.RoutingRoot ?? string.Empty,
@@ -3624,7 +3638,7 @@ internal static class NotifyCommand
             Cause = cause,
             Payload = payload,
             ReportCommand = reportCommand,
-            ReconciliationCommand = BuildReconciliationCommand(operation, options),
+            ReconciliationCommand = reconciliationCommand ?? BuildReconciliationCommand(operation, options),
             ContinuationChain = continuationChain,
             Summary = summary,
         };

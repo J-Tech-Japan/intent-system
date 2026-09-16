@@ -71,7 +71,8 @@ public sealed class G822ActionableIdentityRefusalTests : IDisposable
 
         var evidence = Evidence(root);
         Assert.Contains("no CLI argument or checkout change can supply it", evidence, StringComparison.Ordinal);
-        Assert.Contains("#1774", evidence, StringComparison.Ordinal);
+        Assert.Contains("does not provide dispatch identity", evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("#1774", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain("missing_fields", evidence, StringComparison.Ordinal);
         Assert.DoesNotContain(AutomationHostLoopNextActionCommand.ReasonCallerContextMissing, evidence, StringComparison.Ordinal);
         Assert.Equal(0, lister.TotalCalls);

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace IntentSystem.Cli.Commands;
@@ -17,7 +18,8 @@ internal sealed record NotifyRecordedRole(
     AgentLaunchEnvelopeProfile? EnvelopeProfileOverride = null,
     string? Model = null,
     string? ReasoningEffort = null,
-    string? WakeCommand = null)
+    string? WakeCommand = null,
+    OrcaRunRoleBinding? OrcaRun = null)
 {
     public const string HerdrResident = "herdr";
     public const string ExternalResident = "external";
@@ -481,6 +483,16 @@ internal static class NotifyRoleTopologyStore
                         $"Role '{property.Name}' kind '{roleKind ?? "missing"}' does not match its envelope profile override kind '{profileOverride.Kind}'. No registry fallback is permitted.");
                 }
 
+                OrcaRunRoleBinding? orcaRun = null;
+                if (property.Value.TryGetProperty("orca_run", out _))
+                {
+                    var roleObject = JsonNode.Parse(property.Value.GetRawText()) as JsonObject;
+                    if (roleObject is not null && OrcaRunBinding.TryParseRoleBinding(roleObject, out var parsed))
+                    {
+                        orcaRun = parsed;
+                    }
+                }
+
                 roles.Add(property.Name, new NotifyRecordedRole(
                     resident,
                     ReadString(property.Value, "workspace_id"),
@@ -495,7 +507,8 @@ internal static class NotifyRoleTopologyStore
                     profileOverride,
                     model,
                     reasoningEffort,
-                    wakeCommand));
+                    wakeCommand,
+                    orcaRun));
             }
 
             if (roles.Count == 0)
@@ -1024,6 +1037,9 @@ internal static class NotifyRoleTopologyStore
             return false;
         }
     }
+
+    internal static bool TrySelectTeamPublic(JsonElement root, string team, out JsonElement teamElement) =>
+        TrySelectTeam(root, team, out teamElement, out _);
 
     private static bool TrySelectTeam(
         JsonElement root,
