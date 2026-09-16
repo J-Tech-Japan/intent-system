@@ -771,7 +771,7 @@ internal static class OrcaRunBindingHealth
         OrcaRunTeamShapeResult shape) =>
         cause switch
         {
-            "orca-run-binding-malformed" => "solo binding file orca_run is absent, null, or not an object.",
+            "orca-run-binding-malformed" => "solo binding file orca_run is absent, null, not an object, or has a field of the wrong type.",
             "binding-identity-mismatch" => $"solo binding file names domain '{file.Domain}' / team '{file.Team}', not '{domain}' / '{team}'.",
             "orca-run-file-schema-unsupported" => $"solo binding file schema_version is '{file.SchemaVersion ?? "absent"}', not '1'.",
             "orca-run-id-malformed" => $"solo binding run_id '{file.RunId}' does not match ^run_[0-9a-f]{{12}}$.",

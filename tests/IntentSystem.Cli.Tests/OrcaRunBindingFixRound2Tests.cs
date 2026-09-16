@@ -186,6 +186,41 @@ public sealed class OrcaRunBindingFixRound2Tests : IDisposable
         Assert.False(result.GetProperty("changed").GetBoolean());
     }
 
+
+    [Theory]
+    [InlineData("null-run-id")]
+    [InlineData("absent-orca-run")]
+    public void Solo_MalformedBinding_MessageLiteral_G837(string shape)
+    {
+        workspace.InstallSoloFixture();
+        object payload = shape == "null-run-id"
+            ? new
+            {
+                schema_version = "1",
+                domain = OrcaRunTestSupport.Domain,
+                team = workspace.Team,
+                orca_run = new { role = "design", run_id = (string?)null, receive_policy = "inbox-pull", frontend = "claude-app" },
+            }
+            : new
+            {
+                schema_version = "1",
+                domain = OrcaRunTestSupport.Domain,
+                team = workspace.Team,
+            };
+        workspace.WriteSoloBinding(payload);
+
+        var (validateExit, validate) = workspace.RunJson(
+            "team-mode", "validate", "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--format", "json");
+        Assert.Equal(1, validateExit);
+        var finding = Assert.Single(
+            validate.GetProperty("findings").EnumerateArray()
+                .Select(item => item.GetString() ?? string.Empty),
+            text => text.Contains("orca-run-binding-malformed", StringComparison.Ordinal));
+        Assert.Equal(
+            "orca-run-binding-malformed: solo binding file orca_run is absent, null, not an object, or has a field of the wrong type.",
+            finding);
+    }
+
     private static void AssertResultKeySet(JsonElement result, bool conflict)
     {
         var expected = new[]
