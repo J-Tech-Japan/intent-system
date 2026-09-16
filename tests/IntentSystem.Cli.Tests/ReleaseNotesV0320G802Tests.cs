@@ -402,16 +402,30 @@ public sealed class ReleaseNotesV0320G802Tests
     [Theory]
     [InlineData("en", "G833", "never starts or manages an agent")]
     [InlineData("ja", "G833", "agent を起動・管理しません")]
+    [InlineData("en", "G834", "[[cross_runtime_review.teams]]")]
+    [InlineData("ja", "G834", "[[cross_runtime_review.teams]]")]
     [InlineData("en", "G834", "never executes a process")]
-    [InlineData("ja", "G834", "process は実行せず")]
+    [InlineData("ja", "G834", "process は実行しません")]
+    [InlineData("en", "G835", "--kind design")]
+    [InlineData("ja", "G835", "--kind design")]
+    [InlineData("en", "G835", "for any caller, gated or not")]
+    [InlineData("ja", "G835", "gated か否かに関わらず")]
     [InlineData("en", "G835", "on a gated repo")]
     [InlineData("ja", "G835", "gated repo 上")]
+    [InlineData("en", "G835", "undeclared team or an ungated repo is byte-identical")]
+    [InlineData("ja", "G835", "宣言のない team または ungated repo は宣言のない host と byte-identical")]
     [InlineData("en", "G836", "dry-run by default")]
     [InlineData("ja", "G836", "既定は dry-run")]
     [InlineData("en", "G836", "removes only the stale")]
     [InlineData("ja", "G836", "label だけを外し")]
+    [InlineData("en", "G836", "on a host with no claims store (`claim-unavailable`)")]
+    [InlineData("ja", "G836", "claims store のない host では `claim-unavailable` で拒否します")]
+    [InlineData("en", "G837", "or solo sidecar")]
+    [InlineData("ja", "G837", "または solo sidecar")]
     [InlineData("en", "G837", "never runs `orca`")]
     [InlineData("ja", "G837", "orca` を実行せず")]
+    [InlineData("en", "G837", "or creates a Run")]
+    [InlineData("ja", "G837", "Run も作成しません")]
     public void InventoryScopeQualifierRemovalFailsTheGuard_G838(string language, string unit, string qualifier)
     {
         var notes = ReadNotes(language);
@@ -428,14 +442,22 @@ public sealed class ReleaseNotesV0320G802Tests
     [InlineData("ja", "agent を起動・管理しません")]
     [InlineData("en", "never executes a process")]
     [InlineData("ja", "process は実行せず")]
+    [InlineData("en", "--kind design")]
+    [InlineData("ja", "--kind design")]
+    [InlineData("en", "work for any caller, declared or not")]
+    [InlineData("ja", "宣言のあるなしに関わらず任意の caller で使えます")]
     [InlineData("en", "on a gated repo")]
     [InlineData("ja", "gated repo 上")]
     [InlineData("en", "dry-run by default")]
     [InlineData("ja", "既定は dry-run")]
     [InlineData("en", "only that label")]
     [InlineData("ja", "label だけを外し")]
+    [InlineData("en", "or solo sidecar")]
+    [InlineData("ja", "または solo sidecar")]
     [InlineData("en", "never runs `orca`")]
     [InlineData("ja", "orca` を実行せず")]
+    [InlineData("en", "or creates a Run")]
+    [InlineData("ja", "Run も作成しません")]
     public void Preview4ScopeQualifierRemovalFailsTheGuard_G838(string language, string qualifier)
     {
         var preview4 = Normalize(ExtractPreviewSection(ReadNotes(language), language, previewNumber: 4));
@@ -506,20 +528,34 @@ public sealed class ReleaseNotesV0320G802Tests
             "en" =>
             [
                 ("G833", "never starts or manages an agent"),
+                ("G834", "[[cross_runtime_review.teams]]"),
                 ("G834", "never executes a process"),
+                ("G835", "--kind design"),
+                ("G835", "for any caller, gated or not"),
                 ("G835", "on a gated repo"),
+                ("G835", "undeclared team or an ungated repo is byte-identical"),
                 ("G836", "dry-run by default"),
                 ("G836", "removes only the stale"),
+                ("G836", "on a host with no claims store (`claim-unavailable`)"),
+                ("G837", "or solo sidecar"),
                 ("G837", "never runs `orca`"),
+                ("G837", "or creates a Run"),
             ],
             "ja" =>
             [
                 ("G833", "agent を起動・管理しません"),
+                ("G834", "[[cross_runtime_review.teams]]"),
                 ("G834", "process は実行しません"),
+                ("G835", "--kind design"),
+                ("G835", "gated か否かに関わらず"),
                 ("G835", "gated repo 上"),
+                ("G835", "宣言のない team または ungated repo は宣言のない host と byte-identical"),
                 ("G836", "既定は dry-run"),
                 ("G836", "label だけを外し"),
+                ("G836", "claims store のない host では `claim-unavailable` で拒否します"),
+                ("G837", "または solo sidecar"),
                 ("G837", "orca` を実行せず"),
+                ("G837", "Run も作成しません"),
             ],
             _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
         };
@@ -531,19 +567,27 @@ public sealed class ReleaseNotesV0320G802Tests
             [
                 "never starts or manages an agent",
                 "never executes a process",
+                "--kind design",
+                "work for any caller, declared or not",
                 "on a gated repo",
                 "dry-run by default",
                 "only that label",
+                "or solo sidecar",
                 "never runs `orca`",
+                "or creates a Run",
             ],
             "ja" =>
             [
                 "agent を起動・管理しません",
                 "process は実行せず",
+                "--kind design",
+                "宣言のあるなしに関わらず任意の caller で使えます",
                 "gated repo 上",
                 "既定は dry-run",
                 "label だけを外し",
+                "または solo sidecar",
                 "orca` を実行せず",
+                "Run も作成しません",
             ],
             _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
         };

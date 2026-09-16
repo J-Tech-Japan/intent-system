@@ -200,7 +200,7 @@ shipped unit には数えません:
 - G835 — PR #1817 / issue #1813; merge commit `1ff9e75d1ee80739a9ec8aeea8d905b60a757a86`。
   **Operator-observable outcome:** `review cross-runtime request` は `--kind design` と `--model` を得て、design artifact と reviewer model を任意の caller（gated か否かに関わらず）が選べます。別途、gated repo 上で `[[cross_runtime_review.teams]]` に宣言された team では、`packet_digest` でキーされた design verdict が `issue publish-flow` の packet 公開を gate します。宣言のない team または ungated repo は宣言のない host と byte-identical です。
 - G836 — PR #1819 / issue #1784, #1818; merge commit `75d68523739318eb97932c6f55a35e547e00b769`。
-  **Operator-observable outcome:** 新しい route `automation pr-created-stale-recovery` は unmerged PR close 後の stale `intent-pr-created` label だけを外し、既定は dry-run で、identity-bound linkage・PR state・open-closing-PR・unheld-claim の検査に失敗した場合と claims store のない host では拒否します（`claim-unavailable`）。
+  **Operator-observable outcome:** 新しい route `automation pr-created-stale-recovery` は unmerged PR close 後の stale `intent-pr-created` label だけを外し、既定は dry-run で、identity-bound linkage・PR state・open-closing-PR・unheld-claim の検査に失敗した場合は拒否し、claims store のない host では `claim-unavailable` で拒否します。
 - G837 — PR #1821 / issue #1820; merge commit `cd276e20754db09337a94a8b973ddebdd1564ba3`。
   **Operator-observable outcome:** `session-layer topology record-orca-run` と read-only の `session-layer topology orca-runs` は team-shape seat または solo sidecar 上で adopted Orca Run id を記録・表示・検証・bootstrap し、binding がある間は `team-mode set --write` が effective-mode 変更を拒否します。intent-cli は `orca` を実行せず Run も作成しません。
 
