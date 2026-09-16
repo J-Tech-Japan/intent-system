@@ -1,7 +1,7 @@
 # Release Notes — intent-cli v0.32.0
 
 > **PREPARED / NOT PUBLISHED.** This prepare-only note set records the measured
-> G795–G830 units (not every number in that span) for the `v0.32.0-preview.3` prerelease. It does not create a tag
+> G795–G838 units (not every number in that span) for the `v0.32.0-preview.4` prerelease. It does not create a tag
 > or GitHub Release, publish a package, change a workflow or publish
 > configuration, or change product source.
 
@@ -53,9 +53,48 @@ must act on:
   `--write --expected-remote-sha256 <digest>`); the guarantee is
   read-compare-write-verified, not atomic.
 
+## Preview.4: what changed since preview.3
+
+preview.3 (`v0.32.0-preview.3`, 2026-09-14) shipped the preview.2 fixes and
+eight post-preview.2 routes. preview.4 carries everything merged since
+preview.3. Changes a preview.3 user must act on:
+
+- **`solo-conductor` is a third `team-mode` value (G833).** Record it with
+  `intent-cli team-mode set --mode solo-conductor --write` and read the
+  operating contract with `intent-cli guide solo-conductor`, which renders the
+  solo conductor's ten-step per-unit loop with blocking reviewer-independence
+  rules; it never starts or manages an agent. **Forward-compatibility hazard:**
+  an intent-cli without G833 rejects a `.intent-cli/team-mode.json` containing
+  `solo-conductor`, and because the whole file fails to load the refusal affects
+  *every team on that host*. Refresh every intent-cli that reads the host
+  before recording the mode. A preview.3 user with another seat on an older
+  binary must read this before running the command.
+- **Cross-runtime review is declared per team (G834/G835).** Add
+  `[[cross_runtime_review.teams]]` entries to `.intent-cli/config.toml` with
+  `team`, `conductor_runtime`, and `repos` (the gated-repo list). A team that is
+  not declared, or a repo not listed by a declaring team, is ungated and
+  byte-identical to a host with no declaration. For a declared team **on a gated
+  repo**, `intent-cli automation pr-transition --transition approved` now also
+  requires `--head-sha <sha>` equal to the PR's current head plus a satisfied
+  gate (G834), and `issue publish-flow` requires a design verdict keyed by
+  `packet_digest` (G835). `intent-cli review cross-runtime request` renders a
+  prompt and `intent-cli review cross-runtime record` stores a verdict; it never
+  executes a process, so the seat runs the reviewer itself. `--kind design` and
+  `--model` work for any caller, declared or not.
+- **`intent-cli automation pr-created-stale-recovery` (G836)** recovers a stale
+  `intent-pr-created` label after an unmerged PR close, removing only that label,
+  dry-run by default, and refusing on a host with no claims store
+  (`claim-unavailable`).
+- **`intent-cli session-layer topology record-orca-run` (G837)** binds an adopted
+  Orca Run on the team-shape seat or solo sidecar and read-only
+  `intent-cli session-layer topology orca-runs` reads it back; while a binding
+  exists `intent-cli team-mode set --write` refuses an effective-mode change,
+  which is the one way this can block a preview.3 user mid-task. intent-cli
+  never runs `orca` or creates a Run.
+
 ## Independently measured minor justification
 
-The named product base is `e78b27d1e99247380fa7518d67470304fb1d7e7b`. The
+The named product base is `cd276e20754db09337a94a8b973ddebdd1564ba3`. The
 minor decision follows the v0.28.0 rule: **a command-route addition is a minor
 bump; option-level additions do not count as command routes.** G796 adds
 event-kind routing to a new role and G800 adds the research-delegation route;
@@ -71,6 +110,9 @@ Since preview.2 the compatibility ledger gained eight command routes:
 has no stable release yet, so the minor they would bump is still the one being
 prepared. They are counted route additions within 0.32.0.
 
+Since preview.3 the compatibility ledger gained six command routes:
+`automation pr-created-stale-recovery`, `guide solo-conductor`, `review cross-runtime`, `review cross-runtime request`, `review cross-runtime record`, `review cross-runtime status`. Counted as rows in the Registered command table only (the table opened by `| Registered command |` and closed by `## Durable schemas and legacy inventory`, excluding the seven-row alias table). The measured row count went from 204 to 210 in both EN and JA mirrors. By operator decision (2026-09-15) these stay in the unreleased 0.32.0 minor and ship as `v0.32.0-preview.4` rather than opening 0.33.0. G837's `session-layer topology record-orca-run` and `session-layer topology orca-runs` are subcommands of the already-registered `session-layer topology` route and are **not counted** as route additions.
+
 The route decision is independently observable in the merged history: G796 is
 the six-kind event routing addition and G800 is the first-class research
 delegation route; the eight later routes are listed above.
@@ -81,11 +123,11 @@ The named base was checked with a clean Release build:
 
 ```text
 $ git rev-parse HEAD
-e78b27d1e99247380fa7518d67470304fb1d7e7b
+cd276e20754db09337a94a8b973ddebdd1564ba3
 $ dotnet build IntentSystem.sln --configuration Release --no-restore; echo BUILD_RC:$?
 BUILD_RC:0
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.32.1-e78b27d-G829
+intent-cli 0.32.1-cd276e2-G837
 ```
 
 That normal identity is the `nextVersion` placeholder and is **not** v0.32.0.
@@ -95,7 +137,7 @@ The same base with the explicit release property was measured separately:
 $ dotnet build IntentSystem.sln --configuration Release --no-restore -p:Version=0.32.0; echo BUILD_RC:$?
 BUILD_RC:0
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.32.0-e78b27d-G829
+intent-cli 0.32.0-cd276e2-G837
 ```
 
 Published versioning is the third identity and is derived by `release.yml`,
@@ -109,14 +151,14 @@ VERSION=0.32.0
 
 The release workflow supplies `-p:Version=<tag>` from `RAW`; `eng/version.json`
 governs local builds and dry runs only. A preview release tag such as
-`v0.32.0-preview.3` yields `VERSION=0.32.0-preview.3` the same way. This
+`v0.32.0-preview.4` yields `VERSION=0.32.0-preview.4` the same way. This
 prepare-only slice created no tag.
 
-## Release inventory: exactly 26 shipped first-parent units
+## Release inventory: exactly 33 shipped first-parent units
 
 The shipped inventory is derived from the exact first-parent range. Git measured
-thirty-three commits; the 26 shipped units below (G813 partial) each have one
-operator-observable outcome, while the G802 and G804 release-prep commits and
+forty-one commits; the 33 shipped units below (G813 partial) each have one
+operator-observable outcome, while the G802, G804, and G830 release-prep commits and
 five claim state commits are classified in the accounting table but are not
 counted as shipped units:
 
@@ -172,11 +214,25 @@ counted as shipped units:
   **Operator-observable outcome:** supervision is opt-in: only teams declared in `[supervision] opt_in_teams` get the `supervision-setup` recommendation or need a supervision cycle for bootstrap completeness.
 - G829 — PR #1802 / issue #1801; merge commit `e78b27d1e99247380fa7518d67470304fb1d7e7b`.
   **Operator-observable outcome:** agmsg + herdr is described as deprecated and `session-layer show` adds `mode_deprecated` and `deprecation_notice`; the unrecorded default stays `agmsg`.
+- G831 — PR #1806 / issue #1805; merge commit `2f5452a00866c02e9e80949c9e80b5d2b347fd35`.
+  **Operator-observable outcome:** `guide model` describes the four-thread and five-thread role models over the recorded session layer.
+- G832 — PR #1808 / issue #1807; merge commit `159952b410b6429acc03414993ac43a650df7fc7`.
+  **Operator-observable outcome:** the `guide orchestrator-thread` model summary names the canonical roles and both thread models.
+- G833 — PR #1810 / issue #1809; merge commit `9e461d8fda129cfb9447d99b158abb31d9c5c70b`.
+  **Operator-observable outcome:** `team-mode` accepts a third `solo-conductor` team shape and the new read-only `guide solo-conductor` route renders the solo conductor's ten-step per-unit loop with blocking reviewer-independence rules; it never starts or manages an agent.
+- G834 — PR #1812 / issue #1811; merge commit `2e6e6b62defcdcfed95f7f8036eb4a134ccc5adf`.
+  **Operator-observable outcome:** the new `review cross-runtime` group (`request`, `record`, `status`) renders a read-only review prompt, records an implementation verdict bound to `repo`/`pr`/`head_sha`, and gates approval for teams declared in `[[cross_runtime_review.teams]]`; it never executes a process.
+- G835 — PR #1817 / issue #1813; merge commit `1ff9e75d1ee80739a9ec8aeea8d905b60a757a86`.
+  **Operator-observable outcome:** `review cross-runtime request` gains `--kind design` and `--model`, which select the design artifact and the reviewer model for any caller, gated or not; separately, for a team declared in `[[cross_runtime_review.teams]]` on a gated repo, a design verdict keyed by `packet_digest` now gates `issue publish-flow` packet publication. An undeclared team or an ungated repo is byte-identical to a host with no declaration.
+- G836 — PR #1819 / issue #1784, #1818; merge commit `75d68523739318eb97932c6f55a35e547e00b769`.
+  **Operator-observable outcome:** the new `automation pr-created-stale-recovery` route removes only the stale `intent-pr-created` label after an unmerged PR close, dry-run by default, refusing when identity-bound linkage, PR state, open-closing-PR or unheld-claim checks fail and on a host with no claims store (`claim-unavailable`).
+- G837 — PR #1821 / issue #1820; merge commit `cd276e20754db09337a94a8b973ddebdd1564ba3`.
+  **Operator-observable outcome:** `session-layer topology record-orca-run` and read-only `session-layer topology orca-runs` record, show, validate and bootstrap an adopted Orca Run id on the team-shape seat or solo sidecar, and `team-mode set --write` refuses an effective-mode change while a binding exists; intent-cli never runs `orca` or creates a Run.
 
 ## First-parent accounting
 
 ```text
-$ git rev-list --first-parent --reverse v0.31.0..e78b27d1e99247380fa7518d67470304fb1d7e7b
+$ git rev-list --first-parent --reverse v0.31.0..cd276e20754db09337a94a8b973ddebdd1564ba3
 1b3c7229cfe8c8f8565034a7e2220a94ac14785b
 09b1f4edca51f3acbbe3e901356866996f4be29f
 67c8578090f1a53e8894aeff88abd6cd8b83ff15
@@ -210,8 +266,16 @@ ca7272f4b88e00577e7c423d41a888f0f0defaf6
 0762312ddccf14009d3252c5101d0b893ca7be6b
 227a981d42cee28924ba34cbde3f45d12717a202
 e78b27d1e99247380fa7518d67470304fb1d7e7b
-$ git rev-list --first-parent --count v0.31.0..e78b27d1e99247380fa7518d67470304fb1d7e7b
-33
+d5f72c10a26e4844fac38dbc362ab1d6052bc237
+2f5452a00866c02e9e80949c9e80b5d2b347fd35
+159952b410b6429acc03414993ac43a650df7fc7
+9e461d8fda129cfb9447d99b158abb31d9c5c70b
+2e6e6b62defcdcfed95f7f8036eb4a134ccc5adf
+1ff9e75d1ee80739a9ec8aeea8d905b60a757a86
+75d68523739318eb97932c6f55a35e547e00b769
+cd276e20754db09337a94a8b973ddebdd1564ba3
+$ git rev-list --first-parent --count v0.31.0..cd276e20754db09337a94a8b973ddebdd1564ba3
+41
 ```
 
 | first-parent commit | classification | release inventory |
@@ -249,10 +313,18 @@ $ git rev-list --first-parent --count v0.31.0..e78b27d1e99247380fa7518d67470304f
 | `0762312ddccf14009d3252c5101d0b893ca7be6b` | G827 / PR #1796 / issue #1794 | included |
 | `227a981d42cee28924ba34cbde3f45d12717a202` | G828 / PR #1799 / issue #1798 | included |
 | `e78b27d1e99247380fa7518d67470304fb1d7e7b` | G829 / PR #1802 / issue #1801 | included |
+| `d5f72c10a26e4844fac38dbc362ab1d6052bc237` | G830 / PR #1804 / issue #1803 | prior release prep |
+| `2f5452a00866c02e9e80949c9e80b5d2b347fd35` | G831 / PR #1806 / issue #1805 | included |
+| `159952b410b6429acc03414993ac43a650df7fc7` | G832 / PR #1808 / issue #1807 | included |
+| `9e461d8fda129cfb9447d99b158abb31d9c5c70b` | G833 / PR #1810 / issue #1809 | included |
+| `2e6e6b62defcdcfed95f7f8036eb4a134ccc5adf` | G834 / PR #1812 / issue #1811 | included |
+| `1ff9e75d1ee80739a9ec8aeea8d905b60a757a86` | G835 / PR #1817 / issue #1813 | included |
+| `75d68523739318eb97932c6f55a35e547e00b769` | G836 / PR #1819 / issue #1784, #1818 | included |
+| `cd276e20754db09337a94a8b973ddebdd1564ba3` | G837 / PR #1821 / issue #1820 | included |
 
-The first-parent range contains exactly these thirty-three commits and nothing
-else; the table is not a changelog of second-parent commits. G802 and G804 are
-prior release preparation for preview.1 and preview.2. The five claim state
+The first-parent range contains exactly these forty-one commits and nothing
+else; the table is not a changelog of second-parent commits. G802, G804, and G830 are
+prior release preparation for preview.1, preview.2, and preview.3. The five claim state
 commits were written to the child default branch by claim transactions; they
 carry no product change and are not units. G813 is included as a partial unit:
 its linkage issue #1774 remains open.
@@ -294,9 +366,9 @@ in new guidance.
 
 `ReleaseNotesV0320G802Tests` compares the EN/JA unit/PR/issue/merge tuples,
 asserts the four alias statements in both mirrors, checks the three measured
-identities and exact thirty-three-commit accounting, and deliberately fails on
-a one-field mirror mutation and on a stale measurement from the preview.2 base
-`16267f9d58af31669252186a16ce09ab0dd47ba4`. `ReleasePackageMetadataTests` continues to guard
+identities and exact forty-one-commit accounting, and deliberately fails on
+a one-field mirror mutation and on a stale measurement from the preview.3 base
+`e78b27d1e99247380fa7518d67470304fb1d7e7b`. `ReleasePackageMetadataTests` continues to guard
 the policy shape and demanded next-version placeholder. The diff is limited to
 the EN/JA v0.32.0 notes and tests; `eng/version.json` and the v0.32.1
 placeholders are untouched. It contains no tag, GitHub Release, package
