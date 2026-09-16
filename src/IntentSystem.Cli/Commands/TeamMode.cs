@@ -159,7 +159,7 @@ internal static class TeamModeStore
 
         try
         {
-            var state = JsonSerializer.Deserialize<TeamModeState>(File.ReadAllText(path), Options)
+            var state = JsonSerializer.Deserialize<TeamModeState>(GuardedFileRead.ReadAllText(path), Options)
                 ?? throw new InvalidOperationException("team mode state deserialized to null.");
             if (!string.Equals(state.SchemaVersion, SchemaVersion, StringComparison.Ordinal))
             {
@@ -197,7 +197,7 @@ internal static class TeamModeStore
 
             return state;
         }
-        catch (Exception exception) when (exception is IOException or JsonException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
             throw new InvalidOperationException(
                 $"team mode state at `{path}` could not be read: {exception.Message}");

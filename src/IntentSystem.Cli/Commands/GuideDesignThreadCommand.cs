@@ -247,11 +247,12 @@ internal static class GuideDesignThreadCommand
             "Create or bind a Run before seat messages: `orca orchestration run-create --objective <text> [--from <handle>]` or `orca orchestration run-use --id <run-id> [--from <handle>]`.",
             "Share the resulting `<run-id>` with every sender before anyone addresses `run:<run-id>`.",
             "Each sender supplies its own `--from <role>` handle; it is a sender handle, not a routing identity.",
+            "Record the adopted <run-id> on the seat the recorded team shape selects (steward for five-seat, design for four-seat and solo-conductor; the seat must be external with frontend orca, claude-app, or codex-app) with intent-cli session-layer topology record-orca-run … --dry-run first.",
         ],
         SendForm = OrcaWakeSendForm,
         CheckForm = OrcaCheckForm,
         SharedChannel = "The same Orca channel carries herdr seats' courtesy wakes and design-to-design messages; neither replaces the canonical notify record.",
-        DurableRecord = "Canonical `intent-cli notify` remains durable. This non-normative block adds no intent-cli option, and intent-cli neither launches nor manages Orca.",
+        DurableRecord = "Canonical intent-cli notify remains durable. intent-cli records an adopted Run id with session-layer topology record-orca-run and shows it in topology show and guide bootstrap, but never runs, launches, verifies, or manages Orca.",
     };
 
     private static void WriteMarkdown(TextWriter writer, DesignThreadGuideResult result)

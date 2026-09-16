@@ -657,7 +657,7 @@ internal static class AutomationHostLoopNextActionCommand
             evidence.Add(
                 $"{ReasonDispatchIdentitySourceUnavailable}: this build has no source for {string.Join(", ", unavailableDispatchFields)}, "
                 + "and no CLI argument or checkout change can supply it. Team-scoped host-loop cannot reach qualified "
-                + "until the Orca Run mailbox binding (#1774) provides dispatch identity.");
+                + "until a later unit delivers a dispatch generation and digest source; the Orca Run mailbox binding does not provide dispatch identity.");
         }
         evidence.Add("Legacy/no-team host-loop output remains readable but cannot certify modern ownership or mutation.");
 

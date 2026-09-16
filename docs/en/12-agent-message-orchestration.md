@@ -501,18 +501,22 @@ or manages the command.
 > orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
 > ```
 
-> **Non-normative Orca operating order (G789).** Before any seat message,
-> create or bind the Run, share its identifier, and have each sender provide
-> its own handle in this order:
+> **Non-normative Orca operating order (G789/G837).** Before any seat message,
+> create or bind the Run, share its identifier, record the adopted Run id on
+> the seat the recorded team shape selects, and have each sender provide its
+> own handle in this order:
 >
 > ```text
 > orca orchestration run-create --objective <text> [--from <handle>]
 > orca orchestration run-use --id <run-id> [--from <handle>]
+> intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <role> --current absent --new <run-id> --receive-policy <orca-push|inbox-pull> [--frontend <name>] --confirm-record-orca-run --dry-run --format json
 > ```
 >
 > 1. Use exactly one of the create-or-bind forms, then share the resulting
 >    `<run-id>` with every sender before anyone addresses `run:<run-id>`.
-> 2. Each sender supplies its own `--from <role>` handle. Use the declared
+> 2. Record the adopted `<run-id>` on the required external seat
+>    (`session-layer topology record-orca-run … --dry-run` first).
+> 3. Each sender supplies its own `--from <role>` handle. Use the declared
 >    wake send form unchanged, then use the bounded check:
 >
 >    ```text
@@ -522,8 +526,10 @@ or manages the command.
 >
 > The same Orca channel carries herdr seats' courtesy wakes and
 > design-to-design messages. Neither is durable workflow evidence: canonical
-> `intent-cli notify` remains the durable record. This is non-normative setup
-> only; intent-cli adds no option and neither launches nor manages Orca.
+> `intent-cli notify` remains durable. intent-cli records an adopted Run id
+> with `session-layer topology record-orca-run` and shows it in
+> `session-layer topology show`, `session-layer topology orca-runs`, and
+> `guide bootstrap`, but never runs, launches, verifies, or manages Orca.
 
 **Mixed-kind review-seat selection (G789).** The recorded topology fields
 decide: use `kind` for a herdr seat and `frontend` for an external seat; do

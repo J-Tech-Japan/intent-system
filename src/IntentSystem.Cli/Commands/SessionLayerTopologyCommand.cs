@@ -17,7 +17,7 @@ internal static class SessionLayerTopologyCommand
     private const string FormatMarkdown = "markdown";
 
     private const string Usage =
-        "Usage: intent-cli session-layer topology record|record-host-state|record-profile|show|validate|move|update-kind|update-field|retire-legacy [options]";
+        "Usage: intent-cli session-layer topology record|record-host-state|record-profile|record-orca-run|show|validate|orca-runs|move|update-kind|update-field|retire-legacy [options]";
     private const string RecordUsage =
         "Usage: intent-cli session-layer topology record --domain <name> --team <name> --role <name> --resident herdr "
         + "--workspace-id <id> --pane-id <id> --cwd <path> [--kind <kind>] [--delivery-method inline|file-backed] "
@@ -95,7 +95,8 @@ internal static class SessionLayerTopologyCommand
         }
 
         if (TryReadOption(args, "--domain", out var requestedDomain)
-            && !string.IsNullOrWhiteSpace(requestedDomain))
+            && !string.IsNullOrWhiteSpace(requestedDomain)
+            && args[0] is not ("record-orca-run" or "orca-runs"))
         {
             var requestedTeam = TryReadOption(args, "--team", out var parsedTeam) && !string.IsNullOrWhiteSpace(parsedTeam)
                 ? parsedTeam
@@ -126,6 +127,8 @@ internal static class SessionLayerTopologyCommand
             "update-field" => ExecuteUpdateField(context, args[1..], writer),
             "update-residence" => ExecuteUpdateResidence(context, args[1..], writer),
             "retire-legacy" => ExecuteRetireLegacy(context, args[1..], writer),
+            "record-orca-run" => OrcaRunRecordCommand.Execute(context, args[1..], writer),
+            "orca-runs" => OrcaRunDiscoveryCommand.Execute(context, args[1..], writer),
             _ => UnknownSubcommand(args[0], writer),
         };
     }
@@ -181,6 +184,33 @@ internal static class SessionLayerTopologyCommand
                     domain!,
                     team!,
                     topologyResolution.Topology!).Findings);
+            }
+
+            var orcaFindings = topologyResolution.Topology is not null
+                ? OrcaRunBindingHealth.EvaluateTopologyValidateFindings(
+                    context.RepoRoot,
+                    domain!,
+                    team!,
+                    topologyResolution.Topology,
+                    validation.Valid,
+                    topologyResolution.Resolved)
+                : !topologyResolution.Resolved
+                    ? OrcaRunBindingHealth.EvaluateTopologyValidateFindingsFromRawFile(
+                        context.RepoRoot,
+                        domain!,
+                        team!,
+                        validation.Valid)
+                    : [];
+            foreach (var (role, cause, message) in orcaFindings)
+            {
+                findings.Add(new SessionLayerTopologyFinding(
+                    role,
+                    "orca_run",
+                    cause,
+                    message)
+                {
+                    IsInformational = string.Equals(cause, "orca-run-binding-absent", StringComparison.Ordinal),
+                });
             }
         }
 
@@ -361,6 +391,7 @@ internal static class SessionLayerTopologyCommand
                     ? effectiveReader
                     : null,
                 WakeCommand = record.Resident == NotifyRecordedRole.ExternalResident ? record.WakeCommand : null,
+                OrcaRun = BuildShownOrcaRun(context.RepoRoot, domain!, team!, role, record),
             });
         }
 
@@ -1572,6 +1603,27 @@ internal static class SessionLayerTopologyCommand
         }
     }
 
+    private static OrcaRunShownBinding? BuildShownOrcaRun(
+        string routingRoot,
+        string domain,
+        string team,
+        string role,
+        NotifyRecordedRole record)
+    {
+        if (record.OrcaRun is null)
+        {
+            return null;
+        }
+
+        var health = OrcaRunBindingHealth.EvaluateTopologyRole(routingRoot, domain, team, role, record, record.OrcaRun);
+        return new OrcaRunShownBinding
+        {
+            RunId = record.OrcaRun.RunId,
+            ReceivePolicy = record.OrcaRun.ReceivePolicy,
+            Health = health.Health,
+        };
+    }
+
     private static void EmitShow(TextWriter writer, string format, SessionLayerTopologyShowResult result)
     {
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -1593,9 +1645,12 @@ internal static class SessionLayerTopologyCommand
             var wakeDetails = role.WakeCommand is null
                 ? string.Empty
                 : $" wake_command={role.WakeCommand};";
+            var orcaRunDetails = role.OrcaRun is null
+                ? string.Empty
+                : $" orca_run={role.OrcaRun.RunId ?? "malformed"}/{role.OrcaRun.ReceivePolicy ?? "malformed"} ({role.OrcaRun.Health});";
             writer.WriteLine($"- {role.Role}: resident={role.Resident}; delivery_target={role.DeliveryTargetKind}:"
                 + $"{role.DeliveryTarget}; model={role.Model ?? "absent"}; "
-                + $"reasoning_effort={role.ReasoningEffort ?? "absent"};{readerDetails}{wakeDetails}");
+                + $"reasoning_effort={role.ReasoningEffort ?? "absent"};{readerDetails}{wakeDetails}{orcaRunDetails}");
         }
         foreach (var profile in result.EnvelopeProfiles)
         {
@@ -3104,6 +3159,14 @@ internal static class SessionLayerTopologyWriter
             Digest = string.Empty,
             Summary = summary,
         };
+
+    public static JsonSerializerOptions FileJsonOptionsPublic => FileJsonOptions;
+
+    public static void EnsureLocalIgnorePublic(string routingRoot) => EnsureLocalIgnore(routingRoot);
+
+    public static FileStream AcquireCasLockPublic(string path) => AcquireCasLock(path);
+
+    public static void WriteAtomicallyPublic(string path, string content) => WriteAtomically(path, content);
 }
 
 /// <summary>
@@ -3338,4 +3401,5 @@ internal sealed record SessionLayerTopologyShownRole
     public string? Reader { get; init; }
     public string? EffectiveReader { get; init; }
     public string? WakeCommand { get; init; }
+    public OrcaRunShownBinding? OrcaRun { get; init; }
 }

@@ -92,12 +92,13 @@ public sealed class GuideSeatSelectionG789Tests
                 "Create or bind a Run before seat messages: `orca orchestration run-create --objective <text> [--from <handle>]` or `orca orchestration run-use --id <run-id> [--from <handle>]`.",
                 "Share the resulting `<run-id>` with every sender before anyone addresses `run:<run-id>`.",
                 "Each sender supplies its own `--from <role>` handle; it is a sender handle, not a routing identity.",
+                "Record the adopted <run-id> on the seat the recorded team shape selects (steward for five-seat, design for four-seat and solo-conductor; the seat must be external with frontend orca, claude-app, or codex-app) with intent-cli session-layer topology record-orca-run … --dry-run first.",
             ],
             operatingBlock.GetProperty("setup_order").EnumerateArray().Select(item => item.GetString()));
         Assert.Equal(GuideDesignThreadCommand.OrcaWakeSendForm, operatingBlock.GetProperty("send_form").GetString());
         Assert.Equal(GuideDesignThreadCommand.OrcaCheckForm, operatingBlock.GetProperty("check_form").GetString());
         Assert.Contains("courtesy wakes and design-to-design messages", operatingBlock.GetProperty("shared_channel").GetString(), StringComparison.Ordinal);
-        Assert.Contains("neither launches nor manages Orca", operatingBlock.GetProperty("durable_record").GetString(), StringComparison.Ordinal);
+        Assert.Contains("records an adopted Run id with session-layer topology record-orca-run", operatingBlock.GetProperty("durable_record").GetString(), StringComparison.Ordinal);
         Assert.Contains(GuideDesignThreadCommand.OrcaWakeSendForm, contract.GetProperty("wake_channel_declaration").GetString(), StringComparison.Ordinal);
 
         var selection = designDocument.RootElement.GetProperty("team_and_duty_split").GetProperty("review_seat_selection");

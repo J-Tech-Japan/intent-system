@@ -97,79 +97,101 @@ internal static class TeamModeCommand
 
         try
         {
-            var state = TeamModeStore.TryRead(context.RepoRoot);
-            var before = TeamModeStore.Resolve(state, options.Domain!, options.Team);
-            var entries = state?.Entries.ToList() ?? [];
-            var existingIndex = entries.FindIndex(entry =>
-                string.Equals(entry.Domain, options.Domain, StringComparison.Ordinal)
-                && string.Equals(entry.Team, options.Team, StringComparison.Ordinal));
-            var existing = existingIndex >= 0 ? entries[existingIndex] : null;
-            var alreadyRecorded = existing is not null
-                && string.Equals(existing.Mode, options.Mode, StringComparison.Ordinal);
-            var changed = !alreadyRecorded;
-            var applied = false;
-
-            if (options.Write && changed)
+            FileStream? teamModeLock = null;
+            string? digestBefore = null;
+            TeamModeState? state;
+            try
             {
-                var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
-                var transitions = existing?.Transitions.ToList() ?? [];
-                transitions.Add(new TeamModeTransition
+                if (options.Write)
                 {
-                    From = existing?.Mode ?? TeamMode.Default,
-                    To = options.Mode!,
-                    At = now,
-                });
+                    OrcaRunTeamModeLock.EnsureLockDirectory(context.RepoRoot);
+                    teamModeLock = OrcaRunTeamModeLock.TryAcquire(context.RepoRoot, out var busyMessage);
+                    if (teamModeLock is null)
+                    {
+                        writer.WriteLine($"team-mode-write-refused: team-mode-lock-busy: {busyMessage}");
+                        return 1;
+                    }
 
-                var updated = new TeamModeEntry
-                {
-                    Domain = options.Domain!,
-                    Team = options.Team,
-                    Mode = options.Mode!,
-                    UpdatedAt = now,
-                    Transitions = transitions,
-                };
-                if (existingIndex >= 0)
-                {
-                    entries[existingIndex] = updated;
-                }
-                else
-                {
-                    entries.Add(updated);
+                    TeamModeOrcaRunGuard.AfterLockHook?.Invoke();
                 }
 
-                TeamModeStore.Write(context.RepoRoot, new TeamModeState
+                try
                 {
-                    SchemaVersion = TeamModeStore.SchemaVersion,
-                    Entries = entries
-                        .OrderBy(entry => entry.Domain, StringComparer.Ordinal)
-                        .ThenBy(entry => entry.Team ?? string.Empty, StringComparer.Ordinal)
-                        .ToArray(),
-                });
-                applied = true;
-            }
+                    state = TeamModeStore.TryRead(context.RepoRoot);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    writer.WriteLine($"team-mode-write-refused: {exception.Message}");
+                    return 1;
+                }
 
-            var after = applied
-                ? TeamModeStore.Resolve(context.RepoRoot, options.Domain!, options.Team)
-                : before;
-            var result = BuildResult(
-                options.Domain!,
-                options.Team,
-                after,
-                options.Write ? "write" : "dry-run",
-                applied,
-                changed) with
-            {
-                RequestedMode = options.Mode,
-                PreviousMode = existing?.Mode ?? TeamMode.Default,
-                AlreadyRecorded = alreadyRecorded,
-                Summary = options.Write && applied
+                if (options.Write)
+                {
+                    digestBefore = OrcaRunTeamModeLock.ComputeDigest(context.RepoRoot);
+                }
+
+                var newStatePreview = BuildUpdatedState(state, options);
+                var guard = TeamModeOrcaRunGuard.Evaluate(context.RepoRoot, options.Domain!, state, newStatePreview);
+                if (guard.Refused)
+                {
+                    writer.WriteLine(guard.RefusalLine);
+                    return 1;
+                }
+
+                TeamModeOrcaRunGuard.BeforeWriteHook?.Invoke();
+
+                var before = TeamModeStore.Resolve(state, options.Domain!, options.Team);
+                var existingIndex = state?.Entries.ToList().FindIndex(entry =>
+                    string.Equals(entry.Domain, options.Domain, StringComparison.Ordinal)
+                    && string.Equals(entry.Team, options.Team, StringComparison.Ordinal)) ?? -1;
+                var existing = existingIndex >= 0 ? state!.Entries[existingIndex] : null;
+                var alreadyRecorded = existing is not null
+                    && string.Equals(existing.Mode, options.Mode, StringComparison.Ordinal);
+                var changed = !alreadyRecorded;
+                var applied = false;
+
+                if (options.Write && changed)
+                {
+                    if (digestBefore is not null
+                        && !string.Equals(OrcaRunTeamModeLock.ComputeDigest(context.RepoRoot), digestBefore, StringComparison.Ordinal))
+                    {
+                        writer.WriteLine("team-mode-write-refused: team-mode-cas-lost: team-mode.json changed before write.");
+                        return 1;
+                    }
+
+                    TeamModeStore.Write(context.RepoRoot, newStatePreview);
+                    applied = true;
+                }
+
+                var after = applied
+                    ? TeamModeStore.Resolve(context.RepoRoot, options.Domain!, options.Team)
+                    : before;
+                var summary = options.Write && applied
                     ? $"Recorded team mode '{after.Mode}' for {Scope(options.Domain!, options.Team)}."
                     : options.Write
                         ? $"Team mode '{after.Mode}' is already recorded for {Scope(options.Domain!, options.Team)}; no transition was appended."
-                        : $"Previewed team mode '{options.Mode}' for {Scope(options.Domain!, options.Team)} without writing.",
-            };
-            Emit(writer, options.Format, result);
-            return 0;
+                        : $"Previewed team mode '{options.Mode}' for {Scope(options.Domain!, options.Team)} without writing.";
+                summary = TeamModeOrcaRunGuard.AppendUnreadableSummarySentence(summary, guard.UnreadableTopologyPaths);
+                var result = BuildResult(
+                    options.Domain!,
+                    options.Team,
+                    after,
+                    options.Write ? "write" : "dry-run",
+                    applied,
+                    changed) with
+                {
+                    RequestedMode = options.Mode,
+                    PreviousMode = existing?.Mode ?? TeamMode.Default,
+                    AlreadyRecorded = alreadyRecorded,
+                    Summary = summary,
+                };
+                Emit(writer, options.Format, result);
+                return 0;
+            }
+            finally
+            {
+                teamModeLock?.Dispose();
+            }
         }
         catch (InvalidOperationException exception)
         {
@@ -201,20 +223,32 @@ internal static class TeamModeCommand
         try
         {
             var resolution = TeamModeStore.Resolve(context.RepoRoot, options.Domain!, options.Team);
+            var findings = new List<string>();
+            if (options.Team is not null)
+            {
+                findings.AddRange(OrcaRunBindingHealth.EvaluateTeamModeValidateFindings(
+                    context.RepoRoot,
+                    options.Domain!,
+                    options.Team));
+            }
+
+            var valid = findings.Count == 0;
             var result = new TeamModeValidationResult
             {
                 Domain = options.Domain!,
                 Team = options.Team,
                 PreviewStatus = "preview-through-1.x",
-                Valid = true,
+                Valid = valid,
                 Mode = resolution.Mode,
                 Source = SourceName(resolution.Source),
                 RecordPath = TeamModeStore.RelativePath,
-                Findings = [],
-                Summary = $"Team mode '{resolution.Mode}' is valid for {Scope(options.Domain!, options.Team)}.",
+                Findings = findings,
+                Summary = valid
+                    ? $"Team mode '{resolution.Mode}' is valid for {Scope(options.Domain!, options.Team)}."
+                    : "Team mode validation failed; Orca Run binding findings were recorded.",
             };
             Emit(writer, options.Format, result);
-            return 0;
+            return valid ? 0 : 1;
         }
         catch (InvalidOperationException exception)
         {
@@ -263,6 +297,48 @@ internal static class TeamModeCommand
         resolution.Source == TeamModeSource.Recorded
             ? $"{Scope(domain, team)}: team mode is '{resolution.Mode}' (recorded)."
             : $"{Scope(domain, team)}: no team mode is recorded, so the default '{TeamMode.Default}' is in force.";
+
+    private static TeamModeState BuildUpdatedState(TeamModeState? state, TeamModeOptions options)
+    {
+        var entries = state?.Entries.ToList() ?? [];
+        var existingIndex = entries.FindIndex(entry =>
+            string.Equals(entry.Domain, options.Domain, StringComparison.Ordinal)
+            && string.Equals(entry.Team, options.Team, StringComparison.Ordinal));
+        var existing = existingIndex >= 0 ? entries[existingIndex] : null;
+        var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var transitions = existing?.Transitions.ToList() ?? [];
+        transitions.Add(new TeamModeTransition
+        {
+            From = existing?.Mode ?? TeamMode.Default,
+            To = options.Mode!,
+            At = now,
+        });
+        var updated = new TeamModeEntry
+        {
+            Domain = options.Domain!,
+            Team = options.Team,
+            Mode = options.Mode!,
+            UpdatedAt = now,
+            Transitions = transitions,
+        };
+        if (existingIndex >= 0)
+        {
+            entries[existingIndex] = updated;
+        }
+        else
+        {
+            entries.Add(updated);
+        }
+
+        return new TeamModeState
+        {
+            SchemaVersion = TeamModeStore.SchemaVersion,
+            Entries = entries
+                .OrderBy(entry => entry.Domain, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Team ?? string.Empty, StringComparer.Ordinal)
+                .ToArray(),
+        };
+    }
 
     private static string Scope(string domain, string? team) =>
         team is null ? $"domain '{domain}'" : $"team '{team}' in domain '{domain}'";
