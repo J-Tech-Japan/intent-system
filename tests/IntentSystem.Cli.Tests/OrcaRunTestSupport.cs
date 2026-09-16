@@ -158,11 +158,6 @@ internal static class OrcaRunTestSupport
         return document.RootElement.Clone();
     }
 
-    public static JsonElement CauseResult(JsonElement root) =>
-        root.ValueKind == JsonValueKind.Object && root.TryGetProperty("cause", out var cause)
-            ? root
-            : Parse(root.GetProperty("summary").GetString() ?? root.ToString());
-
     internal sealed class OrcaRunWorkspace : IDisposable
     {
         private readonly string? previousPath;

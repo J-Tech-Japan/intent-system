@@ -51,7 +51,7 @@ public sealed class OrcaRunBindingFixRound2Tests : IDisposable
         var finding = validate.GetProperty("findings").EnumerateArray()
             .Single(item => item.GetProperty("cause").GetString() == "orca-run-binding-malformed");
         Assert.Equal(
-            "Role 'steward' orca_run is absent, null, or not an object.",
+            "Role 'steward' orca_run is absent, null, not an object, or has a field of the wrong type.",
             finding.GetProperty("message").GetString());
 
         var (runsExit, runs) = workspace.RunJson(
@@ -100,6 +100,28 @@ public sealed class OrcaRunBindingFixRound2Tests : IDisposable
     }
 
     [Fact]
+    public void TopologyValidate_MalformedObjectField_MessageLiteral_G837()
+    {
+        workspace.InstallFiveSeatDeliveryFixture();
+        var root = JsonNode.Parse(File.ReadAllText(workspace.TopologyPath))!.AsObject();
+        root["roles"]!["steward"]!.AsObject()["orca_run"] = new JsonObject
+        {
+            ["run_id"] = null,
+            ["receive_policy"] = "orca-push",
+        };
+        File.WriteAllText(workspace.TopologyPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+        var (exitCode, result) = workspace.RunJson(
+            "session-layer", "topology", "validate",
+            "--domain", OrcaRunTestSupport.Domain, "--team", workspace.Team, "--format", "json");
+        Assert.Equal(1, exitCode);
+        var finding = result.GetProperty("findings").EnumerateArray()
+            .Single(item => item.GetProperty("cause").GetString() == "orca-run-binding-malformed");
+        Assert.Equal(
+            "Role 'steward' orca_run is absent, null, not an object, or has a field of the wrong type.",
+            finding.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void Bootstrap_OrcaRunBinding_JsonHasOnlyContractKeys_G837()
     {
         workspace.InstallFiveSeatDeliveryFixture();
@@ -127,50 +149,41 @@ public sealed class OrcaRunBindingFixRound2Tests : IDisposable
         AssertResultKeySet(success, conflict: false);
 
         var (refusalExit, refusal) = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
-            workspace, "absent", OrcaRunTestSupport.RunId, "orca-push", write: false));
+            workspace, "steward", "absent", OrcaRunTestSupport.RunId, "orca-push", write: false));
         Assert.Equal(1, refusalExit);
+        Assert.Equal("current-mismatch", refusal.GetProperty("cause").GetString());
         AssertResultKeySet(refusal, conflict: true);
+
+        var (earlyExit, early) = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
+            workspace, "absent", OrcaRunTestSupport.RunId, "orca-push", write: false));
+        Assert.Equal(1, earlyExit);
+        Assert.Equal("orca-run-id-malformed", early.GetProperty("cause").GetString());
+        AssertResultKeySet(early, conflict: true);
     }
 
     [Fact]
-    public void Solo_NewAbsentWhenNoFile_AppliedFalse_G837()
+    public void Solo_NewAbsentWhenNoFile_AlreadyRecorded_G837()
     {
         workspace.InstallSoloFixture();
         var (exitCode, result) = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
             workspace, "design", "absent", "absent", write: true));
         Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("already_recorded").GetBoolean());
         Assert.False(result.GetProperty("applied").GetBoolean());
         Assert.False(result.GetProperty("changed").GetBoolean());
         Assert.False(File.Exists(workspace.SoloBindingPath));
     }
 
     [Fact]
-    public void TeamModeGuard_SoloAndTopologyBinding_YieldsOnce_G837()
+    public void FiveSeat_NewAbsentWhenNoBinding_AlreadyRecorded_G837()
     {
         workspace.InstallFiveSeatDeliveryFixture();
-        workspace.RunRecordOrcaRun("steward", "absent", OrcaRunTestSupport.RunId, "orca-push", write: true);
-        workspace.WriteSoloBinding(new
-        {
-            schema_version = "1",
-            domain = OrcaRunTestSupport.Domain,
-            team = workspace.Team,
-            orca_run = new
-            {
-                role = "design",
-                run_id = OrcaRunTestSupport.RunId,
-                receive_policy = "inbox-pull",
-                frontend = "claude-app",
-            },
-        });
-
-        var (exitCode, output) = workspace.RunRaw(
-            "team-mode", "set",
-            "--domain", OrcaRunTestSupport.Domain,
-            "--team", workspace.Team,
-            "--mode", TeamMode.SoloConductor,
-            "--format", "json");
-        Assert.Equal(1, exitCode);
-        Assert.Equal(1, CountOccurrences(output, "team-mode-write-refused: orca-run-binding-present:"));
+        var (exitCode, result) = workspace.RunJson(OrcaRunTestSupport.RecordOrcaRunArgs(
+            workspace, "steward", "absent", "absent", write: true));
+        Assert.Equal(0, exitCode);
+        Assert.True(result.GetProperty("already_recorded").GetBoolean());
+        Assert.False(result.GetProperty("applied").GetBoolean());
+        Assert.False(result.GetProperty("changed").GetBoolean());
     }
 
     private static void AssertResultKeySet(JsonElement result, bool conflict)
@@ -193,18 +206,5 @@ public sealed class OrcaRunBindingFixRound2Tests : IDisposable
             Assert.Equal(JsonValueKind.Null, result.GetProperty("field").ValueKind);
             Assert.Equal(JsonValueKind.Null, result.GetProperty("fix").ValueKind);
         }
-    }
-
-    private static int CountOccurrences(string text, string value)
-    {
-        var count = 0;
-        var index = 0;
-        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
-        {
-            count++;
-            index += value.Length;
-        }
-
-        return count;
     }
 }

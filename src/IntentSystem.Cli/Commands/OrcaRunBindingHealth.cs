@@ -747,7 +747,7 @@ internal static class OrcaRunBindingHealth
         OrcaRunTeamShapeResult? shape) =>
         cause switch
         {
-            "orca-run-binding-malformed" => $"Role '{roleKey}' orca_run is absent, null, or not an object.",
+            "orca-run-binding-malformed" => $"Role '{roleKey}' orca_run is absent, null, not an object, or has a field of the wrong type.",
             "orca-run-id-malformed" => $"Role '{roleKey}' orca_run run_id '{binding.RunId}' does not match ^run_[0-9a-f]{{12}}$.",
             "receive-policy-invalid" => $"Role '{roleKey}' orca_run receive_policy '{binding.ReceivePolicy}' is not orca-push or inbox-pull.",
             "team-shape-unreadable" => shape?.Message ?? "team mode could not be read.",

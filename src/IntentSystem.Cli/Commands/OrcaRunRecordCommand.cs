@@ -237,6 +237,7 @@ internal static class OrcaRunRecordCommand
                     OrcaRunSoloStore.Delete(context.RepoRoot, request.Domain, request.Team);
                 }
 
+                var alreadyAbsent = string.Equals(absentCurrent, "absent", StringComparison.Ordinal);
                 WriteResult(writer, Success(
                     request,
                     shape,
@@ -244,8 +245,9 @@ internal static class OrcaRunRecordCommand
                     soloCanonical!,
                     absentCurrent,
                     "absent",
-                    applied: request.Write && soloRead.Exists,
-                    changed: soloRead.Exists));
+                    applied: request.Write && !alreadyAbsent,
+                    changed: !alreadyAbsent,
+                    alreadyRecorded: alreadyAbsent));
                 return 0;
             }
 

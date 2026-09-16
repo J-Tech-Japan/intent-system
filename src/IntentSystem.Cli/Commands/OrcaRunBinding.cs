@@ -28,18 +28,6 @@ internal static partial class OrcaRunBinding
     public static bool IsValidReceivePolicy(string? value) =>
         value is OrcaPushPolicy or InboxPullPolicy;
 
-    public static bool TryParseRoleBinding(JsonObject roleObject, out OrcaRunRoleBinding? binding)
-    {
-        binding = null;
-        if (!roleObject.TryGetPropertyValue("orca_run", out var node) || node is null)
-        {
-            return false;
-        }
-
-        binding = ParseRoleBindingNode(node);
-        return true;
-    }
-
     public static OrcaRunRoleBinding ParseRoleBindingNode(JsonNode node)
     {
         if (node is not JsonObject obj)
