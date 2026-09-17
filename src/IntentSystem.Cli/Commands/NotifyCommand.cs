@@ -321,7 +321,8 @@ internal static class NotifyCommand
 
         if (string.Equals(operation, OperationCollect, StringComparison.Ordinal))
         {
-            return ExecuteCollect(writer, options, routingRoot, reportRoot!);
+            return ExecuteCollect(writer, context, options, routingRoot, reportRoot!,
+                hostExecutionSeat: PathsEqual(context.RepoRoot, routingRoot));
         }
 
         if (string.Equals(operation, OperationDelegate, StringComparison.Ordinal) && options.Write)
@@ -418,7 +419,7 @@ internal static class NotifyCommand
                 return 1;
             }
 
-            return ExecuteDelivery(writer, operation, options, resolution, preflight, reportAdvisory, persistedReportOutbox, reportRoot!);
+            return ExecuteDelivery(writer, context, operation, options, resolution, preflight, reportAdvisory, persistedReportOutbox, reportRoot!);
         }
 
         SessionLayerModeResolution escalationResolution;
@@ -446,9 +447,11 @@ internal static class NotifyCommand
 
     private static int ExecuteCollect(
         TextWriter writer,
+        CliContext context,
         NotifyOptions options,
         string routingRoot,
-        string reportRoot)
+        string reportRoot,
+        bool hostExecutionSeat)
     {
         var pending = NotifyPendingDelegationStore.Find(routingRoot, options.Domain, options.Team, options.TaskId!);
         var outbox = pending.Resolved && pending.Record is not null
@@ -514,12 +517,14 @@ internal static class NotifyCommand
 
         return ExecuteDelivery(
             writer,
+            context,
             OperationCollect,
             collected,
             resolution,
             preflight,
             existingOutbox: outbox.Entry,
-            reportRoot: reportRoot);
+            reportRoot: reportRoot,
+            hostExecutionSeat: hostExecutionSeat);
     }
 
     private static int ExecuteReconcile(
@@ -611,7 +616,9 @@ internal static class NotifyCommand
                 ReportDeliveryState = report.DeliveryState,
                 PendingRecordPath = pending.Path,
                 Cause = "sender-local-report-not-delivered",
-                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered; the local handoff remains available for its delivery-level recovery path.",
+                Summary = $"Sender-local report for task '{options.TaskId}' is '{report.DeliveryState}', not delivered. "
+                    + $"Recover it from the host with 'intent-cli notify collect --domain {options.Domain} --team {options.Team} --task-id {options.TaskId} "
+                    + $"--routing-root {routingRoot} --report-root {reportRoot} --write --format json'; no other command completes an undelivered handoff.",
             });
             return 1;
         }
@@ -1278,13 +1285,15 @@ internal static class NotifyCommand
 
     private static int ExecuteDelivery(
         TextWriter writer,
+        CliContext context,
         string operation,
         NotifyOptions options,
         SessionLayerModeResolution resolution,
         SessionLayerPreflightResult preflight,
         string? reportAdvisory = null,
         NotifyReportOutboxEntry? existingOutbox = null,
-        string? reportRoot = null)
+        string? reportRoot = null,
+        bool hostExecutionSeat = false)
     {
         var isReport = string.Equals(operation, OperationReport, StringComparison.Ordinal)
             || string.Equals(operation, OperationCollect, StringComparison.Ordinal);
@@ -1501,7 +1510,14 @@ internal static class NotifyCommand
             return 1;
         }
 
-        if (delivery.ReaderPath is not null && senderLocalReport && options.Write)
+        // G731: the routing fault is decided by measurement, not by the shape
+        // of the roots. A process running from the host routing root itself is
+        // not a sandboxed seat, so it attempts the append and only fails when
+        // the write to the exact reader path actually fails.
+        if (delivery.ReaderPath is not null
+            && senderLocalReport
+            && options.Write
+            && !(hostExecutionSeat || IsWriterPathWritable(delivery.ReaderPath)))
         {
             if (reportOutbox is not null)
             {
@@ -1516,7 +1532,9 @@ internal static class NotifyCommand
                 options,
                 resolution.Mode,
                 "report-routing-root-write-required",
-                $"Report delivery resolved an external reader at '{delivery.ReaderPath}', which is under the host routing root and cannot be written from this sandboxed seat. Provision the recipient through herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is retained at '{outboxEntryPath}'. This is a delegation-level routing fault, not an implementation-seat stall.",
+                $"Report delivery resolved an external reader at '{delivery.ReaderPath}' and the probe write to that exact reader path failed. "
+                + "Provision the recipient through herdr/agmsg or route a narrowly writable reader root; the sender-local report handoff is retained at "
+                + $"'{outboxEntryPath}'. This is a delegation-level routing fault, not an implementation-seat stall.",
                 payload,
                 reportCommand,
                 modeSource: resolution.Source == SessionLayerModeSource.Recorded ? "recorded" : "default",
@@ -1724,6 +1742,45 @@ internal static class NotifyCommand
         string routingRoot) => senderLocalReport
             ? $"{summary} Sender-local report handoff persisted under '{reportRoot}'; no host-root write was required. Host routing state at '{routingRoot}' remains for orchestration reconciliation."
             : summary;
+
+    /// <summary>
+    /// G731: a routing fault may only be raised after the command has actually
+    /// encountered the constraint it reports. The probe is a real open for
+    /// write on the exact reader file that would be appended. When the probe
+    /// is not overridden, this reads the current process's real filesystem
+    /// access — a sandbox that blocks the append blocks this open, and a host
+    /// that can write it passes. No sandbox constraint is ever asserted from
+    /// the shape of the arguments.
+    /// </summary>
+    internal static Func<string, bool>? RoutingRootWriteProbe { get; set; }
+
+    private static bool IsWriterPathWritable(string path)
+    {
+        if (RoutingRootWriteProbe is { } probe)
+        {
+            return probe(path);
+        }
+
+        try
+        {
+            var directory = Path.GetDirectoryName(path);
+            if (directory is not null)
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            using var stream = new FileStream(
+                path,
+                FileMode.OpenOrCreate,
+                FileAccess.Write,
+                FileShare.None);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     private static bool PathsEqual(string left, string right) =>
         string.Equals(

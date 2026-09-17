@@ -2,3 +2,5 @@
 **/obj/
 .takt/runs/
 .intent-cli/worktrees/
+.intent-cli/supervision/**/cycles.jsonl
+.intent-cli/supervision/**/stalls.jsonl
