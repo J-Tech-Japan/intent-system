@@ -710,74 +710,7 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         return process!;
     }
 
-    [Fact]
-    public async Task WaitUntilAsync_UsesMonotonicDeadlineAndRetriesAThrowingPredicate()
-    {
-        var attempts = 0;
-        await WaitUntilAsync(
-            () =>
-            {
-                attempts++;
-                if (attempts < 4)
-                {
-                    throw new IOException($"transient read failure {attempts}");
-                }
-
-                return true;
-            },
-            TimeSpan.FromSeconds(10));
-
-        Assert.Equal(4, attempts);
-
-        var alwaysThrowingAttempts = 0;
-        var failure = await Record.ExceptionAsync(() => WaitUntilAsync(
-            () =>
-            {
-                alwaysThrowingAttempts++;
-                throw new InvalidOperationException("predicate never succeeds");
-            },
-            TimeSpan.FromMilliseconds(120)));
-
-        Assert.NotNull(failure);
-        var message = failure!.Message;
-        Assert.Contains("elapsed_ms=", message, StringComparison.Ordinal);
-        Assert.Contains("passes=", message, StringComparison.Ordinal);
-        Assert.Contains("predicate never succeeds", message, StringComparison.Ordinal);
-        Assert.True(alwaysThrowingAttempts >= 1);
-    }
-
-    [Fact]
-    public void DescribeLiveFixture_SeparatesStarvationFromAStoppedSupervisor()
-    {
-        var currentProcess = Process.GetCurrentProcess();
-        var runningState = currentProcess.HasExited
-            ? $"exited:{currentProcess.ExitCode}"
-            : "running";
-        Assert.Equal(
-            "supervisor_process=running; cycles_lines=0; cycles_last=<none>",
-            DescribeLiveFixture(runningState, Path.Combine(root, "missing-cycles.jsonl")));
-
-        var cyclesPath = Path.Combine(root, "cycles.jsonl");
-        File.WriteAllLines(cyclesPath, ["line-1", "line-2", "line-3"]);
-        Assert.Equal(
-            "supervisor_process=running; cycles_lines=3; cycles_last=line-3",
-            DescribeLiveFixture(runningState, cyclesPath));
-
-        using var child = Process.Start(new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            Arguments = "--version",
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-        });
-        Assert.NotNull(child);
-        child.WaitForExit();
-        var exitedState = child.HasExited ? $"exited:{child.ExitCode}" : "running";
-        Assert.StartsWith("supervisor_process=exited:", DescribeLiveFixture(exitedState, cyclesPath));
-        Assert.Contains("cycles_lines=3", DescribeLiveFixture(exitedState, cyclesPath));
-    }
-
-    private static string DescribeLiveFixture(string processState, string cyclesPath)
+    internal static string DescribeLiveFixture(string processState, string cyclesPath)
     {
         string cyclesLast = "<none>";
         var cyclesLines = 0;
@@ -800,7 +733,7 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         return $"supervisor_process={processState}; cycles_lines={cyclesLines}; cycles_last={cyclesLast}";
     }
 
-    private static async Task WaitUntilAsync(
+    internal static async Task WaitUntilAsync(
         Func<bool> predicate,
         TimeSpan timeout,
         Func<string>? diagnostics = null,
