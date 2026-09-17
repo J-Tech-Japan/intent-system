@@ -64,6 +64,34 @@ public sealed class SharedStaticSeamSerializationMetaTests
                 typeof(AutomationStalledWorkG805Tests),
                 typeof(GitHubApiReadG674Tests)),
             new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.PacketFileReader.ReadAllBytes",
+                typeof(G841Ac15Tests),
+                typeof(G841CrossRuntimeReviewTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.PacketFileReader.ReadAllBytes",
+                typeof(G841CrossRuntimeReviewTests),
+                typeof(G841DegradeSiteWorkerTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.PacketFileReader.ReadAllBytes",
+                typeof(G841CrossRuntimeReviewTests),
+                typeof(G841PacketDraftTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.PacketFileReader.ReadAllBytes",
+                typeof(G841CrossRuntimeReviewTests),
+                typeof(G841PublishFlowTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.PacketFileReader.ReadAllText",
+                typeof(G841Ac15Tests),
+                typeof(G841CrossRuntimeReviewTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.PacketFileReader.ReadAllText",
+                typeof(G841CrossRuntimeReviewTests),
+                typeof(G841DegradeSiteWorkerTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.PacketFileReader.ReadAllText",
+                typeof(G841CrossRuntimeReviewTests),
+                typeof(G841PacketDraftTests)),
+            new SplitCollectionCase(
                 "IntentSystem.Cli.Commands.PacketFileReader.ReadAllText",
                 typeof(G841CrossRuntimeReviewTests),
                 typeof(G841PublishFlowTests)),
