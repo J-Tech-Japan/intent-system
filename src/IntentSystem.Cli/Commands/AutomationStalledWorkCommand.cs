@@ -3835,7 +3835,7 @@ internal static class AutomationStalledWorkCommand
         {
             packetText = File.ReadAllText(packetPath);
         }
-        catch (Exception exception) when (exception is IOException or FormatException)
+        catch (Exception exception) when (exception is IOException or FormatException or UnauthorizedAccessException)
         {
             return false;
         }

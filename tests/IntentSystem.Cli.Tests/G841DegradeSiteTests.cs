@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -584,24 +585,54 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
     [Fact]
     public void Site6_StalledWork_UnreadablePacket_DoesNotCrash_ExitZero_G841D4()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("chmod 000 unreadable-packet fixture requires Unix file permissions.");
+        }
+
+        var idInfo = new ProcessStartInfo("id")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        idInfo.ArgumentList.Add("-u");
+        using var idProcess = Process.Start(idInfo)!;
+        var effectiveUserId = idProcess.StandardOutput.ReadToEnd().Trim();
+        idProcess.WaitForExit();
+        if (idProcess.ExitCode != 0 || string.Equals(effectiveUserId, "0", StringComparison.Ordinal))
+        {
+            throw Xunit.Sdk.SkipException.ForSkip(
+                "chmod 000 unreadable-packet fixture cannot prove denial while running as root.");
+        }
+
         using var workspace = new G841DegradeWorkspace();
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S6-UNR", G841DegradeFixtures.PacketYaml("LE"));
         var packetPath = G841DegradeWorkspace.PacketPath(workspace.Root, "G841-S6-UNR");
-        Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
-        Directory.CreateDirectory(packetPath);
         G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S6-LE", G841DegradeFixtures.PacketYaml("LE"));
         workspace.WriteQueueState(G841DegradeFixtures.BacklogBlockedDuplicateQueueState("G841-S6-UNR", "G841-S6-LE"));
         var mergedPr = G841DegradeFixtures.BuildMergedPr(1200, 1199);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new StalledWorkFakeLister(mergedPrs: [mergedPr]);
 
-        using var writer = new StringWriter();
-        var exitCode = AutomationStalledWorkCommand.Execute(
-            workspace.Context,
-            ["--domain", G841TestHelpers.Domain, "--repo", G841TestHelpers.Repo, "--format", "json"],
-            writer);
+        try
+        {
+            File.SetUnixFileMode(packetPath, UnixFileMode.None);
+            Assert.False(G841TestHelpers.CanRead(packetPath));
 
-        Assert.Equal(0, exitCode);
-        using var doc = JsonDocument.Parse(writer.ToString());
-        Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
+            using var writer = new StringWriter();
+            var exitCode = AutomationStalledWorkCommand.Execute(
+                workspace.Context,
+                ["--domain", G841TestHelpers.Domain, "--repo", G841TestHelpers.Repo, "--format", "json"],
+                writer);
+
+            Assert.Equal(0, exitCode);
+            using var doc = JsonDocument.Parse(writer.ToString());
+            Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
+        }
+        finally
+        {
+            G841TestHelpers.RestorePacketPermissions(packetPath);
+        }
     }
 
     [Fact]

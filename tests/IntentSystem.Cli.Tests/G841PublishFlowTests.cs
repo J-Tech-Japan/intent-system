@@ -277,15 +277,26 @@ public sealed class G841PublishFlowTests : IDisposable
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
         IssuePublishFlowCommand.BeforeLookupSnapshotHook = () =>
             File.WriteAllBytes(packetYamlPath, Encoding.UTF8.GetBytes(G841TestHelpers.UnparseableYaml));
+        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+        var expectedError = PacketYamlParseMessages.ComposePublishFlowParseDetail(
+            packetYamlPath,
+            parseError!,
+            changedAfterFirstRead: true);
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
 
         var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: true);
         Assert.Equal(1, exit);
         using var json = JsonDocument.Parse(output);
         Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, json.RootElement.GetProperty("cause").GetString());
-        Assert.Contains("changed after it was first read", json.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+        Assert.Equal(expectedError, json.RootElement.GetProperty("error").GetString());
         Assert.False(json.RootElement.GetProperty("created").GetBoolean());
         Assert.Equal(Title, json.RootElement.GetProperty("title").GetString());
         Assert.Equal(IssuePublishFlowCommand.TitleSourcePacketYaml, json.RootElement.GetProperty("title_source").GetString());
+        AssertPacketRefusalDesignReviewField(
+            json.RootElement.GetProperty("cross_runtime_design_review"),
+            CrossRuntimeReviewCauses.PacketInvalid,
+            expectedReviewDetail);
         AssertZeroCreates();
         Assert.Equal(0, checker.CallCount);
         workspace.AssertDurableBaselineUntouched(Unit);
@@ -298,18 +309,30 @@ public sealed class G841PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo);
         workspace.SeedQueueState(Unit, Title);
         workspace.CaptureDurableBaseline();
+        var packetYamlPath = workspace.PacketYamlPath(Unit);
         var checker = new RecordingExistingIssueChecker(defaultChecker);
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
-        PacketFileReader.ReadAllBytes = _ => throw new UnauthorizedAccessException("Access to the path is denied.");
+        const string deniedMessage = "Access to the path is denied.";
+        PacketFileReader.ReadAllBytes = _ => throw new UnauthorizedAccessException(deniedMessage);
+        var expectedError = PacketYamlParseMessages.ComposePublishFlowReadDetail(
+            packetYamlPath,
+            deniedMessage,
+            changedAfterFirstRead: true);
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = $"packet '{relativePacketPath}' could not be read: {deniedMessage}";
 
         var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: true);
         Assert.Equal(1, exit);
         using var json = JsonDocument.Parse(output);
         Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable, json.RootElement.GetProperty("cause").GetString());
-        Assert.Contains("changed after it was first read", json.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+        Assert.Equal(expectedError, json.RootElement.GetProperty("error").GetString());
         Assert.False(json.RootElement.GetProperty("created").GetBoolean());
         Assert.Equal(Title, json.RootElement.GetProperty("title").GetString());
         Assert.Equal(IssuePublishFlowCommand.TitleSourcePacketYaml, json.RootElement.GetProperty("title_source").GetString());
+        AssertPacketRefusalDesignReviewField(
+            json.RootElement.GetProperty("cross_runtime_design_review"),
+            CrossRuntimeReviewCauses.PacketUnreadable,
+            expectedReviewDetail);
         AssertZeroCreates();
         Assert.Equal(0, checker.CallCount);
         workspace.AssertDurableBaselineUntouched(Unit);
@@ -320,11 +343,17 @@ public sealed class G841PublishFlowTests : IDisposable
     {
         var packetBytes = Encoding.UTF8.GetBytes(G841TestHelpers.UnparseableYaml);
         var bodyBytes = Encoding.UTF8.GetBytes(G841TestHelpers.MinimalContractBody("Borrowed H1"));
+        var packetYamlPath = G841TestHelpers.PacketPath(root, Unit);
+        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+        var expectedMessage = PacketYamlParseMessages.ComposePublishFlowParseDetail(
+            packetYamlPath,
+            parseError!,
+            changedAfterFirstRead: true);
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
-            IssuePublishFlowCommand.ResolveTitleWithSourceFromSnapshot(Unit, packetBytes, bodyBytes));
+            IssuePublishFlowCommand.ResolveTitleWithSourceFromSnapshot(Unit, packetYamlPath, packetBytes, bodyBytes));
 
-        Assert.Contains("changed after it was first read", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(expectedMessage, exception.Message);
         Assert.DoesNotContain(IssuePublishFlowCommand.TitleSourceGithubBodyH1, exception.Message, StringComparison.Ordinal);
     }
 
@@ -390,6 +419,29 @@ public sealed class G841PublishFlowTests : IDisposable
     }
 
     private void AssertZeroCreates() => Assert.Equal(0, throwingCreator.CallCount);
+
+    private static void AssertPacketRefusalDesignReviewField(
+        JsonElement review,
+        string expectedCause,
+        string expectedDetail)
+    {
+        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, review.GetProperty("decision").GetString());
+        Assert.Equal(expectedCause, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.Equal(expectedDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
+        AssertJsonAbsentOrNull(review, "digest");
+        AssertJsonAbsentOrNull(review, "domain");
+        AssertJsonAbsentOrNull(review, "team");
+    }
+
+    private static void AssertJsonAbsentOrNull(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var value))
+        {
+            return;
+        }
+
+        Assert.True(value.ValueKind is JsonValueKind.Null);
+    }
 
     private void WriteUngatedPacket(string yaml) =>
         G841TestHelpers.WritePacketFiles(root, Unit, yaml, withContractBody: false);

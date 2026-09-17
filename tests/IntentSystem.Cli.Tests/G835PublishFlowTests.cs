@@ -533,6 +533,7 @@ public sealed class G835PublishFlowTests : IDisposable
         var expectedBodyBytes = File.ReadAllBytes(workspace.GithubBodyPath(Unit));
         var expectedTitle = IssuePublishFlowCommand.ResolveLookupTitle(
             Unit,
+            packetYamlPath,
             File.ReadAllBytes(packetYamlPath),
             expectedBodyBytes);
         var recorder = new RecordingIssueCreator($"https://github.com/{Repo}/issues/835");
@@ -560,7 +561,11 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, Repo, bodyTitle: Title("renamed"));
         workspace.RecordSatisfiedDesignReviews(Unit);
         var reviewed = names.ToDictionary(name => name, name => File.ReadAllBytes(Path.Combine(directory, name)));
-        var expectedTitle = IssuePublishFlowCommand.ResolveLookupTitle(Unit, reviewed["packet.yaml"], reviewed["github-body.md"]);
+        var expectedTitle = IssuePublishFlowCommand.ResolveLookupTitle(
+            Unit,
+            Path.Combine(directory, "packet.yaml"),
+            reviewed["packet.yaml"],
+            reviewed["github-body.md"]);
 
         // Analysis reads the original title; the reviewed bytes land before the lookup snapshot.
         workspace.WriteFullPacket(Unit, Repo);

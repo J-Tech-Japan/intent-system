@@ -465,6 +465,7 @@ internal static class IssuePublishFlowCommand
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
+                    var relativePacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml";
                     var snapshotRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                         packetExists: true,
                         githubBodyPresent: true,
@@ -481,7 +482,9 @@ internal static class IssuePublishFlowCommand
                         error: PacketYamlParseMessages.ComposePublishFlowReadDetail(packetYamlPath, exception.Message, changedAfterFirstRead: true),
                         titleSource: titleSource,
                         cause: PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable,
-                        crossRuntimeDesignReview: BuildResolutionRefusalField(gatedPublishResolution));
+                        crossRuntimeDesignReview: BuildPacketRefusalDesignReviewField(
+                            CrossRuntimeReviewCauses.PacketUnreadable,
+                            $"packet '{relativePacketPath}' could not be read: {exception.Message}"));
                     EmitResult(writer, snapshotRefusal, format);
                     return 1;
                 }
@@ -491,10 +494,17 @@ internal static class IssuePublishFlowCommand
                 lookupBody = DecodePacketText(lookupSnapshotGithubBody);
                 try
                 {
-                    lookupTitle = ResolveLookupTitle(executionUnit!, lookupSnapshotPacketYaml, lookupSnapshotGithubBody);
+                    lookupTitle = ResolveLookupTitle(
+                        executionUnit!,
+                        packetYamlPath,
+                        lookupSnapshotPacketYaml,
+                        lookupSnapshotGithubBody);
                 }
                 catch (InvalidOperationException exception)
                 {
+                    var relativePacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml";
+                    var packetText = DecodePacketText(lookupSnapshotPacketYaml);
+                    PacketYamlDocument.TryParseWithLocation(packetText, out _, out var parseError);
                     var snapshotRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                         packetExists: true,
                         githubBodyPresent: true,
@@ -511,7 +521,9 @@ internal static class IssuePublishFlowCommand
                         error: exception.Message,
                         titleSource: titleSource,
                         cause: PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable,
-                        crossRuntimeDesignReview: BuildResolutionRefusalField(gatedPublishResolution));
+                        crossRuntimeDesignReview: BuildPacketRefusalDesignReviewField(
+                            CrossRuntimeReviewCauses.PacketInvalid,
+                            PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!)));
                     EmitResult(writer, snapshotRefusal, format);
                     return 1;
                 }
@@ -1660,6 +1672,23 @@ internal static class IssuePublishFlowCommand
         };
     }
 
+    private static CrossRuntimeDesignReviewField BuildPacketRefusalDesignReviewField(string cause, string detail) =>
+        new()
+        {
+            Decision = CrossRuntimeReviewGate.DecisionBlocked,
+            Reasons =
+            [
+                new CrossRuntimeReviewGateReason
+                {
+                    Cause = cause,
+                    Detail = detail,
+                },
+            ],
+            Digest = null,
+            Domain = null,
+            Team = null,
+        };
+
     private static CrossRuntimeDesignReviewField? BuildTitleRefusalDesignReviewField(
         CliContext context,
         string executionUnit,
@@ -1801,7 +1830,11 @@ internal static class IssuePublishFlowCommand
         }
 
         var packet = new CrossRuntimeDesignReviewDigest.PacketBytes(packetYaml, githubBody, reviewContext, implementation);
-        var createTitle = ResolveLookupTitle(executionUnit, packetYaml, githubBody);
+        var createTitle = ResolveLookupTitle(
+            executionUnit,
+            Path.Combine(packetDirectory, "packet.yaml"),
+            packetYaml,
+            githubBody);
 
         if (!QueueStateContainsExecutionUnit(queueStatePath, executionUnit))
         {
@@ -2379,14 +2412,23 @@ internal static class IssuePublishFlowCommand
         return Encoding.UTF8.GetString(bytes);
     }
 
-    internal static string ResolveLookupTitle(string executionUnit, byte[] packetYamlBytes, byte[] githubBodyBytes)
+    internal static string ResolveLookupTitle(
+        string executionUnit,
+        string packetYamlPath,
+        byte[] packetYamlBytes,
+        byte[] githubBodyBytes)
     {
-        var (resolvedTitle, _) = ResolveTitleWithSourceFromSnapshot(executionUnit, packetYamlBytes, githubBodyBytes);
+        var (resolvedTitle, _) = ResolveTitleWithSourceFromSnapshot(
+            executionUnit,
+            packetYamlPath,
+            packetYamlBytes,
+            githubBodyBytes);
         return FormatIssueTitle(executionUnit, resolvedTitle);
     }
 
     internal static (string Title, string Source) ResolveTitleWithSourceFromSnapshot(
         string executionUnit,
+        string packetYamlPath,
         byte[] packetYamlBytes,
         byte[] githubBodyBytes)
     {
@@ -2395,7 +2437,7 @@ internal static class IssuePublishFlowCommand
         {
             throw new InvalidOperationException(parseError is null
                 ? "packet.yaml could not be parsed."
-                : PacketYamlParseMessages.ComposePublishFlowParseDetail("packet.yaml", parseError, changedAfterFirstRead: true));
+                : PacketYamlParseMessages.ComposePublishFlowParseDetail(packetYamlPath, parseError, changedAfterFirstRead: true));
         }
 
         foreach (var key in PacketTitleKeys)
