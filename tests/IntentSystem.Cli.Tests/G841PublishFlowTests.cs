@@ -266,6 +266,67 @@ public sealed class G841PublishFlowTests : IDisposable
     // ── AC14b snapshot path ────────────────────────────────────────────
 
     [Fact]
+    public void PublishFlow_Gated_LiveTitleRace_UnparseableThenValid_KeepsPacketInvalidInNestedField_G841R2()
+    {
+        using var workspace = new G841PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, G841TestHelpers.Repo);
+        workspace.WriteIncompleteGithubBody();
+        var packetPath = workspace.PacketYamlPath(Unit);
+        var reads = 0;
+        PacketFileReader.ReadAllText = path =>
+        {
+            if (string.Equals(path, packetPath, StringComparison.Ordinal)
+                && Interlocked.Increment(ref reads) == 1)
+            {
+                return G841TestHelpers.UnparseableYaml;
+            }
+
+            return File.ReadAllText(path);
+        };
+
+        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, json.RootElement.GetProperty("cause").GetString());
+        var review = json.RootElement.GetProperty("cross_runtime_design_review");
+        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, review.GetProperty("decision").GetString());
+        Assert.Equal(
+            CrossRuntimeReviewCauses.PacketInvalid,
+            review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.NotEqual(CrossRuntimeReviewCauses.TargetRepoMismatch, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+    }
+
+    [Fact]
+    public void PublishFlow_Gated_LiveTitleRace_UnreadableThenReadable_KeepsPacketUnreadableInNestedField_G841R2()
+    {
+        using var workspace = new G841PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, G841TestHelpers.Repo);
+        workspace.WriteIncompleteGithubBody();
+        var packetPath = workspace.PacketYamlPath(Unit);
+        var reads = 0;
+        PacketFileReader.ReadAllText = path =>
+        {
+            if (string.Equals(path, packetPath, StringComparison.Ordinal)
+                && Interlocked.Increment(ref reads) == 1)
+            {
+                throw new UnauthorizedAccessException("Access to the path is denied.");
+            }
+
+            return File.ReadAllText(path);
+        };
+
+        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable, json.RootElement.GetProperty("cause").GetString());
+        var review = json.RootElement.GetProperty("cross_runtime_design_review");
+        Assert.Equal(
+            CrossRuntimeReviewCauses.PacketUnreadable,
+            review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.NotEqual(CrossRuntimeReviewCauses.TargetRepoMismatch, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+    }
+
+    [Fact]
     public void PublishFlow_Gated_SnapshotUnparseable_RefusesAfterFirstRead_G841Ac14b()
     {
         using var workspace = new G841PublishFlowWorkspace(declare: true);

@@ -4136,7 +4136,7 @@ internal static class AutomationStalledWorkCommand
             {
                 declaration = KnowledgeWriteBackDeclaration.Read(File.ReadAllText(packetYamlPath));
             }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
             {
                 excluded.Add(new StalledWorkExcluded
                 {
@@ -4458,7 +4458,7 @@ internal static class AutomationStalledWorkCommand
             {
                 declaration = GuideReachabilityDeclaration.Read(File.ReadAllText(packetYamlPath));
             }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
             {
                 excluded.Add(new StalledWorkExcluded
                 {
@@ -4737,7 +4737,19 @@ internal static class AutomationStalledWorkCommand
         {
             return null;
         }
-        if (!PacketYamlDocument.TryParse(File.ReadAllText(packetYamlPath), out var document, out var parseError)
+
+        string packetText;
+        try
+        {
+            packetText = File.ReadAllText(packetYamlPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            PacketParseWarningTracker?.RecordReadWarning(packetYamlPath, exception.Message);
+            return null;
+        }
+
+        if (!PacketYamlDocument.TryParse(packetText, out var document, out var parseError)
             || document is null)
         {
             PacketParseWarningTracker?.RecordWarning(packetYamlPath, parseError);
@@ -4944,7 +4956,18 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            if (!PacketYamlDocument.TryParse(File.ReadAllText(packetYamlPath), out var document, out var parseError)
+            string packetText;
+            try
+            {
+                packetText = File.ReadAllText(packetYamlPath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                PacketParseWarningTracker?.RecordReadWarning(packetYamlPath, exception.Message);
+                continue;
+            }
+
+            if (!PacketYamlDocument.TryParse(packetText, out var document, out var parseError)
                 || document is null)
             {
                 PacketParseWarningTracker?.RecordWarning(packetYamlPath, parseError);

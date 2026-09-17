@@ -762,7 +762,7 @@ internal static class PacketDraftCommand
                 .Where(value => value.Length > 0)
                 .ToArray();
         }
-        catch (YamlDotNet.Core.YamlException)
+        catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidOperationException)
         {
             return Array.Empty<string>();
         }

@@ -751,6 +751,47 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
     }
 
     [Fact]
+    public void Site7_StalledWork_UnreadablePacket_CloseoutRecorded_DegradesWithWarning_G841R2()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("chmod 000 unreadable-packet fixture requires Unix file permissions.");
+        }
+
+        if (!G841TestHelpers.IsNonRootUnixUser())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip(
+                "chmod 000 unreadable-packet fixture cannot prove denial while running as root.");
+        }
+
+        using var workspace = new G841DegradeWorkspace();
+        workspace.WriteDeclaringPacket("G841-S7-UNR");
+        workspace.WriteCloseout("G841-S7-UNR", FixedNow.AddMinutes(-90));
+        var packetPath = G841DegradeWorkspace.PacketPath(workspace.Root, "G841-S7-UNR");
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new StalledWorkFakeLister();
+        using var unreadable = G841TestHelpers.UnreadablePacket(
+            packetPath,
+            static () => { },
+            static () => { },
+            out _);
+        Assert.False(G841TestHelpers.CanRead(packetPath));
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", G841TestHelpers.Domain, "--repo", G841TestHelpers.Repo, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            [G841DegradeFixtures.ExpectedUnreadableWarning(workspace.Root, "G841-S7-UNR")],
+            doc.RootElement.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray());
+        Assert.Contains(doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            e => e.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable);
+    }
+
+    [Fact]
     public void Site7_StalledWork_Ed_CloseoutRecorded_NoParseWarning()
     {
         using var workspace = new G841DegradeWorkspace();
@@ -816,6 +857,52 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
         Assert.Equal(
             [G841DegradeFixtures.ExpectedParseWarning(workspace.Root, "G841-S8-SU")],
             warnings);
+    }
+
+    [Fact]
+    public void Site8_StalledWork_UnreadablePacket_SkippedWithWarning_PreservesAmbiguousFinding_G841R2()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("chmod 000 unreadable-packet fixture requires Unix file permissions.");
+        }
+
+        if (!G841TestHelpers.IsNonRootUnixUser())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip(
+                "chmod 000 unreadable-packet fixture cannot prove denial while running as root.");
+        }
+
+        using var workspace = new G841DegradeWorkspace();
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S8-UNR", G841DegradeFixtures.PacketYaml("LE"));
+        workspace.WriteNestedPacket("G12", G841TestHelpers.Domain);
+        workspace.WriteNestedPacket("G34", G841TestHelpers.Domain);
+        var unreadablePath = G841DegradeWorkspace.PacketPath(workspace.Root, "G841-S8-UNR");
+        IReadOnlyList<GitHubAutomationIssueCandidate> issues =
+        [
+            G841DegradeFixtures.BuildIssue(1934, "Combine G12 and G34 into one follow-up", FixedNow.AddHours(-26), "intent-target"),
+        ];
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new StalledWorkFakeLister(issues: issues);
+        using var unreadable = G841TestHelpers.UnreadablePacket(
+            unreadablePath,
+            static () => { },
+            static () => { },
+            out _);
+        Assert.False(G841TestHelpers.CanRead(unreadablePath));
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", G841TestHelpers.Domain, "--repo", G841TestHelpers.Repo, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            [G841DegradeFixtures.ExpectedUnreadableWarning(workspace.Root, "G841-S8-UNR")],
+            doc.RootElement.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray());
+        Assert.Contains(doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            e => e.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonExecutionUnitAmbiguous);
     }
 
     [Fact]

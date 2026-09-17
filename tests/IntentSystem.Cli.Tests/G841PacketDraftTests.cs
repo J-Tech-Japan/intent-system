@@ -73,6 +73,26 @@ public sealed class G841PacketDraftTests : IDisposable
     }
 
     [Fact]
+    public void PacketDraft_UnterminatedFlowSequence_RefusesWithPacketYamlUnparseable_G841R2()
+    {
+        WritePacket(G841TestHelpers.UnterminatedFlowSequenceYaml);
+        WriteBorrowedGithubBody();
+        Assert.False(PacketYamlDocument.TryParse(G841TestHelpers.UnterminatedFlowSequenceYaml, out _, out var tryParseError));
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            var stream = new YamlDotNet.RepresentationModel.YamlStream();
+            stream.Load(new StringReader(G841TestHelpers.UnterminatedFlowSequenceYaml));
+        });
+
+        var (exitCode, json) = RunPacketDraftDryRun();
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable,
+            RefusalReasons(json)[0]);
+        Assert.False(json.RootElement.GetProperty("contract_publishable").GetBoolean());
+    }
+
+    [Fact]
     public void PacketDraft_ReadIntentReferencesRace_RefusesWithoutPreCheck_G841D7()
     {
         WritePacket(G841TestHelpers.LegacyEquivalentPacket());

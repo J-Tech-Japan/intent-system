@@ -257,7 +257,8 @@ internal static class IssuePublishFlowCommand
                     error: titleRefusalDetail,
                     titleSource: null,
                     cause: titleRefusalCause,
-                    crossRuntimeDesignReview: BuildTitleRefusalDesignReviewField(context, executionUnit!, repo!));
+                    crossRuntimeDesignReview: BuildTitleRefusalDesignReviewField(
+                        context, executionUnit!, repo!, titleRefusalCause!, titleRefusalDetail!));
                 EmitResult(writer, titleRefusalResult, format);
                 return 1;
             }
@@ -1718,16 +1719,35 @@ internal static class IssuePublishFlowCommand
     private static CrossRuntimeDesignReviewField? BuildTitleRefusalDesignReviewField(
         CliContext context,
         string executionUnit,
-        string repo)
+        string repo,
+        string titleRefusalCause,
+        string titleRefusalDetail)
     {
         if (!context.Config.CrossRuntimeReview.IsGatedRepo(repo))
         {
             return null;
         }
 
-        var resolution = CrossRuntimeReviewPublishResolver.Resolve(
-            context.RepoRoot, executionUnit, repo, context.Config.CrossRuntimeReview);
-        return BuildResolutionRefusalField(resolution);
+        var crossRuntimeCause = titleRefusalCause switch
+        {
+            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable => CrossRuntimeReviewCauses.PacketUnreadable,
+            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable => CrossRuntimeReviewCauses.PacketInvalid,
+            _ => throw new InvalidOperationException($"unexpected title refusal cause: {titleRefusalCause}"),
+        };
+        var relativePacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml";
+        var crossRuntimeDetail = RewritePublishFlowPacketDetailForCrossRuntime(titleRefusalDetail, relativePacketPath);
+        return BuildPacketRefusalDesignReviewField(crossRuntimeCause, crossRuntimeDetail);
+    }
+
+    private static string RewritePublishFlowPacketDetailForCrossRuntime(
+        string publishFlowDetail,
+        string relativePacketPath)
+    {
+        const string marker = " could not be ";
+        var markerIndex = publishFlowDetail.IndexOf(marker, StringComparison.Ordinal);
+        return markerIndex < 0
+            ? publishFlowDetail
+            : $"packet '{relativePacketPath}'{publishFlowDetail[markerIndex..]}";
     }
 
     private static CrossRuntimeDesignReviewField EvaluateDeclaredDesignGate(

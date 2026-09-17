@@ -19,6 +19,17 @@ internal static class G841TestHelpers
     internal const string PlainColonLine = "  target_part: retire the reader: all eleven sites\n";
     internal const string UnparseableYaml = "implementation_issue_packet:\n  domain: intent-cli\n  broken: [\n";
 
+    internal const string UnterminatedFlowSequenceYaml =
+        """
+        implementation_issue_packet:
+          domain: intent-cli
+          target_repo: J-Tech-Japan/intent-system
+          dependencies: [G1, G2
+        knowledge_updates:
+          intent_tree:
+            required: true
+        """;
+
     // Base refusal literals captured from ba496314 (section 3 surfaces, non-packet branches).
     internal const string BaseTeamUnresolvedCause = "cross-runtime-review-team-unresolved";
     internal const string BaseQueueLinkageMissing = "queue-linkage";
@@ -199,6 +210,54 @@ internal static class G841TestHelpers
         {
             File.SetUnixFileMode(packetPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
+    }
+
+    internal static void DeleteDirectoryBestEffort(string path, int maxAttempts = 5)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                if (!Directory.Exists(path))
+                {
+                    return;
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            Thread.Sleep(50 * (attempt + 1));
+        }
+    }
+
+    internal static bool IsNonRootUnixUser()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        var idInfo = new System.Diagnostics.ProcessStartInfo("id")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        idInfo.ArgumentList.Add("-u");
+        using var idProcess = System.Diagnostics.Process.Start(idInfo)!;
+        var effectiveUserId = idProcess.StandardOutput.ReadToEnd().Trim();
+        idProcess.WaitForExit();
+        return idProcess.ExitCode == 0 && !string.Equals(effectiveUserId, "0", StringComparison.Ordinal);
     }
 
     internal static string ExpectedCrossRuntimeParseDetail(string relativePath, string yaml)

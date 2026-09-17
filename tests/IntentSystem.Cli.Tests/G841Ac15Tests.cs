@@ -575,6 +575,9 @@ public sealed class G841Ac15Tests : IDisposable
             RunGit("init -q");
             RunGit("config user.email test@example.com");
             RunGit("config user.name test");
+            RunGit("config gc.auto 0");
+            RunGit("config maintenance.auto false");
+            RunGit("config core.fsmonitor false");
             File.WriteAllText(Path.Combine(RepoRoot, "README.md"), "# seed\n");
             RunGit("add README.md");
             RunGit("commit -q -m seed");
@@ -607,13 +610,7 @@ public sealed class G841Ac15Tests : IDisposable
             File.WriteAllText(Path.Combine(dir, "github-body.md"), G841TestHelpers.MinimalContractBody());
         }
 
-        public void Dispose()
-        {
-            if (Directory.Exists(RepoRoot))
-            {
-                Directory.Delete(RepoRoot, recursive: true);
-            }
-        }
+        public void Dispose() => G841TestHelpers.DeleteDirectoryBestEffort(RepoRoot);
 
         private void RunGit(string arguments)
         {
