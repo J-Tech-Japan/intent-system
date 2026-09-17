@@ -96,7 +96,7 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
     // ── existing AC8 design status packet probes (preserved) ─────────────
 
     [Fact]
-    public void Record_Design_UnparseablePacket_RefusesPacketInvalidWithMissing()
+    public void Status_Design_UnparseablePacket_RefusesPacketInvalidWithMissing()
     {
         WritePacketYaml(G841TestHelpers.UnparseableYaml);
         var (exit, output) = Route(DesignStatusArgs());
@@ -108,7 +108,7 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
     }
 
     [Fact]
-    public void Record_Design_QuotedHashPacket_DoesNotRefusePacketInvalid()
+    public void Status_Design_QuotedHashPacket_DoesNotRefusePacketInvalid()
     {
         WritePacketYaml(
             """
@@ -128,9 +128,85 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
     }
 
     [Fact]
-    public void Record_Design_UnreadablePacket_RefusesPacketUnreadable()
+    public void Status_Design_UnreadablePacket_RefusesPacketUnreadable()
     {
         AssertUnreadableRefusal(DesignStatusArgs(), null, out _);
+    }
+
+    // ── AC4/AC5/AC6: command-level design record inventory rows ─────────
+
+    [Fact]
+    public void Record_Design_InventoryRow6_BlockScalarProse_DomainStaysIntentCli_G841Ac4()
+    {
+        ResetHappyPath();
+        RemoveClaim();
+        CrossRuntimeReviewTeamResolver.ClaimReader = null;
+        WritePacketYaml(
+            $"""
+            implementation_issue_packet:
+              issue_title: "G841 title"
+              domain: {Domain}
+              target_repo: {Repo}
+              notes: |
+                domain: sekiban-dcb-ts is what the prose says.
+            """);
+        var digest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDir());
+
+        var (exit, output) = Route(DesignRecordArgs(digest));
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(BaseTeamUnresolvedCause, json.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(BaseClaimTeamMissing, json.RootElement.GetProperty("resolution").GetProperty("missing").GetString());
+        Assert.Equal(Domain, json.RootElement.GetProperty("resolution").GetProperty("domain").GetString());
+        Assert.NotEqual("packet-invalid", json.RootElement.GetProperty("resolution").GetProperty("missing").GetString());
+    }
+
+    [Fact]
+    public void Record_Design_InventoryRow5_BlockScalarNoColon_DomainFromPacket_G841Ac5()
+    {
+        ResetHappyPath();
+        RemoveClaim();
+        CrossRuntimeReviewTeamResolver.ClaimReader = null;
+        WritePacketYaml(
+            $"""
+            implementation_issue_packet:
+              issue_title: "G841 title"
+              domain: {Domain}
+              target_repo: {Repo}
+              notes: |
+                A prose line with no colon.
+            """);
+        var digest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDir());
+
+        var (exit, output) = Route(DesignRecordArgs(digest));
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(BaseTeamUnresolvedCause, json.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(BaseClaimTeamMissing, json.RootElement.GetProperty("resolution").GetProperty("missing").GetString());
+        Assert.Equal(Domain, json.RootElement.GetProperty("resolution").GetProperty("domain").GetString());
+        Assert.NotEqual("packet-invalid", json.RootElement.GetProperty("resolution").GetProperty("missing").GetString());
+    }
+
+    [Fact]
+    public void Record_Design_InventoryRow13_DuplicateKey_RefusesPacketInvalid_G841Ac6()
+    {
+        ResetHappyPath();
+        const string duplicateYaml = """
+            implementation_issue_packet:
+              domain: intent-cli
+              domain: other-domain
+            """;
+        WritePacketYaml(duplicateYaml);
+        var digest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDir());
+        var expectedDetail = G841TestHelpers.ExpectedCrossRuntimeParseDetail(PacketRelativePath(), duplicateYaml);
+
+        var (exit, output) = Route(DesignRecordArgs(digest));
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        G841TestHelpers.AssertCrossRuntimeParseRefusal(json.RootElement, expectedDetail, PacketRelativePath());
+        Assert.False(PacketYamlDocument.TryParseWithLocation(duplicateYaml, out _, out var parseError));
+        Assert.Equal(3, parseError!.Line);
+        Assert.Equal(3, parseError.Column);
     }
 
     // ── AC8: five surfaces × packet refusal scenarios ────────────────────
@@ -495,7 +571,7 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
     {
         Ac8Surface.RecordImplementation => ImplementationRecordArgs(),
         Ac8Surface.StatusImplementation => ImplementationStatusArgs(),
-        Ac8Surface.RecordDesign => DesignRecordArgs(),
+        Ac8Surface.RecordDesign => DesignRecordArgs(CurrentDigest()),
         Ac8Surface.StatusDesign => DesignStatusArgs(),
         Ac8Surface.PrTransition => ["automation", "pr-transition", "--repo", Repo, "--pr", Pr.ToString(), "--transition", "approved", "--head-sha", Head, "--format", "json"],
         _ => throw new ArgumentOutOfRangeException(nameof(surface)),
@@ -577,17 +653,21 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
             "--format", "json",
         ];
 
-    private string[] DesignRecordArgs() =>
+    private string[] DesignRecordArgs(string packetDigest) =>
         [
             "review", "cross-runtime", "record",
             "--kind", "design",
             "--execution-unit", Unit,
-            "--packet-digest", "0000000000000000000000000000000000000000000000000000000000000000",
+            "--packet-digest", packetDigest,
             "--runtime", "codex",
             "--runtime-version", "codex-cli 0.154.0",
             "--verdict-file", verdictFile,
             "--format", "json",
         ];
+
+    private string PacketDir() => Path.GetDirectoryName(PacketPath())!;
+
+    private string CurrentDigest() => CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDir());
 
     private void WriteQueue(params (string Unit, string? LinkedPr)[] items)
     {

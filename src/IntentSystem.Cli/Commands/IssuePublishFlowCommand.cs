@@ -457,6 +457,7 @@ internal static class IssuePublishFlowCommand
             if (gatedPublishResolution.Resolved && gatedPublishResolution.Declared)
             {
                 var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+                var preSnapshotDigest = TryComputePacketDigest(packetDirectory);
                 BeforeLookupSnapshotHook?.Invoke();
                 byte[] packetBytes;
                 try
@@ -482,7 +483,9 @@ internal static class IssuePublishFlowCommand
                         error: PacketYamlParseMessages.ComposePublishFlowReadDetail(packetYamlPath, exception.Message, changedAfterFirstRead: true),
                         titleSource: titleSource,
                         cause: PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable,
-                        crossRuntimeDesignReview: BuildPacketRefusalDesignReviewField(
+                        crossRuntimeDesignReview: BuildSnapshotPacketRefusalDesignReviewField(
+                            gatedPublishResolution,
+                            preSnapshotDigest,
                             CrossRuntimeReviewCauses.PacketUnreadable,
                             $"packet '{relativePacketPath}' could not be read: {exception.Message}"));
                     EmitResult(writer, snapshotRefusal, format);
@@ -521,7 +524,9 @@ internal static class IssuePublishFlowCommand
                         error: exception.Message,
                         titleSource: titleSource,
                         cause: PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable,
-                        crossRuntimeDesignReview: BuildPacketRefusalDesignReviewField(
+                        crossRuntimeDesignReview: BuildSnapshotPacketRefusalDesignReviewField(
+                            gatedPublishResolution,
+                            preSnapshotDigest,
                             CrossRuntimeReviewCauses.PacketInvalid,
                             PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!)));
                     EmitResult(writer, snapshotRefusal, format);
@@ -1687,6 +1692,27 @@ internal static class IssuePublishFlowCommand
             Digest = null,
             Domain = null,
             Team = null,
+        };
+
+    private static CrossRuntimeDesignReviewField BuildSnapshotPacketRefusalDesignReviewField(
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution,
+        string? digest,
+        string cause,
+        string detail) =>
+        new()
+        {
+            Decision = CrossRuntimeReviewGate.DecisionBlocked,
+            Reasons =
+            [
+                new CrossRuntimeReviewGateReason
+                {
+                    Cause = cause,
+                    Detail = detail,
+                },
+            ],
+            Digest = digest,
+            Domain = resolution.Domain,
+            Team = resolution.Team,
         };
 
     private static CrossRuntimeDesignReviewField? BuildTitleRefusalDesignReviewField(

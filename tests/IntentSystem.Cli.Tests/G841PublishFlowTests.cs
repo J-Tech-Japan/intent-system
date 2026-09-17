@@ -284,6 +284,13 @@ public sealed class G841PublishFlowTests : IDisposable
             changedAfterFirstRead: true);
         var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
         var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        var preHookResolution = CrossRuntimeReviewPublishResolver.Resolve(
+            workspace.Context.RepoRoot,
+            Unit,
+            G841TestHelpers.Repo,
+            workspace.Context.Config.CrossRuntimeReview);
+        Assert.True(preHookResolution.Resolved && preHookResolution.Declared);
+        var preHookDigest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(workspace.PacketDirectory(Unit));
 
         var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: true);
         Assert.Equal(1, exit);
@@ -293,10 +300,13 @@ public sealed class G841PublishFlowTests : IDisposable
         Assert.False(json.RootElement.GetProperty("created").GetBoolean());
         Assert.Equal(Title, json.RootElement.GetProperty("title").GetString());
         Assert.Equal(IssuePublishFlowCommand.TitleSourcePacketYaml, json.RootElement.GetProperty("title_source").GetString());
-        AssertPacketRefusalDesignReviewField(
+        AssertSnapshotPacketRefusalDesignReviewField(
             json.RootElement.GetProperty("cross_runtime_design_review"),
             CrossRuntimeReviewCauses.PacketInvalid,
-            expectedReviewDetail);
+            expectedReviewDetail,
+            preHookResolution.Domain!,
+            preHookResolution.Team!,
+            preHookDigest);
         AssertZeroCreates();
         Assert.Equal(0, checker.CallCount);
         workspace.AssertDurableBaselineUntouched(Unit);
@@ -320,6 +330,13 @@ public sealed class G841PublishFlowTests : IDisposable
             changedAfterFirstRead: true);
         var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
         var expectedReviewDetail = $"packet '{relativePacketPath}' could not be read: {deniedMessage}";
+        var preHookResolution = CrossRuntimeReviewPublishResolver.Resolve(
+            workspace.Context.RepoRoot,
+            Unit,
+            G841TestHelpers.Repo,
+            workspace.Context.Config.CrossRuntimeReview);
+        Assert.True(preHookResolution.Resolved && preHookResolution.Declared);
+        var preHookDigest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(workspace.PacketDirectory(Unit));
 
         var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: true);
         Assert.Equal(1, exit);
@@ -329,10 +346,13 @@ public sealed class G841PublishFlowTests : IDisposable
         Assert.False(json.RootElement.GetProperty("created").GetBoolean());
         Assert.Equal(Title, json.RootElement.GetProperty("title").GetString());
         Assert.Equal(IssuePublishFlowCommand.TitleSourcePacketYaml, json.RootElement.GetProperty("title_source").GetString());
-        AssertPacketRefusalDesignReviewField(
+        AssertSnapshotPacketRefusalDesignReviewField(
             json.RootElement.GetProperty("cross_runtime_design_review"),
             CrossRuntimeReviewCauses.PacketUnreadable,
-            expectedReviewDetail);
+            expectedReviewDetail,
+            preHookResolution.Domain!,
+            preHookResolution.Team!,
+            preHookDigest);
         AssertZeroCreates();
         Assert.Equal(0, checker.CallCount);
         workspace.AssertDurableBaselineUntouched(Unit);
@@ -420,17 +440,20 @@ public sealed class G841PublishFlowTests : IDisposable
 
     private void AssertZeroCreates() => Assert.Equal(0, throwingCreator.CallCount);
 
-    private static void AssertPacketRefusalDesignReviewField(
+    private static void AssertSnapshotPacketRefusalDesignReviewField(
         JsonElement review,
         string expectedCause,
-        string expectedDetail)
+        string expectedDetail,
+        string expectedDomain,
+        string expectedTeam,
+        string expectedDigest)
     {
         Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, review.GetProperty("decision").GetString());
         Assert.Equal(expectedCause, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
         Assert.Equal(expectedDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
-        AssertJsonAbsentOrNull(review, "digest");
-        AssertJsonAbsentOrNull(review, "domain");
-        AssertJsonAbsentOrNull(review, "team");
+        Assert.Equal(expectedDigest, review.GetProperty("digest").GetString());
+        Assert.Equal(expectedDomain, review.GetProperty("domain").GetString());
+        Assert.Equal(expectedTeam, review.GetProperty("team").GetString());
     }
 
     private static void AssertJsonAbsentOrNull(JsonElement parent, string propertyName)
