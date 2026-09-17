@@ -1,0 +1,9 @@
+failed to confirm PR transition on PR #1823 in J-Tech-Japan/intent-system (the mutation may already have applied — do not assume it did not): simulated ambiguous gh API failure
+mode: write
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false
+may_have_applied: true
+intended_labels: intent-pr-request-update, intent-target
+recovery_command: gh pr view 1823 --repo J-Tech-Japan/intent-system --json labels

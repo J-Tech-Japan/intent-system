@@ -14,9 +14,7 @@ public sealed partial class G839RecoveryByteIdentityTests
     internal static string CaptureRecovery(string fixtureId, string executionUnit)
     {
         using var scope = new RecoverySeams();
-        using var workspace = fixtureId.StartsWith("recovery-host-state-missing", StringComparison.Ordinal)
-            ? new G839ByteIdentityHarness.RecoveryWorkspace()
-            : G839ByteIdentityHarness.CreateProceedWorkspace(executionUnit);
+        using var workspace = CreateRecoveryWorkspace(fixtureId, executionUnit);
         if (!fixtureId.StartsWith("recovery-host-state-missing", StringComparison.Ordinal))
         {
             SeedRecoveryGitHubFakes(workspace, executionUnit);
@@ -52,21 +50,25 @@ public sealed partial class G839RecoveryByteIdentityTests
                     new FakeIssueLookup(G839ByteIdentityHarness.ClosedIssue());
                 return;
             case "recovery-already-recovered-json":
+            case "recovery-already-recovered-markdown":
                 workspace.AppendRunEvent(G839ByteIdentityHarness.BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventRecovered, G839ByteIdentityHarness.Pr));
                 AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
                     new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-target"));
                 return;
             case "recovery-recovered-write-json":
+            case "recovery-recovered-write-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () =>
                     new RecordingLabelMutator("intent-target", "intent-pr-created");
                 return;
             case "recovery-event-completed-write-json":
+            case "recovery-event-completed-write-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
                     new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-target"));
                 AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () =>
                     new RecordingLabelMutator("intent-target");
                 return;
             case "recovery-recovery-completed-write-json":
+            case "recovery-recovery-completed-write-markdown":
                 workspace.AppendRunEvent(G839ByteIdentityHarness.BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, G839ByteIdentityHarness.Pr));
                 AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
                     new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-target"));
@@ -74,6 +76,7 @@ public sealed partial class G839RecoveryByteIdentityTests
                     new RecordingLabelMutator("intent-target");
                 return;
             case "recovery-closed-then-label-removed-write-json":
+            case "recovery-closed-then-label-removed-write-markdown":
                 workspace.AppendRunEvent(G839ByteIdentityHarness.BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, G839ByteIdentityHarness.Pr));
                 workspace.AppendRunEvent(G839ByteIdentityHarness.BuildRecoveryEvent(
                     AutomationPrCreatedStaleRecoveryCommand.EventAborted,
@@ -83,35 +86,77 @@ public sealed partial class G839RecoveryByteIdentityTests
                     new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-target"));
                 return;
             case "recovery-target-absent-refusal-json":
+            case "recovery-target-absent-refusal-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
                     new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-pr-created"));
                 return;
             case "recovery-pr-merged-refusal-json":
+            case "recovery-pr-merged-refusal-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
                     new FakePrLookup(G839ByteIdentityHarness.Merged(G839ByteIdentityHarness.Pr));
                 return;
+            case "recovery-issue-unavailable-refusal-json":
+            case "recovery-issue-unavailable-refusal-markdown":
+                AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
+                    new FakeIssueLookup(new InvalidOperationException("issue lookup failed"));
+                return;
+            case "recovery-pr-state-unavailable-refusal-json":
+            case "recovery-pr-state-unavailable-refusal-markdown":
+                AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
+                    new FakePrLookup(new InvalidOperationException("PR lookup failed"));
+                return;
+            case "recovery-open-pr-list-unavailable-refusal-json":
+            case "recovery-open-pr-list-unavailable-refusal-markdown":
+                AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = () =>
+                    new FakeLister(listFailure: new InvalidOperationException("gh pr list failed"));
+                return;
+            case "recovery-repo-mismatch-refusal-json":
+            case "recovery-repo-mismatch-refusal-markdown":
+                return;
+            case "recovery-pr-linkage-missing-refusal-json":
+            case "recovery-pr-linkage-missing-refusal-markdown":
+                return;
+            case "recovery-label-changed-refusal-write-json":
+            case "recovery-label-changed-refusal-write-markdown":
+            {
+                var labelMutator = new RecordingLabelMutator("intent-target", "intent-pr-created");
+                var issueLookup = new SequencedIssueLookup(
+                    G839ByteIdentityHarness.OpenIssue("intent-target", "intent-pr-created"),
+                    G839ByteIdentityHarness.OpenIssue("intent-target"));
+                AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () => labelMutator;
+                AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () => issueLookup;
+                labelMutator.Labels.Clear();
+                labelMutator.Labels.Add("intent-target");
+                return;
+            }
             case "recovery-recovered-event-append-failed-write-json":
+            case "recovery-recovered-event-append-failed-write-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () =>
                     new G839ByteIdentityHarness.ReadonlyAfterMutationLabelMutator(workspace, "intent-target", "intent-pr-created");
                 return;
             case "recovery-label-readback-unconfirmed-write-json":
+            case "recovery-label-readback-unconfirmed-write-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () =>
                     new G839ByteIdentityHarness.ReadbackUnconfirmedLabelMutator();
                 return;
             case "recovery-label-readback-failed-write-json":
+            case "recovery-label-readback-failed-write-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () =>
                     new G839ByteIdentityHarness.ThrowingReadbackLabelMutator("intent-target", "intent-pr-created");
                 return;
             case "recovery-label-removal-failed-write-json":
+            case "recovery-label-removal-failed-write-markdown":
                 AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () =>
                     new G839ByteIdentityHarness.ThrowingApplyLabelMutator("intent-target", "intent-pr-created");
                 return;
             case "recovery-started-event-append-failed-write-json":
+            case "recovery-started-event-append-failed-write-markdown":
                 G839ByteIdentityHarness.SetRunLogReadOnly(workspace.Context, readOnly: true);
                 AutomationPrCreatedStaleRecoveryCommand.LabelMutatorFactory = () =>
                     new RecordingLabelMutator("intent-target", "intent-pr-created");
                 return;
             case "recovery-superseded-event-append-failed-write-json":
+            case "recovery-superseded-event-append-failed-write-markdown":
                 workspace.AppendRunEvent(G839ByteIdentityHarness.BuildRecoveryEvent(AutomationPrCreatedStaleRecoveryCommand.EventStarted, 163));
                 G839ByteIdentityHarness.SetRunLogReadOnly(workspace.Context, readOnly: true);
                 AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
@@ -183,6 +228,28 @@ public sealed partial class G839RecoveryByteIdentityTests
                 throw new ArgumentOutOfRangeException(nameof(fixtureId), fixtureId, "unknown recovery scenario");
         }
     }
+    private static G839ByteIdentityHarness.RecoveryWorkspace CreateRecoveryWorkspace(string fixtureId, string executionUnit)
+    {
+        if (fixtureId.StartsWith("recovery-host-state-missing", StringComparison.Ordinal))
+        {
+            return new G839ByteIdentityHarness.RecoveryWorkspace();
+        }
+
+        if (fixtureId.StartsWith("recovery-repo-mismatch-refusal-", StringComparison.Ordinal))
+        {
+            return G839ByteIdentityHarness.CreateProceedWorkspace(
+                executionUnit,
+                createdIssueRepo: "Other-Org/other-repo");
+        }
+
+        if (fixtureId.StartsWith("recovery-pr-linkage-missing-refusal-", StringComparison.Ordinal))
+        {
+            return G839ByteIdentityHarness.CreateProceedWorkspace(executionUnit, linkedPr: null);
+        }
+
+        return G839ByteIdentityHarness.CreateProceedWorkspace(executionUnit);
+    }
+
     private static void SeedRecoveryGitHubFakes(G839ByteIdentityHarness.RecoveryWorkspace workspace, string executionUnit)
     {
         AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>

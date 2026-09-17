@@ -1,0 +1,7 @@
+cross-runtime-review-rereview-missing: [cross-runtime-review-rereview-missing] cursor requested changes on head 1111111111111111111111111111111111111111 and has no record on head 2222222222222222222222222222222222222222; that runtime must re-review the delta.
+mode: dry-run
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false
+cross_runtime_review: missing (cross-runtime-review-rereview-missing)

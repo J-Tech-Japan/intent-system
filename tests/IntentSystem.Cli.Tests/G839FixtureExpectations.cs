@@ -176,6 +176,19 @@ internal static class G839FixtureExpectations
                 ["intent-pr-approved"],
                 ["intent-pr-reviewing", "intent-pr-rereview-ready", "rereview-ready", "intent-pr-request-update", "intent-pr-update-in-progress"],
                 Repo: G839ByteIdentityHarness.UngatedRepo),
+            ["pr-transition-approved-ungated-write-json"] = new(
+                "approved", true,
+                ["intent-pr-approved"],
+                ["intent-pr-reviewing"],
+                Repo: G839ByteIdentityHarness.UngatedRepo),
+            ["pr-transition-approved-undeclared-write-json"] = new(
+                "approved", true,
+                ["intent-pr-approved"],
+                ["intent-pr-reviewing"]),
+            ["pr-transition-review-release-dry-run-json"] = new(
+                "review-release", false,
+                [],
+                ["intent-pr-reviewing"]),
             ["pr-transition-approved-undeclared-dry-run-json"] = new(
                 "approved", false,
                 ["intent-pr-approved"],
@@ -220,8 +233,26 @@ internal static class G839FixtureExpectations
             ["pr-transition-request-update-dry-run-text"] = new(
                 "Would apply host PR transition 'request-update': add intent-pr-request-update; remove intent-pr-reviewing.",
                 "dry-run", false),
+            ["pr-transition-review-release-dry-run-text"] = new(
+                "Would apply host PR transition 'review-release': add (none); remove intent-pr-reviewing.",
+                "dry-run", false),
             ["pr-transition-review-release-write-text"] = new(
                 "Would apply host PR transition 'review-release': add (none); remove intent-pr-reviewing.",
+                "write", true),
+            ["pr-transition-request-update-write-text"] = new(
+                "Would apply host PR transition 'request-update': add intent-pr-request-update; remove intent-pr-reviewing.",
+                "write", true),
+            ["pr-transition-approved-ungated-dry-run-text"] = new(
+                "Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing, intent-pr-rereview-ready, rereview-ready, intent-pr-request-update, intent-pr-update-in-progress.",
+                "dry-run", false),
+            ["pr-transition-approved-ungated-write-text"] = new(
+                "Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing.",
+                "write", true),
+            ["pr-transition-approved-undeclared-dry-run-text"] = new(
+                "Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing, intent-pr-rereview-ready, rereview-ready, intent-pr-request-update, intent-pr-update-in-progress.",
+                "dry-run", false),
+            ["pr-transition-approved-undeclared-write-text"] = new(
+                "Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing.",
                 "write", true),
             ["pr-transition-approved-satisfied-dry-run-text"] = new(
                 "Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing, intent-pr-rereview-ready, rereview-ready, intent-pr-request-update, intent-pr-update-in-progress.",
@@ -251,6 +282,24 @@ internal static class G839FixtureExpectations
                 "cross-runtime-review-blocked: [cross-runtime-review-blocked] the latest record on head 2222222222222222222222222222222222222222 from codex is request-changes. [cross-runtime-review-missing] head 2222222222222222222222222222222222222222 has no approve whose latest record comes from a runtime other than the conductor runtime 'claude' (cross-runtime review).",
                 "dry-run", false,
                 CrossRuntimeReviewLine: "cross_runtime_review: blocked (cross-runtime-review-blocked)"),
+            ["pr-transition-refusal-head-unreadable-text"] = new(
+                "cross-runtime-review-head-stale: the current head of PR #1823 in J-Tech-Japan/intent-system could not be read, so --head-sha 2222222222222222222222222222222222222222 cannot be confirmed: simulated head read failure",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: refused (cross-runtime-review-head-stale)"),
+            ["pr-transition-refusal-rereview-missing-text"] = new(
+                "cross-runtime-review-rereview-missing: [cross-runtime-review-rereview-missing] cursor requested changes on head 1111111111111111111111111111111111111111 and has no record on head 2222222222222222222222222222222222222222; that runtime must re-review the delta.",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: missing (cross-runtime-review-rereview-missing)"),
+            ["pr-transition-refusal-record-unreadable-text"] = new(
+                "cross-runtime-review-record-unreadable: [cross-runtime-review-record-unreadable] record '.intent-cli/cross-runtime-reviews/j-tech-japan__intent-system/pr-1823/zz.json' failed validation and fails the gate closed: record is not a valid cross-runtime-review-record: JSON deserialization for type 'IntentSystem.Cli.Commands.CrossRuntimeReviewRecord' was missing required properties including: 'artifact_kind', 'repo', 'pr', 'head_sha', 'execution_unit', 'domain'.",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: blocked (cross-runtime-review-record-unreadable)"),
+            ["pr-transition-failure-may-have-applied-write-text"] = new(
+                "failed to confirm PR transition on PR #1823 in J-Tech-Japan/intent-system (the mutation may already have applied — do not assume it did not): simulated ambiguous gh API failure",
+                "write", false),
+            ["pr-transition-failure-known-unapplied-write-text"] = new(
+                "failed to apply PR transition on PR #1823 in J-Tech-Japan/intent-system: failed to apply PR transition",
+                "write", false),
         };
 
     private static bool TryGetRecoveryExpectation(string fixtureId, out string fieldName, out string expectedValue)
@@ -276,7 +325,8 @@ internal static class G839FixtureExpectations
             return true;
         }
 
-        if (fixtureId.EndsWith("-write-json", StringComparison.Ordinal)
+        if ((fixtureId.EndsWith("-write-json", StringComparison.Ordinal)
+                || fixtureId.EndsWith("-write-markdown", StringComparison.Ordinal))
             && (middle.Contains("-failed", StringComparison.Ordinal)
                 || middle.EndsWith("-unconfirmed", StringComparison.Ordinal)))
         {
@@ -297,7 +347,10 @@ internal static class G839FixtureExpectations
                  {
                      "-dry-run-json",
                      "-dry-run-markdown",
+                     "-refusal-write-json",
+                     "-refusal-write-markdown",
                      "-write-json",
+                     "-write-markdown",
                      "-refusal-json",
                      "-refusal-markdown",
                      "-json",

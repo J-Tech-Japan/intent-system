@@ -1,0 +1,7 @@
+cross-runtime-review-head-stale: the current head of PR #1823 in J-Tech-Japan/intent-system could not be read, so --head-sha 2222222222222222222222222222222222222222 cannot be confirmed: simulated head read failure
+mode: dry-run
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false
+cross_runtime_review: refused (cross-runtime-review-head-stale)

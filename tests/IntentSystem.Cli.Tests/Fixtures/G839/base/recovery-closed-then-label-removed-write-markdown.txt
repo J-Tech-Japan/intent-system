@@ -1,0 +1,11 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: write
+- outcome: closed-then-label-removed
+- linked_pr: #1823
+- applied: false
+- summary: an earlier run was closed without recovered; the label is already absent. No further recovery is needed; a fresh `worker claim --team` can proceed if the current PR was closed unmerged, but not if it merged. If the removal itself needs an audit record, record the ruling in the host because this command does not invent a recovered event.
+
+## Warnings
+- open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing.

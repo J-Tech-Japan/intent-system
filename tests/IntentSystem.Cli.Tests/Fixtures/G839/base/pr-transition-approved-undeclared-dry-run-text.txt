@@ -1,0 +1,6 @@
+Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing, intent-pr-rereview-ready, rereview-ready, intent-pr-request-update, intent-pr-update-in-progress.
+mode: dry-run
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false

@@ -1,0 +1,8 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: dry-run
+- outcome: refused
+- cause: pr-linkage-missing
+- applied: false
+- summary: refusing: queue-state linked_pr is missing or unparseable.

@@ -90,83 +90,13 @@ internal static class G839ByteIdentityHarness
         JsonSerializer.Serialize(value, options)[1..^1];
 
     internal static readonly string[] RecoveryScenarioIds =
-    [
-        "recovery-proceed-dry-run-json",
-        "recovery-proceed-dry-run-markdown",
-        "recovery-recovered-write-json",
-        "recovery-issue-not-open-refusal-json",
-        "recovery-issue-not-open-refusal-markdown",
-        "recovery-already-recovered-json",
-        "recovery-ruling-missing-markdown",
-        "recovery-help",
-        "recovery-parse-error",
-        "recovery-recovered-event-append-failed-write-json",
-        "recovery-label-readback-unconfirmed-write-json",
-        "recovery-event-completed-write-json",
-        "recovery-closed-then-label-removed-write-json",
-        "recovery-recovery-completed-write-json",
-        "recovery-target-absent-refusal-json",
-        "recovery-pr-merged-refusal-json",
-        "recovery-started-event-append-failed-write-json",
-        "recovery-label-removal-failed-write-json",
-        "recovery-label-readback-failed-write-json",
-        "recovery-superseded-event-append-failed-write-json",
-        "recovery-in-progress-present-refusal-json",
-        "recovery-in-progress-present-refusal-markdown",
-        "recovery-claim-held-refusal-json",
-        "recovery-claim-held-refusal-markdown",
-        "recovery-claim-unavailable-refusal-json",
-        "recovery-claim-unavailable-refusal-markdown",
-        "recovery-pr-open-refusal-json",
-        "recovery-pr-open-refusal-markdown",
-        "recovery-open-closing-pr-refusal-json",
-        "recovery-open-closing-pr-refusal-markdown",
-        "recovery-queue-item-missing-refusal-json",
-        "recovery-queue-item-missing-refusal-markdown",
-        "recovery-queue-item-ambiguous-refusal-json",
-        "recovery-queue-item-ambiguous-refusal-markdown",
-        "recovery-unit-mismatch-refusal-json",
-        "recovery-unit-mismatch-refusal-markdown",
-        "recovery-runs-log-unreadable-refusal-json",
-        "recovery-runs-log-unreadable-refusal-markdown",
-        "recovery-host-state-missing-refusal-json",
-        "recovery-host-state-missing-refusal-markdown",
-        "recovery-started-ambiguous-refusal-json",
-        "recovery-started-ambiguous-refusal-markdown",
-    ];
+        G839ContractScenarioIds.BuildRecoveryScenarioIds();
 
     internal static readonly string[] PrTransitionRefusalTextScenarioIds =
-    [
-        "pr-transition-refusal-head-required-text",
-        "pr-transition-refusal-head-stale-text",
-        "pr-transition-refusal-team-unresolved-text",
-        "pr-transition-refusal-missing-text",
-        "pr-transition-refusal-blocked-text",
-    ];
+        G839ContractScenarioIds.BuildPrTransitionRefusalTextScenarioIds();
 
     internal static readonly string[] PrTransitionNonRefusalScenarioIds =
-    [
-        "pr-transition-help",
-        "pr-transition-parse-error",
-        "pr-transition-review-start-dry-run-json",
-        "pr-transition-review-start-dry-run-text",
-        "pr-transition-review-start-write-json",
-        "pr-transition-review-start-write-text",
-        "pr-transition-approved-ungated-dry-run-json",
-        "pr-transition-review-release-write-text",
-        "pr-transition-review-release-write-json",
-        "pr-transition-request-update-dry-run-json",
-        "pr-transition-request-update-dry-run-text",
-        "pr-transition-request-update-write-json",
-        "pr-transition-approved-undeclared-dry-run-json",
-        "pr-transition-approved-undeclared-write-json",
-        "pr-transition-approved-satisfied-dry-run-json",
-        "pr-transition-approved-satisfied-dry-run-text",
-        "pr-transition-approved-satisfied-write-json",
-        "pr-transition-approved-satisfied-write-text",
-        "pr-transition-failure-may-have-applied-write-json",
-        "pr-transition-failure-known-unapplied-write-json",
-    ];
+        G839ContractScenarioIds.BuildPrTransitionNonRefusalScenarioIds();
 
     internal static readonly string[] PlannedLabelsConsumerScenarioIds =
     [
@@ -261,7 +191,8 @@ internal static class G839ByteIdentityHarness
             args.AddRange(["--format", "markdown"]);
         }
 
-        if (fixtureId.Contains("-write-", StringComparison.Ordinal))
+        if (fixtureId.Contains("-write-", StringComparison.Ordinal)
+            || fixtureId.Contains("-refusal-write-", StringComparison.Ordinal))
         {
             args.Add("--write");
         }
@@ -276,10 +207,16 @@ internal static class G839ByteIdentityHarness
         return writer.ToString();
     }
 
-    internal static RecoveryWorkspace CreateProceedWorkspace(string? executionUnit = null)
+    internal static RecoveryWorkspace CreateProceedWorkspace(
+        string? executionUnit = null,
+        int? linkedPr = Pr,
+        string? createdIssueRepo = null)
     {
         var workspace = new RecoveryWorkspace();
-        workspace.WriteProceedHostState(linkedPr: Pr, queueExecutionUnit: executionUnit);
+        workspace.WriteProceedHostState(
+            linkedPr: linkedPr,
+            queueExecutionUnit: executionUnit,
+            createdIssueRepo: createdIssueRepo ?? Repo);
         workspace.EnsureClaimsStore();
         return workspace;
     }
@@ -503,16 +440,17 @@ internal static class G839ByteIdentityHarness
         public CliContext Context { get; }
 
         public void WriteProceedHostState(
-            int linkedPr,
+            int? linkedPr = Pr,
             int? publishPr = null,
             bool duplicateQueueItem = false,
             bool includeQueueItem = true,
-            string? queueExecutionUnit = null)
+            string? queueExecutionUnit = null,
+            string? createdIssueRepo = null)
         {
             var executionUnit = queueExecutionUnit ?? Unit;
             if (includeQueueItem)
             {
-                WriteQueueState(linkedPr, publishPr ?? linkedPr, duplicateQueueItem, executionUnit);
+                WriteQueueState(linkedPr, publishPr ?? linkedPr ?? Pr, duplicateQueueItem, executionUnit);
             }
             else
             {
@@ -534,10 +472,10 @@ internal static class G839ByteIdentityHarness
                     PacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml",
                     IssueBodyPath = $".intent-cli/issues/{executionUnit}/issue-body.md",
                     CreatedIssueNumber = Issue,
-                    CreatedIssueUrl = $"https://github.com/{Repo}/issues/{Issue}",
+                    CreatedIssueUrl = $"https://github.com/{createdIssueRepo ?? Repo}/issues/{Issue}",
                     PublishedLabelName = "intent-target",
-                    LinkedPrNumber = publishPr ?? linkedPr,
-                    LinkedPrUrl = $"https://github.com/{Repo}/pull/{publishPr ?? linkedPr}",
+                    LinkedPrNumber = publishPr ?? linkedPr ?? Pr,
+                    LinkedPrUrl = $"https://github.com/{Repo}/pull/{publishPr ?? linkedPr ?? Pr}",
                 }));
         }
 
@@ -554,12 +492,17 @@ internal static class G839ByteIdentityHarness
         }
 
         public void WriteQueueState(
-            int linkedPr,
+            int? linkedPr = Pr,
             int publishPr = Pr,
             bool duplicateQueueItem = false,
             string? queueExecutionUnit = null)
         {
-            var items = new List<QueueItem> { BuildQueueItem($"https://github.com/{Repo}/pull/{linkedPr}", queueExecutionUnit) };
+            var items = new List<QueueItem>
+            {
+                BuildQueueItem(
+                    linkedPr is null ? null : $"https://github.com/{Repo}/pull/{linkedPr}",
+                    queueExecutionUnit),
+            };
             if (duplicateQueueItem)
             {
                 items.Add(BuildQueueItem($"https://github.com/{Repo}/pull/{linkedPr}", $"{Unit}-dup"));

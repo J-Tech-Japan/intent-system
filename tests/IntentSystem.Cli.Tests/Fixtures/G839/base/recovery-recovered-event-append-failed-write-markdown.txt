@@ -1,0 +1,12 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: write
+- outcome: refused
+- cause: recovered-event-append-failed
+- linked_pr: #1823
+- applied: false
+- summary: label removed but recovered event append failed: Access to the path '{{G839_WORKSPACE_ROOT}}/.intent-cli/runs.jsonl' is denied.. Re-run `intent-cli automation pr-created-stale-recovery --write` to complete the audit trail.
+
+## Warnings
+- open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing.

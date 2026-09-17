@@ -119,12 +119,16 @@ public sealed partial class G839ByteIdentityTests
             {
                 case "pr-transition-refusal-head-required-text":
                 case "pr-transition-refusal-head-stale-text":
+                case "pr-transition-refusal-head-unreadable-text":
                 case "pr-transition-refusal-team-unresolved-text":
                 case "pr-transition-refusal-missing-text":
                 case "pr-transition-refusal-blocked-text":
+                case "pr-transition-refusal-rereview-missing-text":
+                case "pr-transition-refusal-record-unreadable-text":
                     ConfigureRefusalScenario(fixtureId);
                     break;
                 case "pr-transition-failure-may-have-applied-write-json":
+                case "pr-transition-failure-may-have-applied-write-text":
                     AutomationPrTransitionCommand.MutatorFactory = () => new G839ByteIdentityHarness.ThrowingPrMutator
                     {
                         Labels = ["intent-target", "intent-pr-rereview-ready"],
@@ -132,6 +136,7 @@ public sealed partial class G839ByteIdentityTests
                     };
                     break;
                 case "pr-transition-failure-known-unapplied-write-json":
+                case "pr-transition-failure-known-unapplied-write-text":
                     AutomationPrTransitionCommand.MutatorFactory = () => new G839ByteIdentityHarness.ThrowingPrMutator
                     {
                         Labels = ["intent-target", "intent-pr-rereview-ready"],
@@ -173,8 +178,13 @@ public sealed partial class G839ByteIdentityTests
 
     private void ConfigureRefusalScenario(string fixtureId)
         {
-            AutomationPrTransitionCommand.PrHeadReader = (_, _) =>
-                fixtureId == "pr-transition-refusal-head-stale-text" ? G839ByteIdentityHarness.H3 : G839ByteIdentityHarness.H2;
+            AutomationPrTransitionCommand.PrHeadReader = fixtureId switch
+            {
+                "pr-transition-refusal-head-stale-text" => (_, _) => G839ByteIdentityHarness.H3,
+                "pr-transition-refusal-head-unreadable-text" => (_, _) =>
+                    throw new IOException("simulated head read failure"),
+                _ => (_, _) => G839ByteIdentityHarness.H2,
+            };
 
             switch (fixtureId)
             {
@@ -184,6 +194,20 @@ public sealed partial class G839ByteIdentityTests
                 case "pr-transition-refusal-blocked-text":
                     RecordVerdict("claude", "approve", G839ByteIdentityHarness.H2, offsetSeconds: 0);
                     RecordVerdict("codex", "request-changes", G839ByteIdentityHarness.H2, offsetSeconds: 1);
+                    break;
+                case "pr-transition-refusal-rereview-missing-text":
+                    RecordVerdict("cursor", "request-changes", "1111111111111111111111111111111111111111", offsetSeconds: 0);
+                    RecordVerdict("claude", "approve", G839ByteIdentityHarness.H2, offsetSeconds: 1);
+                    RecordVerdict("codex", "approve", G839ByteIdentityHarness.H2, offsetSeconds: 2);
+                    break;
+                case "pr-transition-refusal-record-unreadable-text":
+                    RecordVerdict("claude", "approve", G839ByteIdentityHarness.H2, offsetSeconds: 0);
+                    RecordVerdict("codex", "approve", G839ByteIdentityHarness.H2, offsetSeconds: 1);
+                    File.WriteAllText(
+                        Path.Combine(
+                            CrossRuntimeReviewPaths.PrDirectory(root, G839ByteIdentityHarness.Repo, G839ByteIdentityHarness.Pr),
+                            "zz.json"),
+                        "{}");
                     break;
                 case "pr-transition-refusal-team-unresolved-text":
                     claims.Remove(G839ByteIdentityHarness.Unit);

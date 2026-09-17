@@ -1,0 +1,14 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: write
+- outcome: refused
+- cause: superseded-event-append-failed
+- linked_pr: #1823
+- applied: false
+- summary: failed to append superseded event: Access to the path '{{G839_WORKSPACE_ROOT}}/.intent-cli/runs.jsonl' is denied.
+
+## Warnings
+- superseded_started_event: an open started event exists for a different PR than the current linked_pr; the earlier run will be superseded on --write.
+- publish_yaml_linked_pr_differs: publish.yaml linked_pr_number differs from queue-state linked_pr; acting on queue-state only.
+- open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing.
