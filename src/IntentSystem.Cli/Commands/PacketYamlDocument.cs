@@ -167,8 +167,8 @@ internal sealed class PacketYamlDocument
             var start = exception.Start;
             error = new PacketYamlParseError(
                 exception.Message,
-                (int)start.Line + 1,
-                (int)start.Column + 1);
+                (int)start.Line,
+                (int)start.Column);
             return false;
         }
         catch (Exception exception) when (exception is InvalidOperationException)

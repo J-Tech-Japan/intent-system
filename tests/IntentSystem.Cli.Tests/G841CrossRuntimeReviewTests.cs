@@ -102,7 +102,9 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
         var (exit, output) = Route(DesignStatusArgs());
         Assert.Equal(1, exit);
         using var json = JsonDocument.Parse(output);
-        G841TestHelpers.AssertCrossRuntimeParseRefusal(json.RootElement);
+        G841TestHelpers.AssertCrossRuntimeParseRefusal(
+            json.RootElement,
+            ExpectedUnparseableDetail());
     }
 
     [Fact]
@@ -449,23 +451,26 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
 
     private static void AssertSurfacePacketInvalid(JsonElement json, Ac8Surface surface, RecordingMutator? mutator)
     {
+        var expectedDetail = ExpectedUnparseableDetail();
         if (surface == Ac8Surface.PrTransition)
         {
             var gate = json.GetProperty("cross_runtime_review");
             Assert.Equal(CrossRuntimeReviewCauses.PacketInvalid, gate.GetProperty("cause").GetString());
             Assert.DoesNotContain("packet-unreadable", json.GetRawText(), StringComparison.Ordinal);
-            var detail = gate.GetProperty("detail").GetString()!;
-            Assert.Contains("at line", detail, StringComparison.Ordinal);
-            Assert.DoesNotContain("is not valid YAML", detail, StringComparison.Ordinal);
-            Assert.Contains(" Fix: ", detail, StringComparison.Ordinal);
+            Assert.Equal(
+                $"{expectedDetail} Fix: repair `{PacketRelativePath()}` so the whole document parses as YAML.",
+                gate.GetProperty("detail").GetString());
             Assert.False(json.GetProperty("applied").GetBoolean());
-            Assert.StartsWith(CrossRuntimeReviewCauses.PacketInvalid, json.GetProperty("error").GetString(), StringComparison.Ordinal);
+            Assert.StartsWith($"{CrossRuntimeReviewCauses.PacketInvalid}: {expectedDetail}", json.GetProperty("error").GetString(), StringComparison.Ordinal);
             Assert.Empty(mutator!.Applied);
             return;
         }
 
-        G841TestHelpers.AssertCrossRuntimeParseRefusal(json, ".intent-cli/issues/G841/packet.yaml");
+        G841TestHelpers.AssertCrossRuntimeParseRefusal(json, expectedDetail, PacketRelativePath());
     }
+
+    private static string ExpectedUnparseableDetail() =>
+        G841TestHelpers.ExpectedCrossRuntimeParseDetail(PacketRelativePath(), G841TestHelpers.UnparseableYaml);
 
     private (int ExitCode, string Output, RecordingMutator? Mutator) RouteSurface(Ac8Surface surface)
     {

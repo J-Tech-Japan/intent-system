@@ -73,6 +73,31 @@ public sealed class G841PacketDraftTests : IDisposable
     }
 
     [Fact]
+    public void PacketDraft_ReadIntentReferencesRace_RefusesWithoutPreCheck_G841D7()
+    {
+        WritePacket(G841TestHelpers.LegacyEquivalentPacket());
+        WriteBorrowedGithubBody();
+        var packetPath = G841TestHelpers.PacketPath(root, Unit);
+        var reads = 0;
+        PacketFileReader.ReadAllText = path =>
+        {
+            if (string.Equals(path, packetPath, StringComparison.Ordinal)
+                && Interlocked.Increment(ref reads) == 1)
+            {
+                throw new UnauthorizedAccessException("Access to the path is denied.");
+            }
+
+            return File.ReadAllText(path);
+        };
+
+        var (exitCode, json) = RunPacketDraftDryRun();
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
+            RefusalReasons(json));
+    }
+
+    [Fact]
     public void PacketDraft_UnreadablePacket_DoesNotCrashWithExit134_G841Ac15()
     {
         WritePacket(G841TestHelpers.LegacyEquivalentPacket());

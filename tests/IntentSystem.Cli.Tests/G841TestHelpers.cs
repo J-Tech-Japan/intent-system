@@ -201,14 +201,24 @@ internal static class G841TestHelpers
         }
     }
 
-    internal static void AssertCrossRuntimeParseRefusal(JsonElement json, string relativePath = ".intent-cli/issues/G841/packet.yaml")
+    internal static string ExpectedCrossRuntimeParseDetail(string relativePath, string yaml)
+    {
+        Assert.False(PacketYamlDocument.TryParseWithLocation(yaml, out _, out var error));
+        return PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePath, error!);
+    }
+
+    internal static void AssertCrossRuntimeParseRefusal(
+        JsonElement json,
+        string expectedDetail,
+        string relativePath = ".intent-cli/issues/G841/packet.yaml")
     {
         Assert.Equal(CrossRuntimeReviewCauses.PacketInvalid, json.GetProperty("cause").GetString());
         Assert.Equal("packet-invalid", json.GetProperty("resolution").GetProperty("missing").GetString());
-        var detail = json.GetProperty("detail").GetString()!;
-        Assert.Contains(relativePath, detail, StringComparison.Ordinal);
-        Assert.Contains("at line", detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("is not valid YAML", detail, StringComparison.Ordinal);
+        Assert.Equal(expectedDetail, json.GetProperty("detail").GetString());
+        Assert.Equal(expectedDetail, json.GetProperty("resolution").GetProperty("detail").GetString());
+        Assert.DoesNotContain("is not valid YAML", expectedDetail, StringComparison.Ordinal);
+        Assert.Contains(relativePath, expectedDetail, StringComparison.Ordinal);
+        Assert.Contains("could not be parsed", expectedDetail, StringComparison.Ordinal);
         Assert.Contains("repair `.intent-cli/issues/", json.GetProperty("fix").GetString(), StringComparison.Ordinal);
     }
 

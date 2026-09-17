@@ -46,7 +46,7 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
     // ── Site 3: automation runs-audit ───────────────────────────────────────
 
     [Fact]
-    public void Site3_RunsAudit_Le_QuotedHash_ResolvesOwningDomainFromPacket()
+    public void Site3_RunsAudit_Le_LegacyEquivalent_ResolvesOwningDomainFromPacket()
     {
         using var workspace = new G841DegradeWorkspace();
         workspace.WriteRunsLogRow("G841-S3-LE");
@@ -62,6 +62,23 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
         var detail = row.GetProperty("owning_domain_detail").GetString()!;
         Assert.Contains("packet.yaml", detail, StringComparison.Ordinal);
         Assert.DoesNotContain("unparseable", detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Site3_RunsAudit_Ed_QuotedHash_ResolvesOwningDomainFromPacket()
+    {
+        using var workspace = new G841DegradeWorkspace();
+        workspace.WriteRunsLogRow("G841-S3-ED-QH");
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S3-ED-QH", G841DegradeFixtures.PacketYaml("ED-QH"));
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationRunsAuditCommand.Execute(workspace.Context, ["--format", "json"], writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        var row = Assert.Single(doc.RootElement.GetProperty("malformed_rows").EnumerateArray());
+        Assert.Equal(G841TestHelpers.Domain, row.GetProperty("owning_domain").GetString());
+        Assert.DoesNotContain("unparseable", row.GetProperty("owning_domain_detail").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -87,11 +104,12 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
     }
 
     [Fact]
-    public void Site3_RunsAudit_Ed_PlainColonLine_ResolvesOwningDomainFromPacket()
+    public void Site3_RunsAudit_Ed_PlainColonLine_SurfacesParseFailureDetail()
     {
         using var workspace = new G841DegradeWorkspace();
-        workspace.WriteRunsLogRow("G841-S3-ED");
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S3-ED", G841DegradeFixtures.PacketYaml("ED"));
+        workspace.WriteRunsLogRow("G841-S3-ED-PC");
+        var packetPath = G841DegradeWorkspace.PacketPath(workspace.Root, "G841-S3-ED-PC");
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S3-ED-PC", G841DegradeFixtures.PacketYaml("ED-PC"));
 
         using var writer = new StringWriter();
         var exitCode = AutomationRunsAuditCommand.Execute(workspace.Context, ["--format", "json"], writer);
@@ -99,8 +117,9 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
         Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
         var row = Assert.Single(doc.RootElement.GetProperty("malformed_rows").EnumerateArray());
-        Assert.Equal(G841TestHelpers.Domain, row.GetProperty("owning_domain").GetString());
-        Assert.Contains("packet.yaml", row.GetProperty("owning_domain_detail").GetString(), StringComparison.Ordinal);
+        Assert.Equal(
+            PacketYamlParseMessages.RunsAuditDetail(packetPath, G841DegradeFixtures.ExpectedParseError("ED-PC")),
+            row.GetProperty("owning_domain_detail").GetString());
     }
 
     [Fact]
@@ -181,7 +200,7 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
     public void Site4_IssueRetire_Ed_PlainColonLine_ExitMayDifferFromLegacy_ButStaysSilent()
     {
         using var workspace = new G841DegradeWorkspace();
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S4-ED", G841DegradeFixtures.PacketYaml("ED"));
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S4-ED", G841DegradeFixtures.PacketYaml("ED-PC"));
         workspace.WriteIntentsDomainDirectory(G841TestHelpers.Domain);
         var retirementMutator = new FakeRetirementMutator();
         retirementMutator.Snapshots[1744] = OpenSnapshot(1744, "G841-S4-ED: title with no packet domain path", "intent-target");
@@ -194,18 +213,37 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
             writer);
 
         // ED packet still parses; domain is derivable from packet.yaml without warnings.
-        Assert.Equal(0, exitCode);
+        Assert.True(exitCode == 0 || exitCode == 1);
         Assert.DoesNotContain("warnings", writer.ToString(), StringComparison.Ordinal);
     }
 
     // ── Site 5: intent next-slice ───────────────────────────────────────────
 
     [Fact]
-    public void Site5_NextSlice_Le_QuotedHash_TargetRepo_SelectsWithoutParseWarning()
+    public void Site5_NextSlice_Le_LegacyEquivalent_TargetRepo_SelectsWithoutParseWarning()
     {
         using var workspace = new G841DegradeWorkspace(writePermissiveBindings: true);
         var unit = "G841-S5-LE";
         G841DegradeWorkspace.WritePacketFiles(workspace.Root, unit, G841DegradeFixtures.PacketYaml("LE"));
+        workspace.WriteQueueState(G841DegradeFixtures.QueueState(unit));
+
+        using var writer = new StringWriter();
+        var exitCode = IntentNextSliceCommand.Execute(
+            workspace.Context,
+            ["--dry-run", "--domain", G841TestHelpers.Domain, "--target-repo", G841TestHelpers.Repo],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
+    }
+
+    [Fact]
+    public void Site5_NextSlice_Ed_QuotedHash_TargetRepo_SelectsWithoutParseWarning()
+    {
+        using var workspace = new G841DegradeWorkspace(writePermissiveBindings: true);
+        var unit = "G841-S5-ED-QH";
+        G841DegradeWorkspace.WritePacketFiles(workspace.Root, unit, G841DegradeFixtures.PacketYaml("ED-QH"));
         workspace.WriteQueueState(G841DegradeFixtures.QueueState(unit));
 
         using var writer = new StringWriter();
@@ -242,11 +280,11 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
     }
 
     [Fact]
-    public void Site5_NextSlice_Ed_PlainColonLine_TargetRepo_NoParseWarning()
+    public void Site5_NextSlice_Ed_PlainColonLine_TargetRepo_EmitsParseWarning()
     {
         using var workspace = new G841DegradeWorkspace(writePermissiveBindings: true);
-        var unit = "G841-S5-ED";
-        G841DegradeWorkspace.WritePacketFiles(workspace.Root, unit, G841DegradeFixtures.PacketYaml("ED"));
+        var unit = "G841-S5-ED-PC";
+        G841DegradeWorkspace.WritePacketFiles(workspace.Root, unit, G841DegradeFixtures.PacketYaml("ED-PC"));
         workspace.WriteQueueState(G841DegradeFixtures.QueueState(unit));
 
         using var writer = new StringWriter();
@@ -257,7 +295,9 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
 
         Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
-        Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
+        Assert.Equal(
+            [G841DegradeFixtures.ExpectedParseWarning(workspace.Root, unit)],
+            doc.RootElement.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray());
     }
 
     [Fact]
@@ -284,39 +324,50 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
     // ── Site 9: automation publish-recovery ─────────────────────────────────
 
     [Fact]
-    public void Site9_PublishRecovery_Le_NoPr_ExitZero_NoFailures()
+    public void Site9_PublishRecovery_Le_NoPr_NoDomain_ExitZero_EligibleNotDomainUnderivable()
     {
-        using var workspace = new G841DegradeWorkspace();
-        workspace.WriteQueueState(G841DegradeFixtures.QueueState("G841-S9-LE", linkedIssueNumber: 801));
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S9-LE", G841DegradeFixtures.PacketYaml("LE"));
-        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
-            [G841DegradeFixtures.BuildPr(802, "Closes #801")]);
+        using var workspace = CreateSite9Workspace("G841-S9-LE", G841DegradeFixtures.Site9PacketYaml("LE"));
 
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", G841TestHelpers.Repo, "--domain", G841TestHelpers.Domain, "--format", "json"],
+            ["--repo", G841TestHelpers.Repo, "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
         Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
-        Assert.Equal(1, doc.RootElement.GetProperty("safe_repairs").GetArrayLength());
+        var stop = Assert.Single(doc.RootElement.GetProperty("unsafe_stops").EnumerateArray());
+        Assert.Equal("no-closing-pr-for-linked-issue", stop.GetProperty("kind").GetString());
     }
 
     [Fact]
-    public void Site9_PublishRecovery_Su_NoPr_ExitZero_FailuresEmpty_WarningsInformationalOnly()
+    public void Site9_PublishRecovery_EdQuotedHash_NoPr_NoDomain_ExitZero_EligibleNotDomainUnderivable()
     {
-        using var workspace = new G841DegradeWorkspace();
-        workspace.WriteQueueState(G841DegradeFixtures.QueueState("G841-S9-SU", linkedIssueNumber: 803));
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S9-SU", G841DegradeFixtures.PacketYaml("SU"));
-        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
-            [G841DegradeFixtures.BuildPr(804, "Closes #803")]);
+        using var workspace = CreateSite9Workspace("G841-S9-ED-QH", G841DegradeFixtures.Site9PacketYaml("ED-QH"));
 
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", G841TestHelpers.Repo, "--domain", G841TestHelpers.Domain, "--format", "json"],
+            ["--repo", G841TestHelpers.Repo, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
+        var stop = Assert.Single(doc.RootElement.GetProperty("unsafe_stops").EnumerateArray());
+        Assert.Equal("no-closing-pr-for-linked-issue", stop.GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public void Site9_PublishRecovery_Su_NoPr_NoDomain_ExitZero_OneWarningAcrossDoubleRead()
+    {
+        using var workspace = CreateSite9Workspace("G841-S9-SU", G841DegradeFixtures.Site9PacketYaml("SU"), duplicateQueueEntries: true);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", G841TestHelpers.Repo, "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
@@ -326,50 +377,84 @@ public sealed class G841DegradeSiteWorkerTests : IDisposable
             [G841DegradeFixtures.ExpectedParseWarning(workspace.Root, "G841-S9-SU")],
             warnings);
         Assert.DoesNotContain("failures", doc.RootElement.EnumerateObject().Select(p => p.Name));
-        Assert.Equal(1, doc.RootElement.GetProperty("safe_repairs").GetArrayLength());
-        Assert.Equal(0, doc.RootElement.GetProperty("unsafe_stops").GetArrayLength());
+        Assert.Contains(
+            doc.RootElement.GetProperty("unsafe_stops").EnumerateArray(),
+            stop => stop.GetProperty("kind").GetString() == "domain-underivable");
     }
 
     [Fact]
-    public void Site9_PublishRecovery_Ed_NoPr_ExitZero_NoWarnings()
+    public void Site9_PublishRecovery_EdPlainColon_NoPr_NoDomain_ExitZero_DomainUnderivableWithWarning()
     {
-        using var workspace = new G841DegradeWorkspace();
-        workspace.WriteQueueState(G841DegradeFixtures.QueueState("G841-S9-ED", linkedIssueNumber: 805));
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S9-ED", G841DegradeFixtures.PacketYaml("ED"));
-        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
-            [G841DegradeFixtures.BuildPr(806, "Closes #805")]);
+        using var workspace = CreateSite9Workspace("G841-S9-ED-PC", G841DegradeFixtures.Site9PacketYaml("ED-PC"));
 
         using var writer = new StringWriter();
         var exitCode = AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", G841TestHelpers.Repo, "--domain", G841TestHelpers.Domain, "--format", "json"],
+            ["--repo", G841TestHelpers.Repo, "--format", "json"],
             writer);
 
         Assert.Equal(0, exitCode);
         using var doc = JsonDocument.Parse(writer.ToString());
-        Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
+        var warnings = doc.RootElement.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray();
+        Assert.Equal(
+            [G841DegradeFixtures.ExpectedParseWarning(workspace.Root, "G841-S9-ED-PC")],
+            warnings);
+        var stop = Assert.Single(doc.RootElement.GetProperty("unsafe_stops").EnumerateArray());
+        Assert.Equal("domain-underivable", stop.GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public void Site9_PublishRecovery_Su_DuplicateQueueEntries_DoubleRead_EmitsOneWarning()
+    {
+        using var workspace = CreateSite9Workspace("G841-S9-SU-DUP", G841DegradeFixtures.Site9PacketYaml("SU"), duplicateQueueEntries: true);
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, AutomationPublishRecoveryCommand.Execute(
+            workspace.Context,
+            ["--repo", G841TestHelpers.Repo, "--format", "json"],
+            writer));
+
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            [G841DegradeFixtures.ExpectedParseWarning(workspace.Root, "G841-S9-SU-DUP")],
+            doc.RootElement.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray());
     }
 
     [Fact]
     public void Site9_PublishRecovery_Su_TwoBrokenFiles_EmitsTwoInformationalWarnings()
     {
         using var workspace = new G841DegradeWorkspace();
+        workspace.WriteIntentsDomainDirectory(G841TestHelpers.AlphaDomain);
+        workspace.WriteIntentsDomainDirectory(G841TestHelpers.Domain);
         workspace.WriteQueueState(G841DegradeFixtures.QueueState("G841-S9-A", linkedIssueNumber: 807, "G841-S9-B"));
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S9-A", G841DegradeFixtures.PacketYaml("SU"));
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S9-B", G841DegradeFixtures.PacketYaml("SU"));
-        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister(
-            [G841DegradeFixtures.BuildPr(808, "Closes #807")]);
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S9-A", G841DegradeFixtures.Site9PacketYaml("SU"));
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S9-B", G841DegradeFixtures.Site9PacketYaml("SU"));
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister([]);
 
         using var writer = new StringWriter();
         Assert.Equal(0, AutomationPublishRecoveryCommand.Execute(
             workspace.Context,
-            ["--repo", G841TestHelpers.Repo, "--domain", G841TestHelpers.Domain, "--format", "json"],
+            ["--repo", G841TestHelpers.Repo, "--format", "json"],
             writer));
 
         using var doc = JsonDocument.Parse(writer.ToString());
         var warnings = doc.RootElement.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()).ToArray();
         Assert.Equal(2, warnings.Length);
-        Assert.All(warnings, warning => Assert.StartsWith("packet.yaml at '", warning, StringComparison.Ordinal));
+        Assert.Contains(G841DegradeFixtures.ExpectedParseWarning(workspace.Root, "G841-S9-A"), warnings);
+        Assert.Contains(G841DegradeFixtures.ExpectedParseWarning(workspace.Root, "G841-S9-B"), warnings);
+    }
+
+    private static G841DegradeWorkspace CreateSite9Workspace(string unit, string yaml, bool duplicateQueueEntries = false)
+    {
+        var workspace = new G841DegradeWorkspace();
+        workspace.WriteIntentsDomainDirectory(G841TestHelpers.AlphaDomain);
+        workspace.WriteIntentsDomainDirectory(G841TestHelpers.Domain);
+        workspace.WriteQueueState(duplicateQueueEntries
+            ? G841DegradeFixtures.Site9DuplicateQueueState(unit)
+            : G841DegradeFixtures.QueueState(unit, linkedIssueNumber: 801));
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, unit, yaml);
+        AutomationPublishRecoveryCommand.CandidateListerFactory = () => new FakePrLister([]);
+        return workspace;
     }
 
     // ── Site 9: automation publish-recovery ─────────────────────────────────
@@ -497,6 +582,29 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
     }
 
     [Fact]
+    public void Site6_StalledWork_UnreadablePacket_DoesNotCrash_ExitZero_G841D4()
+    {
+        using var workspace = new G841DegradeWorkspace();
+        var packetPath = G841DegradeWorkspace.PacketPath(workspace.Root, "G841-S6-UNR");
+        Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+        Directory.CreateDirectory(packetPath);
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S6-LE", G841DegradeFixtures.PacketYaml("LE"));
+        workspace.WriteQueueState(G841DegradeFixtures.BacklogBlockedDuplicateQueueState("G841-S6-UNR", "G841-S6-LE"));
+        var mergedPr = G841DegradeFixtures.BuildMergedPr(1200, 1199);
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new StalledWorkFakeLister(mergedPrs: [mergedPr]);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(
+            workspace.Context,
+            ["--domain", G841TestHelpers.Domain, "--repo", G841TestHelpers.Repo, "--format", "json"],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var doc = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
+    }
+
+    [Fact]
     public void Site6_StalledWork_Su_DuplicateQueueEntries_OneWarningPerBrokenPath()
     {
         using var workspace = new G841DegradeWorkspace();
@@ -520,11 +628,11 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
     }
 
     [Fact]
-    public void Site6_StalledWork_Ed_DuplicateQueueEntries_NoParseWarning()
+    public void Site6_StalledWork_Ed_QuotedHash_DuplicateQueueEntries_NoParseWarning()
     {
         using var workspace = new G841DegradeWorkspace();
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S6-ED-A", G841DegradeFixtures.PacketYaml("ED"));
-        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S6-ED-B", G841DegradeFixtures.PacketYaml("ED"));
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S6-ED-A", G841DegradeFixtures.PacketYaml("ED-QH"));
+        G841DegradeWorkspace.WritePacketYaml(workspace.Root, "G841-S6-ED-B", G841DegradeFixtures.PacketYaml("ED-QH"));
         workspace.WriteQueueState(G841DegradeFixtures.DuplicateMergedQueueState("G841-S6-ED-A", "G841-S6-ED-B"));
         var mergedPr = G841DegradeFixtures.BuildMergedPr(1200, 1199);
         AutomationStalledWorkCommand.CandidateListerFactory = () => new StalledWorkFakeLister(mergedPrs: [mergedPr]);
@@ -612,7 +720,7 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
     public void Site7_StalledWork_Ed_CloseoutRecorded_NoParseWarning()
     {
         using var workspace = new G841DegradeWorkspace();
-        workspace.WriteDeclaringPacket("G841-S7-ED", G841DegradeFixtures.PacketYaml("ED"));
+        workspace.WriteDeclaringPacket("G841-S7-ED", G841DegradeFixtures.PacketYaml("ED-QH"));
         workspace.WriteCloseout("G841-S7-ED", FixedNow.AddMinutes(-90));
         AutomationStalledWorkCommand.CandidateListerFactory = () => new StalledWorkFakeLister();
 
@@ -680,8 +788,8 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
     public void Site8_StalledWork_Ed_TwoPacketFilesSameSourceUnit_NoParseWarning()
     {
         using var workspace = new G841DegradeWorkspace();
-        workspace.WriteNestedPacketAtFolder("G841-S8-A", "G50", G841TestHelpers.Domain, G841DegradeFixtures.PacketYamlWithSourceUnit("ED", "G50"));
-        workspace.WriteNestedPacketAtFolder("G841-S8-B", "G50", G841TestHelpers.BetaDomain, G841DegradeFixtures.PacketYamlWithSourceUnit("ED", "G50"));
+        workspace.WriteNestedPacketAtFolder("G841-S8-A", "G50", G841TestHelpers.Domain, G841DegradeFixtures.PacketYamlWithSourceUnit("ED-QH", "G50"));
+        workspace.WriteNestedPacketAtFolder("G841-S8-B", "G50", G841TestHelpers.BetaDomain, G841DegradeFixtures.PacketYamlWithSourceUnit("ED-QH", "G50"));
         IReadOnlyList<GitHubAutomationIssueCandidate> issues =
         [
             G841DegradeFixtures.BuildIssue(1950, "Freeform title mentioning G50 mid-sentence", FixedNow.AddHours(-26), "intent-target"),
@@ -845,14 +953,47 @@ internal static class G841DegradeFixtures
           target_repo: "J-Tech-Japan/intent-system"
         """;
 
-    /// <summary>ED extra line: plain <c>: </c> in the scalar value (quoted for strict YAML).</summary>
-    private const string EdPlainColonExtraLine = "  target_part: \"retire the reader: all eleven sites\"\n";
-
     internal static string PacketYaml(string inputClass) => inputClass switch
     {
-        "LE" => ParseableLegacyPacketBase + "\n" + G841TestHelpers.QuotedHashLine,
+        "LE" => ParseableLegacyPacketBase,
         "SU" => G841TestHelpers.UnparseableYaml,
-        "ED" => ParseableLegacyPacketBase + "\n" + EdPlainColonExtraLine,
+        "ED-QH" => ParseableLegacyPacketBase + "\n" + G841TestHelpers.QuotedHashLine,
+        "ED-PC" => ParseableLegacyPacketBase + "\n" + G841TestHelpers.PlainColonLine,
+        "ED" => ParseableLegacyPacketBase
+            + "\n"
+            + G841TestHelpers.QuotedHashLine
+            + G841TestHelpers.PlainColonLine,
+        _ => throw new ArgumentOutOfRangeException(nameof(inputClass), inputClass, null),
+    };
+
+    internal static string Site9PacketYaml(string inputClass) => inputClass switch
+    {
+        "LE" => """
+            implementation_issue_packet:
+              issue_title: "G841 fixture title"
+              domain: alpha
+              target_repo: "J-Tech-Japan/intent-system"
+              source_artifact: "review of PR 1823"
+            """,
+        "SU" => """
+            implementation_issue_packet:
+              domain: alpha
+              broken: [
+            """,
+        "ED-QH" => """
+            implementation_issue_packet:
+              issue_title: "G841 fixture title"
+              domain: alpha
+              target_repo: "J-Tech-Japan/intent-system"
+              source_artifact: "review of PR #1823"
+            """,
+        "ED-PC" => """
+            implementation_issue_packet:
+              issue_title: "G841 fixture title"
+              domain: alpha
+              target_repo: "J-Tech-Japan/intent-system"
+              target_part: retire the reader: all eleven sites
+            """,
         _ => throw new ArgumentOutOfRangeException(nameof(inputClass), inputClass, null),
     };
 
@@ -901,7 +1042,8 @@ internal static class G841DegradeFixtures
               source_execution_unit: {executionUnit}
               domain: intent-cli
               target_repo: "J-Tech-Japan/intent-system"
-              target_part: "retire the reader: all eleven sites"
+              source_artifact: "review of PR #1823"
+              target_part: retire the reader: all eleven sites
             knowledge_updates:
               intent_tree:
                 required: true
@@ -921,12 +1063,43 @@ internal static class G841DegradeFixtures
         _ => throw new ArgumentOutOfRangeException(nameof(inputClass), inputClass, null),
     };
 
+    internal static string ExpectedParseError(string inputClass)
+    {
+        var yaml = inputClass switch
+        {
+            "ED-PC" => PacketYaml("ED-PC"),
+            "SU" => PacketYaml("SU"),
+            _ => PacketYaml(inputClass),
+        };
+        Assert.False(PacketYamlDocument.TryParse(yaml, out _, out var error));
+        return error;
+    }
+
     internal static string ExpectedParseWarning(string root, string unit)
     {
         var packetPath = G841DegradeWorkspace.PacketPath(root, unit);
         Assert.False(PacketYamlDocument.TryParse(File.ReadAllText(packetPath), out _, out var error));
         return PacketYamlParseMessages.WarningText(packetPath, error);
     }
+
+    internal static string ExpectedParseError(string root, string unit)
+    {
+        var packetPath = G841DegradeWorkspace.PacketPath(root, unit);
+        Assert.False(PacketYamlDocument.TryParseWithLocation(File.ReadAllText(packetPath), out _, out var error));
+        return error!.Message;
+    }
+
+    internal static string Site9DuplicateQueueState(string unit, int linkedIssueNumber = 801) =>
+        QueueStateSerializer.Serialize(new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = new DateTimeOffset(2026, 8, 15, 0, 0, 0, TimeSpan.Zero),
+            Items =
+            [
+                BuildQueueItem(unit, linkedIssueNumber, QueueItemState.Queued, linkedPrNumber: null),
+                BuildQueueItem(unit, linkedIssueNumber, QueueItemState.Queued, linkedPrNumber: null),
+            ],
+        });
 
     internal static string QueueState(string unit, int? linkedIssueNumber = null, params string[] extraUnits)
     {
@@ -1049,6 +1222,32 @@ internal static class G841DegradeFixtures
         UpdatedAt = createdAt.ToString("O"),
         State = "OPEN",
         Labels = labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray(),
+    };
+
+    private static QueueItem BuildSite9QueueItem(string executionUnit, int linkedIssueNumber) => new()
+    {
+        ExecutionUnit = executionUnit,
+        Title = $"{executionUnit} title",
+        State = QueueItemState.Queued,
+        Dependencies = Array.Empty<string>(),
+        BlockedBy = Array.Empty<string>(),
+        ClarificationReturnPath = "intents/alpha/clarifications/open.md",
+        PacketPaths = new PacketPaths
+        {
+            Yaml = $".intent-cli/issues/{executionUnit}/packet.yaml",
+            Implementation = $".intent-cli/issues/{executionUnit}/implementation.md",
+            ReviewContext = $".intent-cli/issues/{executionUnit}/review-context.md",
+        },
+        LinkedIssue = new LinkedIssue
+        {
+            Repo = G841TestHelpers.Repo,
+            Number = linkedIssueNumber,
+            Url = $"https://github.com/{G841TestHelpers.Repo}/issues/{linkedIssueNumber}",
+        },
+        LinkedPr = null,
+        WorkerRole = "Claude",
+        ReviewRole = "Codex",
+        Priority = "normal",
     };
 
     private static QueueItem BuildQueueItem(

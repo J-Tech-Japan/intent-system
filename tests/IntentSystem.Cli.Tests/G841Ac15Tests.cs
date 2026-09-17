@@ -103,6 +103,11 @@ public sealed class G841Ac15Tests : IDisposable
                     checksGreen: true),
             ],
             issues: [HostLoopLister.NewIssue(1467, ["intent-target", "intent-pr-created"], null, $"{Unit} operator merge")]);
+        AutomationHostLoopNextActionCommand.NextSliceDryRunProbeFactory = _ => new FixedNextSliceProbe();
+        AutomationHostLoopNextActionCommand.PublishRecoveryProbeFactory = _ => new FixedRecoveryProbe();
+        AutomationHostLoopNextActionCommand.HostSyncPreflightProbeFactory = _ =>
+            new FixedSyncProbe(HostSyncPreflightAnalyzer.ClassificationClean);
+        AutomationHostLoopNextActionCommand.CloseoutDriftCheckProbeFactory = _ => new FixedDriftProbe();
 
         using var writer = new StringWriter();
         Assert.Equal(0, AutomationHostLoopNextActionCommand.Execute(
@@ -625,6 +630,33 @@ public sealed class G841Ac15Tests : IDisposable
             process.StandardError.ReadToEnd();
             process.WaitForExit();
         }
+    }
+
+    private sealed class FixedNextSliceProbe : INextSliceDryRunProbe
+    {
+        public NextSliceProbeResult? Probe(string repo, string domain) =>
+            new() { RecommendedOutcome = "no-actionable-item" };
+    }
+
+    private sealed class FixedRecoveryProbe : IPublishRecoveryProbe
+    {
+        public PublishRecoveryProbeResult? Probe(string repo) =>
+            new() { SafeRepairCount = 0, UnsafeStopCount = 0 };
+    }
+
+    private sealed class FixedSyncProbe : IHostSyncPreflightProbe
+    {
+        private readonly string classification;
+
+        public FixedSyncProbe(string classification) => this.classification = classification;
+
+        public HostSyncPreflightProbeResult? Probe() => new() { Classification = classification };
+    }
+
+    private sealed class FixedDriftProbe : ICloseoutDriftCheckProbe
+    {
+        public CloseoutDriftCheckProbeResult? Probe(string repo) =>
+            new() { SafeRepairCount = 0, UnsafeStopCount = 0 };
     }
 
     private sealed class HostLoopLister : IGitHubAutomationCandidateLister

@@ -10,7 +10,7 @@ internal static class PacketYamlParseMessages
         $"packet.yaml unparseable ({packetPath}): {parserMessage}";
 
     public static string ComposeCrossRuntimeParseDetail(string relativePacketPath, PacketYamlParseError error) =>
-        ComposeParseDetail($"packet '{relativePacketPath}'", error);
+        ComposeParseDetail($"packet '{relativePacketPath}' could not be parsed", error);
 
     public static string ComposePublishFlowParseDetail(string packetPath, PacketYamlParseError error, bool changedAfterFirstRead = false)
     {

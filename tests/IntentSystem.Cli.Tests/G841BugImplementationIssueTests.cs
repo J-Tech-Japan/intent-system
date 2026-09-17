@@ -76,8 +76,11 @@ public sealed class G841BugImplementationIssueTests
             var output = writer.ToString();
 
             Assert.Equal(1, exitCode);
-            Assert.Contains(".intent-cli/issues/G841U/packet.yaml", output, StringComparison.Ordinal);
-            Assert.Contains("could not be parsed", output, StringComparison.Ordinal);
+            Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+            var expectedDetail = PacketYamlParseMessages.ComposePublishFlowParseDetail(
+                Path.Combine(repoRoot, ".intent-cli", "issues", "G841U", "packet.yaml"),
+                parseError!);
+            Assert.Contains(expectedDetail, output, StringComparison.Ordinal);
             Assert.DoesNotContain("FormatException", output, StringComparison.Ordinal);
             Assert.DoesNotContain("StackTrace", output, StringComparison.Ordinal);
             Assert.Equal(0, publisher.CallCount);

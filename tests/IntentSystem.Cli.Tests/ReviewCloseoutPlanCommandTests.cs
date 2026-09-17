@@ -1701,7 +1701,7 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
     {
         using var workspace = new G841DegradeWorkspace();
         workspace.WriteQueueState(G841DegradeFixtures.CloseoutQueueState("G841-S11-ED"));
-        G841DegradeWorkspace.WritePacketFiles(workspace.Root, "G841-S11-ED", G841DegradeFixtures.PacketYaml("ED"), withContractBody: true);
+        G841DegradeWorkspace.WritePacketFiles(workspace.Root, "G841-S11-ED", G841DegradeFixtures.PacketYaml("ED-PC"), withContractBody: true);
         ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
             () => new FakePrClosingIssuesFetcher([902]);
 

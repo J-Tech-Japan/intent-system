@@ -3830,7 +3830,17 @@ internal static class AutomationStalledWorkCommand
             return false;
         }
 
-        if (!PacketYamlDocument.TryParse(File.ReadAllText(packetPath), out var document, out var parseError)
+        string packetText;
+        try
+        {
+            packetText = File.ReadAllText(packetPath);
+        }
+        catch (Exception exception) when (exception is IOException or FormatException)
+        {
+            return false;
+        }
+
+        if (!PacketYamlDocument.TryParse(packetText, out var document, out var parseError)
             || document is null)
         {
             PacketParseWarningTracker?.RecordWarning(packetPath, parseError);

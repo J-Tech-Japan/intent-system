@@ -142,13 +142,37 @@ public sealed class PacketYamlDocumentG841Tests
     }
 
     [Fact]
-    public void TryParseWithLocation_UnterminatedDoubleQuote_HasLineAndColumn()
+    public void TryParseWithLocation_DuplicateKey_ReportsExactLineAndColumn_G841D2()
     {
-        var yaml = BasePacket("  target_repo: \"J-Tech-Creations/Zero4Racer\n");
+        var yaml = """
+            implementation_issue_packet:
+              domain: intent-cli
+              domain: other-domain
+            """;
         Assert.False(PacketYamlDocument.TryParseWithLocation(yaml, out _, out var error));
-        Assert.NotNull(error);
-        Assert.NotNull(error!.Line);
-        Assert.NotNull(error.Column);
+        Assert.Equal(3, error!.Line);
+        Assert.Equal(3, error.Column);
+    }
+
+    [Fact]
+    public void TryParseWithLocation_UnterminatedDoubleQuote_ReportsExactLineAndColumn_G841D2()
+    {
+        var yaml = """
+            implementation_issue_packet:
+              domain: intent-cli
+              target_repo: "J-Tech-Creations/Zero4Racer
+            """;
+        Assert.False(PacketYamlDocument.TryParseWithLocation(yaml, out _, out var error));
+        Assert.Equal(3, error!.Line);
+        Assert.Equal(16, error.Column);
         Assert.DoesNotContain("is not valid YAML", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryParse_InventoryRow_PlainScalarHashComment_YieldsA_G841D6()
+    {
+        var yaml = BasePacket("  tag: a #b\n");
+        Assert.True(PacketYamlDocument.TryParse(yaml, out var document, out _));
+        Assert.Equal("a", document!.Fields["implementation_issue_packet.tag"]);
     }
 }

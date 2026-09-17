@@ -187,12 +187,28 @@ internal static class PacketDraftCommand
         // refreshes the generated block to match current references —
         // never the surrounding hand-owned content.
         var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
-        if (TryBuildPacketUnreadableRefusal(executionUnit, domain, targetRepo, packetDirectory, mode, packetYamlPath, out var unreadableRefusal))
+        IReadOnlyList<string> intentReferences;
+        try
         {
-            return unreadableRefusal;
+            intentReferences = ReadIntentReferences(packetYamlPath);
         }
-
-        var intentReferences = ReadIntentReferences(packetYamlPath);
+        catch (PacketDraftUnreadableException)
+        {
+            return new PacketDraftResult
+            {
+                ExecutionUnit = executionUnit,
+                Domain = domain,
+                TargetRepo = targetRepo,
+                PacketDirectory = packetDirectory,
+                Mode = mode,
+                Files = Array.Empty<PacketDraftFile>(),
+                MissingCanonicalFiles = Array.Empty<string>(),
+                MissingContractSections = Array.Empty<string>(),
+                RefusalReasons = [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
+                RecommendedActions = Array.Empty<string>(),
+                ContractPublishable = false,
+            };
+        }
         var facetDomainRoot = ResolveFacetDomainRoot(context, domain);
         var facetSelection = FacetContextSelector.Select(facetDomainRoot, domain, intentReferences, facetFilter: null);
 
@@ -715,48 +731,6 @@ internal static class PacketDraftCommand
     /// list rather than an error, consistent with the rest of this
     /// scaffolding command's never-fail posture.
     /// </summary>
-    private static bool TryBuildPacketUnreadableRefusal(
-        string executionUnit,
-        string domain,
-        string? targetRepo,
-        string packetDirectory,
-        string mode,
-        string packetYamlPath,
-        out PacketDraftResult refusal)
-    {
-        if (!File.Exists(packetYamlPath))
-        {
-            refusal = null!;
-            return false;
-        }
-
-        try
-        {
-            PacketFileReader.ReadAllText(packetYamlPath);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            refusal = new PacketDraftResult
-            {
-                ExecutionUnit = executionUnit,
-                Domain = domain,
-                TargetRepo = targetRepo,
-                PacketDirectory = packetDirectory,
-                Mode = mode,
-                Files = Array.Empty<PacketDraftFile>(),
-                MissingCanonicalFiles = Array.Empty<string>(),
-                MissingContractSections = Array.Empty<string>(),
-                RefusalReasons = [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
-                RecommendedActions = Array.Empty<string>(),
-                ContractPublishable = false,
-            };
-            return true;
-        }
-
-        refusal = null!;
-        return false;
-    }
-
     private static IReadOnlyList<string> ReadIntentReferences(string packetYamlPath)
     {
         if (!File.Exists(packetYamlPath))

@@ -486,8 +486,14 @@ internal static class IssuePublishFlowCommand
                     return 1;
                 }
 
-                var packetText = DecodePacketText(packetBytes);
-                if (!PacketYamlDocument.TryParseWithLocation(packetText, out _, out var snapshotParseError))
+                lookupSnapshotPacketYaml = packetBytes;
+                lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
+                lookupBody = DecodePacketText(lookupSnapshotGithubBody);
+                try
+                {
+                    lookupTitle = ResolveLookupTitle(executionUnit!, lookupSnapshotPacketYaml, lookupSnapshotGithubBody);
+                }
+                catch (InvalidOperationException exception)
                 {
                     var snapshotRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                         packetExists: true,
@@ -502,18 +508,13 @@ internal static class IssuePublishFlowCommand
                         queueStatePatched: false,
                         publishYamlPatched: false,
                         runsAppended: false,
-                        error: PacketYamlParseMessages.ComposePublishFlowParseDetail(packetYamlPath, snapshotParseError!, changedAfterFirstRead: true),
+                        error: exception.Message,
                         titleSource: titleSource,
                         cause: PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable,
                         crossRuntimeDesignReview: BuildResolutionRefusalField(gatedPublishResolution));
                     EmitResult(writer, snapshotRefusal, format);
                     return 1;
                 }
-
-                lookupSnapshotPacketYaml = packetBytes;
-                lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
-                lookupBody = DecodePacketText(lookupSnapshotGithubBody);
-                lookupTitle = ResolveLookupTitle(executionUnit!, lookupSnapshotPacketYaml, lookupSnapshotGithubBody);
             }
         }
 
