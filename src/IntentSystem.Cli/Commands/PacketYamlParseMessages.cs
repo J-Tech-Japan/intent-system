@@ -6,6 +6,9 @@ internal static class PacketYamlParseMessages
     public static string WarningText(string packetPath, string parserMessage) =>
         $"packet.yaml at '{packetPath}' could not be parsed: {parserMessage}";
 
+    public static string ReadWarningText(string packetPath, string exceptionMessage) =>
+        $"packet.yaml at '{packetPath}' could not be read: {exceptionMessage}";
+
     public static string RunsAuditDetail(string packetPath, string parserMessage) =>
         $"packet.yaml unparseable ({packetPath}): {parserMessage}";
 
@@ -89,5 +92,15 @@ internal sealed class PacketYamlParseWarningTracker
         }
 
         _warnings.Add(PacketYamlParseMessages.WarningText(packetPath, parserMessage));
+    }
+
+    public void RecordReadWarning(string packetPath, string exceptionMessage)
+    {
+        if (!_warnedPaths.Add(packetPath))
+        {
+            return;
+        }
+
+        _warnings.Add(PacketYamlParseMessages.ReadWarningText(packetPath, exceptionMessage));
     }
 }

@@ -627,7 +627,10 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
 
             Assert.Equal(0, exitCode);
             using var doc = JsonDocument.Parse(writer.ToString());
-            Assert.Equal(0, doc.RootElement.GetProperty("warnings").GetArrayLength());
+            var warnings = doc.RootElement.GetProperty("warnings").EnumerateArray().Select(w => w.GetString()!).ToArray();
+            Assert.Equal(
+                [G841DegradeFixtures.ExpectedUnreadableWarning(workspace.Root, "G841-S6-UNR")],
+                warnings);
         }
         finally
         {
@@ -1111,6 +1114,23 @@ internal static class G841DegradeFixtures
         var packetPath = G841DegradeWorkspace.PacketPath(root, unit);
         Assert.False(PacketYamlDocument.TryParse(File.ReadAllText(packetPath), out _, out var error));
         return PacketYamlParseMessages.WarningText(packetPath, error);
+    }
+
+    internal static string ExpectedUnreadableWarning(string root, string unit)
+    {
+        var packetPath = G841DegradeWorkspace.PacketPath(root, unit);
+        Exception? readException = null;
+        try
+        {
+            File.ReadAllText(packetPath);
+            Assert.Fail("Expected chmod 000 packet to be unreadable.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            readException = exception;
+        }
+
+        return PacketYamlParseMessages.ReadWarningText(packetPath, readException!.Message);
     }
 
     internal static string ExpectedParseError(string root, string unit)

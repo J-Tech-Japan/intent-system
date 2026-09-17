@@ -3837,6 +3837,11 @@ internal static class AutomationStalledWorkCommand
         }
         catch (Exception exception) when (exception is IOException or FormatException or UnauthorizedAccessException)
         {
+            if (exception is IOException or UnauthorizedAccessException)
+            {
+                PacketParseWarningTracker?.RecordReadWarning(packetPath, exception.Message);
+            }
+
             return false;
         }
 
