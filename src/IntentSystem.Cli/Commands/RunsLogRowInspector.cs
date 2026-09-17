@@ -170,25 +170,26 @@ internal static class RunsLogRowInspector
             var packetPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit, "packet.yaml");
             if (File.Exists(packetPath))
             {
-                try
+                if (PacketYamlDocument.TryParse(File.ReadAllText(packetPath), out var document, out var parseError)
+                    && document is not null)
                 {
-                    var fields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetPath));
-                    if (fields.TryGetValue("implementation_issue_packet.domain", out var nested) && !string.IsNullOrWhiteSpace(nested))
+                    if (document.Fields.TryGetValue("implementation_issue_packet.domain", out var nested) && !string.IsNullOrWhiteSpace(nested))
                     {
                         detail = $"packet.yaml implementation_issue_packet.domain ({packetPath})";
                         return nested;
                     }
-                    if (fields.TryGetValue("domain", out var top) && !string.IsNullOrWhiteSpace(top))
+                    if (document.Fields.TryGetValue("domain", out var top) && !string.IsNullOrWhiteSpace(top))
                     {
                         detail = $"packet.yaml domain ({packetPath})";
                         return top;
                     }
                 }
-                catch (FormatException)
+                else
                 {
-                    // Malformed packet.yaml — fall through to the other
+                    // G841: malformed packet.yaml — fall through to the other
                     // resolution paths rather than treating this as fatal;
                     // domain resolution here is advisory, not a gate.
+                    detail = PacketYamlParseMessages.RunsAuditDetail(packetPath, parseError);
                 }
             }
 

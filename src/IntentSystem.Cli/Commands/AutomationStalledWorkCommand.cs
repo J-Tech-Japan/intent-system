@@ -545,6 +545,9 @@ internal static class AutomationStalledWorkCommand
 
     public static Func<DateTimeOffset>? UtcNowFactory { get; set; }
 
+    /// <summary>G841: one warning per packet path for the current <see cref="Analyze"/> call.</summary>
+    internal static PacketYamlParseWarningTracker? PacketParseWarningTracker { get; set; }
+
     /// <summary>
     /// G727 test seam for the read-only checkout freshness probe. The default
     /// runner only invokes <c>git rev-parse</c> and
@@ -645,6 +648,7 @@ internal static class AutomationStalledWorkCommand
         var capabilityMatrix = TeamModeCapabilityMatrix.Resolve(context.RepoRoot, domain, team);
         var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var warnings = new List<string>();
+        PacketParseWarningTracker = new PacketYamlParseWarningTracker(warnings);
         var checkoutFreshness = CaptureCheckoutFreshness(context, warnings);
         GitHubApiRequestException? githubApiFailure = null;
         GitHubApiDegradedState? githubApiDegradedState = null;
@@ -867,7 +871,7 @@ internal static class AutomationStalledWorkCommand
                 .ToArray();
         var detectionAvailable = githubApiFailure is null;
 
-        return new AutomationStalledWorkResult
+        var result = new AutomationStalledWorkResult
         {
             Domain = domain,
             CapabilityMatrix = capabilityMatrix.EmittedInJson ? capabilityMatrix : null,
@@ -919,6 +923,8 @@ internal static class AutomationStalledWorkCommand
                 ? null
                 : operatorAttention.Error,
         };
+        PacketParseWarningTracker = null;
+        return result;
     }
 
     private static CheckoutFreshnessObservation? CaptureCheckoutFreshness(
@@ -3824,24 +3830,23 @@ internal static class AutomationStalledWorkCommand
             return false;
         }
 
-        try
+        if (!PacketYamlDocument.TryParse(File.ReadAllText(packetPath), out var document, out var parseError)
+            || document is null)
         {
-            var fields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetPath));
-            var packetDomain = ReadFirstNonEmpty(fields, "implementation_issue_packet.domain", "domain");
-            if (!string.IsNullOrWhiteSpace(packetDomain)
-                && !string.Equals(packetDomain, domain, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            var targetRepo = ReadFirstNonEmpty(fields, "implementation_issue_packet.target_repo", "target_repo");
-            return string.IsNullOrWhiteSpace(targetRepo)
-                || string.Equals(targetRepo, repo, StringComparison.OrdinalIgnoreCase);
+            PacketParseWarningTracker?.RecordWarning(packetPath, parseError);
+            return false;
         }
-        catch (Exception exception) when (exception is IOException or FormatException)
+
+        var packetDomain = ReadFirstNonEmpty(document.Fields, "implementation_issue_packet.domain", "domain");
+        if (!string.IsNullOrWhiteSpace(packetDomain)
+            && !string.Equals(packetDomain, domain, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
+
+        var targetRepo = ReadFirstNonEmpty(document.Fields, "implementation_issue_packet.target_repo", "target_repo");
+        return string.IsNullOrWhiteSpace(targetRepo)
+            || string.Equals(targetRepo, repo, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildBlockedStateDriftAction(QueueItem item, string repo, string blockedReason)
@@ -4717,15 +4722,14 @@ internal static class AutomationStalledWorkCommand
         {
             return null;
         }
-        try
+        if (!PacketYamlDocument.TryParse(File.ReadAllText(packetYamlPath), out var document, out var parseError)
+            || document is null)
         {
-            var fields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath));
-            return ReadFirstNonEmpty(fields, "implementation_issue_packet.domain", "domain");
-        }
-        catch (FormatException)
-        {
+            PacketParseWarningTracker?.RecordWarning(packetYamlPath, parseError);
             return null;
         }
+
+        return ReadFirstNonEmpty(document.Fields, "implementation_issue_packet.domain", "domain");
     }
 
     private static string? ReadFirstNonEmpty(IReadOnlyDictionary<string, string> fields, params string[] keys)
@@ -4925,18 +4929,15 @@ internal static class AutomationStalledWorkCommand
                 continue;
             }
 
-            IReadOnlyDictionary<string, string> fields;
-            try
+            if (!PacketYamlDocument.TryParse(File.ReadAllText(packetYamlPath), out var document, out var parseError)
+                || document is null)
             {
-                fields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath));
-            }
-            catch (FormatException)
-            {
+                PacketParseWarningTracker?.RecordWarning(packetYamlPath, parseError);
                 continue;
             }
 
             var declaredUnit = ReadFirstNonEmpty(
-                fields, "implementation_issue_packet.source_execution_unit", "source_execution_unit");
+                document.Fields, "implementation_issue_packet.source_execution_unit", "source_execution_unit");
             if (string.IsNullOrWhiteSpace(declaredUnit) || !TitleContainsUnitToken(title, declaredUnit))
             {
                 continue;

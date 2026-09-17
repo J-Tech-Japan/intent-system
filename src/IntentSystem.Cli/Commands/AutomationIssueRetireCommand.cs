@@ -597,15 +597,14 @@ internal static class AutomationIssueRetireCommand
         {
             return null;
         }
-        try
-        {
-            PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath)).TryGetValue("domain", out var declaredDomain);
-            return declaredDomain;
-        }
-        catch (FormatException)
+        if (!PacketYamlDocument.TryParse(File.ReadAllText(packetYamlPath), out var document, out _)
+            || document is null)
         {
             return null;
         }
+
+        document.Fields.TryGetValue("domain", out var declaredDomain);
+        return declaredDomain;
     }
 
     // Repair: the marker literals below are the SINGLE source of truth for

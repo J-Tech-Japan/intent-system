@@ -128,25 +128,36 @@ internal static class CrossRuntimeReviewTeamResolver
         }
 
         var packetPath = Path.Combine(CrossRuntimeReviewPaths.PacketDirectory(repoRoot, unit), "packet.yaml");
+        var relativePacketPath = $".intent-cli/issues/{unit}/packet.yaml";
         string? domain = null;
         if (File.Exists(packetPath))
         {
+            string text;
             try
             {
-                var fields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetPath));
-                if (fields.TryGetValue("implementation_issue_packet.domain", out var value))
-                {
-                    domain = value.Trim().Trim('"', '\'').Trim();
-                }
+                text = PacketFileReader.ReadAllText(packetPath);
             }
-            catch (Exception exception) when (exception is IOException or FormatException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                return Unresolved(
-                    "packet-domain",
-                    $"packet '.intent-cli/issues/{unit}/packet.yaml' could not be read: {exception.Message}",
-                    $"repair `.intent-cli/issues/{unit}/packet.yaml` so it declares `implementation_issue_packet.domain`.",
+                return PacketUnreadable(
+                    relativePacketPath,
+                    exception.Message,
                     unit,
                     unitSource);
+            }
+
+            if (!PacketYamlDocument.TryParseWithLocation(text, out var document, out var parseError) || document is null)
+            {
+                return PacketInvalid(
+                    relativePacketPath,
+                    parseError!,
+                    unit,
+                    unitSource);
+            }
+
+            if (document.Fields.TryGetValue("implementation_issue_packet.domain", out var value))
+            {
+                domain = value.Trim().Trim('"', '\'').Trim();
             }
         }
 
@@ -190,6 +201,38 @@ internal static class CrossRuntimeReviewTeamResolver
 
     private static ClaimOwnershipVerification DefaultClaimReader(string repoRoot, string scope) =>
         ClaimOwnershipVerifier.Verify(repoRoot, scope, invokingTeam: null);
+
+    private static CrossRuntimeReviewResolution PacketInvalid(
+        string relativePacketPath,
+        PacketYamlParseError error,
+        string unit,
+        string unitSource) =>
+        new()
+        {
+            Resolved = false,
+            Cause = CrossRuntimeReviewCauses.PacketInvalid,
+            Missing = "packet-invalid",
+            Detail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, error),
+            Fix = $"repair `{relativePacketPath}` so the whole document parses as YAML.",
+            ExecutionUnit = unit,
+            ExecutionUnitSource = unitSource,
+        };
+
+    private static CrossRuntimeReviewResolution PacketUnreadable(
+        string relativePacketPath,
+        string exceptionMessage,
+        string unit,
+        string unitSource) =>
+        new()
+        {
+            Resolved = false,
+            Cause = CrossRuntimeReviewCauses.PacketUnreadable,
+            Missing = "packet-unreadable",
+            Detail = $"packet '{relativePacketPath}' could not be read: {exceptionMessage}",
+            Fix = $"make `{relativePacketPath}` readable, then re-run.",
+            ExecutionUnit = unit,
+            ExecutionUnitSource = unitSource,
+        };
 
     private static CrossRuntimeReviewResolution Unresolved(
         string missing,

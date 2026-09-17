@@ -136,6 +136,7 @@ internal static class CrossRuntimeReviewCauses
     public const string OutDirNotEmpty = "cross-runtime-review-out-dir-not-empty";
     public const string PacketMissing = "cross-runtime-review-packet-missing";
     public const string PacketInvalid = "cross-runtime-review-packet-invalid";
+    public const string PacketUnreadable = "cross-runtime-review-packet-unreadable";
     public const string ArgumentInvalid = "cross-runtime-review-argument-invalid";
     public const string TeamUnresolved = "cross-runtime-review-team-unresolved";
     public const string UnitMismatch = "cross-runtime-review-unit-mismatch";

@@ -102,6 +102,8 @@ internal static class AutomationPublishRecoveryCommand
         // allowed into `PublishRecoveryAnalyzer`, and an underivable or
         // contradictory candidate becomes a structured unsafe stop instead
         // of silently joining (or silently being dropped from) the scan.
+        var informationalWarnings = new List<string>();
+        var packetParseWarnings = new PacketYamlParseWarningTracker(informationalWarnings);
         PublishRecoveryAnalysis analysis;
         var domainBlockedStops = new List<PublishRecoveryUnsafeStop>();
         if (selectedPr is int prNumber)
@@ -118,7 +120,7 @@ internal static class AutomationPublishRecoveryCommand
                 : scoped.UnsafeStops.Count > 0 ? scoped.UnsafeStops[0].ExecutionUnit : null;
             var domainResolution = relevantUnit is null
                 ? (PacketDomainResolutionResult?)null
-                : ResolveCandidateDomain(context, domain, relevantUnit, candidateDomains, repo!, selectedPr);
+                : ResolveCandidateDomain(context, domain, relevantUnit, candidateDomains, repo!, selectedPr, packetParseWarnings);
             if (domainResolution is { IsError: true } blocked)
             {
                 analysis = new PublishRecoveryAnalysis
@@ -149,7 +151,7 @@ internal static class AutomationPublishRecoveryCommand
             var eligible = new List<PublishRecoveryCandidate>();
             foreach (var candidate in rawCandidates)
             {
-                var resolution = ResolveCandidateDomain(context, domain, candidate.ExecutionUnit, candidateDomains, repo!, selectedPr: null);
+                var resolution = ResolveCandidateDomain(context, domain, candidate.ExecutionUnit, candidateDomains, repo!, selectedPr: null, packetParseWarnings);
                 if (resolution.IsError)
                 {
                     domainBlockedStops.Add(new PublishRecoveryUnsafeStop
@@ -203,7 +205,7 @@ internal static class AutomationPublishRecoveryCommand
             SafeRepairs = analysis.SafeRepairs,
             UnsafeStops = unsafeStopsWithGaps,
             AppliedCount = applied.Count,
-            Warnings = failures,
+            Warnings = failures.Concat(informationalWarnings).ToArray(),
             Summary = BuildSummary(analysis, applied.Count, write),
             SameRepoMetadataLinkageClassification = ClassifySameRepoLinkage(context, analysis),
         };
@@ -259,18 +261,21 @@ internal static class AutomationPublishRecoveryCommand
         string executionUnit,
         IReadOnlyList<string> candidateDomains,
         string repo,
-        int? selectedPr)
+        int? selectedPr,
+        PacketYamlParseWarningTracker? packetParseWarnings = null)
     {
         var packetYamlPath = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit, "packet.yaml");
         string? packetDeclaredDomain = null;
         if (File.Exists(packetYamlPath))
         {
-            try
+            if (PacketYamlDocument.TryParse(File.ReadAllText(packetYamlPath), out var document, out var parseError)
+                && document is not null)
             {
-                PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath)).TryGetValue("domain", out packetDeclaredDomain);
+                document.Fields.TryGetValue("domain", out packetDeclaredDomain);
             }
-            catch (FormatException)
+            else
             {
+                packetParseWarnings?.RecordWarning(packetYamlPath, parseError);
                 packetDeclaredDomain = null;
             }
         }

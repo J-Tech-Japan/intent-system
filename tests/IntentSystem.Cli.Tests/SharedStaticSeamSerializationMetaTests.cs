@@ -63,6 +63,10 @@ public sealed class SharedStaticSeamSerializationMetaTests
                 "IntentSystem.Cli.Commands.GhCliGitHubAutomationCandidateLister.ProcessRunner",
                 typeof(AutomationStalledWorkG805Tests),
                 typeof(GitHubApiReadG674Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.PacketFileReader.ReadAllText",
+                typeof(G841CrossRuntimeReviewTests),
+                typeof(G841PublishFlowTests)),
         };
 
         // xUnit 2.9.3 documents CollectionDefinitionAttribute.DisableParallelization
@@ -73,7 +77,7 @@ public sealed class SharedStaticSeamSerializationMetaTests
         Assert.True(
             splitCases.SequenceEqual(expectedSplitCases)
             && splitCases.All(split => analysis.AreSerializedTogether([split.LeftClass, split.RightClass])),
-            "expected the six recorded shared-static assigning-class pairs split across distinct explicitly "
+            "expected the recorded shared-static assigning-class pairs split across distinct explicitly "
             + "non-parallel xUnit collections, with no additions or substitutions. Every involved CollectionDefinition must keep "
             + $"DisableParallelization = true. Discovered {splitCases.Count}:\n"
             + string.Join("\n", splitCases.Select(analysis.Describe)));

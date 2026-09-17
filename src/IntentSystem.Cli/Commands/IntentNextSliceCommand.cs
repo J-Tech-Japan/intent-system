@@ -146,6 +146,9 @@ internal static class IntentNextSliceCommand
             ? context.Config.Project.Domain
             : domainOverride!;
 
+        var warnings = new List<string>();
+        var packetParseWarnings = new PacketYamlParseWarningTracker(warnings);
+
         // G332: when the caller names a target repo, route the
         // queue-state read through the runtime-scoped resolver so the
         // WIP gate sees the scoped state for the (domain, target-repo)
@@ -279,7 +282,7 @@ internal static class IntentNextSliceCommand
                         // domain bindings execution_unit_regex on queue
                         // items so a misnamed cross-namespace WIP item
                         // cannot block the requested domain lane.
-                        if (MatchesDomainAndRepoFilter(domain, targetRepo, queueState, item.ExecutionUnit, Path.Combine(packetRoot, item.ExecutionUnit))
+                        if (MatchesDomainAndRepoFilter(domain, targetRepo, queueState, item.ExecutionUnit, Path.Combine(packetRoot, item.ExecutionUnit), packetParseWarnings)
                             && MatchesExecutionUnitRegex(executionUnitRegex, item.ExecutionUnit))
                         {
                             wip.Add(item.ExecutionUnit);
@@ -412,7 +415,7 @@ internal static class IntentNextSliceCommand
                     continue;
                 }
 
-                if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory))
+                if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory, packetParseWarnings))
                 {
                     continue;
                 }
@@ -490,7 +493,7 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
-                    if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory))
+                    if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory, packetParseWarnings))
                     {
                         continue;
                     }
@@ -564,7 +567,6 @@ internal static class IntentNextSliceCommand
             candidate,
             runtimeCreationAllowed);
 
-        var warnings = new List<string>();
         if (staleClarificationMetadata)
         {
             // G285: surface stale front-matter so the host can repair the file
@@ -922,7 +924,8 @@ internal static class IntentNextSliceCommand
         string? targetRepo,
         QueueState? queueState,
         string executionUnit,
-        string directory)
+        string directory,
+        PacketYamlParseWarningTracker? packetParseWarnings = null)
     {
         // Domain filter: derive domain from queue item's clarification_return_path.
         // Path shape: intents/<domain>/clarifications/open.md
@@ -952,7 +955,7 @@ internal static class IntentNextSliceCommand
         // Target-repo filter: read packet.yaml to get target_repo field.
         //
         // PR #824 review repair #3: parse packet.yaml structurally
-        // (via the strict PreparedPacketYamlScalarParser) instead of
+        // (via PacketYamlDocument) instead of
         // the legacy line-scanner. Malformed YAML now fails the
         // filter so a broken packet.yaml can never reach
         // issue-cut-ready. Lazy import of the strict parser keeps
@@ -963,7 +966,7 @@ internal static class IntentNextSliceCommand
             var packetYamlPath = Path.Combine(directory, "packet.yaml");
             if (File.Exists(packetYamlPath))
             {
-                var packetTargetRepo = TryReadPacketTargetRepoStrict(packetYamlPath);
+                var packetTargetRepo = TryReadPacketTargetRepoStrict(packetYamlPath, packetParseWarnings);
                 // Strict outcomes:
                 //  - matching value         → keep (passes filter).
                 //  - mismatched value       → filter out (return false).
@@ -1005,7 +1008,9 @@ internal static class IntentNextSliceCommand
         PacketTargetRepoOutcomeKind Outcome,
         string? Value);
 
-    private static PacketTargetRepoOutcome TryReadPacketTargetRepoStrict(string packetYamlPath)
+    private static PacketTargetRepoOutcome TryReadPacketTargetRepoStrict(
+        string packetYamlPath,
+        PacketYamlParseWarningTracker? packetParseWarnings = null)
     {
         string content;
         try
@@ -1021,18 +1026,13 @@ internal static class IntentNextSliceCommand
             return new PacketTargetRepoOutcome(PacketTargetRepoOutcomeKind.MalformedYaml, null);
         }
 
-        IReadOnlyDictionary<string, string> fields;
-        try
+        if (!PacketYamlDocument.TryParse(content, out var document, out var error) || document is null)
         {
-            fields = PreparedPacketYamlScalarParser.Parse(content);
-        }
-        catch (FormatException)
-        {
-            // Malformed YAML — fail closed so the broken packet does
-            // not slip through the next-slice candidate filter.
+            packetParseWarnings?.RecordWarning(packetYamlPath, error);
             return new PacketTargetRepoOutcome(PacketTargetRepoOutcomeKind.MalformedYaml, null);
         }
 
+        var fields = document.Fields;
         if (fields.TryGetValue("implementation_issue_packet.target_repo", out var nested)
             && !string.IsNullOrWhiteSpace(nested))
         {

@@ -153,7 +153,7 @@ internal static class BugImplementationIssueCommand
             if (!string.IsNullOrWhiteSpace(recordedRepairExecutionUnit)
                 && UsesG337ImplementationIssuePacketSchema(yaml))
             {
-                var targetRepo = ResolveG337TargetRepo(repoRoot, yaml);
+                var targetRepo = ResolveG337TargetRepo(repoRoot, packetPath, yaml);
                 throw new InvalidOperationException(
                     $"Recorded repair target '{target}' uses the G337 'implementation_issue_packet' schema, but bug implementation-issue expects the legacy ProjectionPacketRuntimeReader 'execution_unit' schema. Run `intent-cli issue publish-flow {recordedRepairExecutionUnit} --repo {targetRepo} --write` to publish the recorded repair packet before retrying.");
             }
@@ -187,10 +187,15 @@ internal static class BugImplementationIssueCommand
             .Any(line => string.Equals(line.Trim(), "implementation_issue_packet:", StringComparison.Ordinal));
     }
 
-    private static string ResolveG337TargetRepo(string repoRoot, string yaml)
+    private static string ResolveG337TargetRepo(string repoRoot, string packetPath, string yaml)
     {
-        var fields = PreparedPacketYamlScalarParser.Parse(yaml);
-        if (!fields.TryGetValue("implementation_issue_packet.target_repo", out var packetTargetRepo)
+        if (!PacketYamlDocument.TryParseWithLocation(yaml, out var document, out var parseError) || document is null)
+        {
+            throw new InvalidOperationException(
+                PacketYamlParseMessages.ComposePublishFlowParseDetail(packetPath, parseError!));
+        }
+
+        if (!document.Fields.TryGetValue("implementation_issue_packet.target_repo", out var packetTargetRepo)
             || string.IsNullOrWhiteSpace(packetTargetRepo))
         {
             throw new InvalidOperationException(

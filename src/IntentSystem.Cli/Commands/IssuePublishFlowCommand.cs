@@ -230,8 +230,47 @@ internal static class IssuePublishFlowCommand
         string? titleSource = null;
         if (githubBodyPresent)
         {
-            (title, titleSource) = ResolveTitleWithSource(executionUnit!, packetDirectory, githubBodyPath);
-            title = FormatIssueTitle(executionUnit!, title);
+            var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+            if (File.Exists(packetYamlPath)
+                && !TryResolveLiveTitle(
+                    executionUnit!,
+                    packetYamlPath,
+                    githubBodyPath,
+                    out title,
+                    out titleSource,
+                    out var titleRefusalCause,
+                    out var titleRefusalDetail))
+            {
+                var titleRefusalResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                    packetExists: true,
+                    githubBodyPresent: true,
+                    missingSections: missing,
+                    title: null,
+                    created: false,
+                    idempotent: false,
+                    durableStateSynced: false,
+                    issueUrl: null,
+                    issueNumber: null,
+                    queueStatePatched: false,
+                    publishYamlPatched: false,
+                    runsAppended: false,
+                    error: titleRefusalDetail,
+                    titleSource: null,
+                    cause: titleRefusalCause,
+                    crossRuntimeDesignReview: BuildTitleRefusalDesignReviewField(context, executionUnit!, repo!));
+                EmitResult(writer, titleRefusalResult, format);
+                return 1;
+            }
+
+            if (title is not null)
+            {
+                title = FormatIssueTitle(executionUnit!, title);
+            }
+            else
+            {
+                (title, titleSource) = ResolveTitleWithSource(executionUnit!, packetDirectory, githubBodyPath);
+                title = FormatIssueTitle(executionUnit!, title);
+            }
         }
 
         // G449: gate publish on the SHARED NextSliceReadinessEvaluator's
@@ -419,7 +458,59 @@ internal static class IssuePublishFlowCommand
             {
                 var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
                 BeforeLookupSnapshotHook?.Invoke();
-                lookupSnapshotPacketYaml = File.ReadAllBytes(packetYamlPath);
+                byte[] packetBytes;
+                try
+                {
+                    packetBytes = PacketFileReader.ReadAllBytes(packetYamlPath);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    var snapshotRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                        packetExists: true,
+                        githubBodyPresent: true,
+                        missingSections: missing,
+                        title: title,
+                        created: false,
+                        idempotent: false,
+                        durableStateSynced: false,
+                        issueUrl: null,
+                        issueNumber: null,
+                        queueStatePatched: false,
+                        publishYamlPatched: false,
+                        runsAppended: false,
+                        error: PacketYamlParseMessages.ComposePublishFlowReadDetail(packetYamlPath, exception.Message, changedAfterFirstRead: true),
+                        titleSource: titleSource,
+                        cause: PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable,
+                        crossRuntimeDesignReview: BuildResolutionRefusalField(gatedPublishResolution));
+                    EmitResult(writer, snapshotRefusal, format);
+                    return 1;
+                }
+
+                var packetText = DecodePacketText(packetBytes);
+                if (!PacketYamlDocument.TryParseWithLocation(packetText, out _, out var snapshotParseError))
+                {
+                    var snapshotRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                        packetExists: true,
+                        githubBodyPresent: true,
+                        missingSections: missing,
+                        title: title,
+                        created: false,
+                        idempotent: false,
+                        durableStateSynced: false,
+                        issueUrl: null,
+                        issueNumber: null,
+                        queueStatePatched: false,
+                        publishYamlPatched: false,
+                        runsAppended: false,
+                        error: PacketYamlParseMessages.ComposePublishFlowParseDetail(packetYamlPath, snapshotParseError!, changedAfterFirstRead: true),
+                        titleSource: titleSource,
+                        cause: PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable,
+                        crossRuntimeDesignReview: BuildResolutionRefusalField(gatedPublishResolution));
+                    EmitResult(writer, snapshotRefusal, format);
+                    return 1;
+                }
+
+                lookupSnapshotPacketYaml = packetBytes;
                 lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
                 lookupBody = DecodePacketText(lookupSnapshotGithubBody);
                 lookupTitle = ResolveLookupTitle(executionUnit!, lookupSnapshotPacketYaml, lookupSnapshotGithubBody);
@@ -1543,7 +1634,7 @@ internal static class IssuePublishFlowCommand
         CrossRuntimeReviewPublishResolver.PublishResolution resolution)
     {
         var cause = !resolution.Resolved
-            ? CrossRuntimeReviewCauses.TeamUnresolved
+            ? resolution.Cause ?? CrossRuntimeReviewCauses.TeamUnresolved
             : resolution.DomainMismatch
                 ? CrossRuntimeReviewCauses.DomainMismatch
                 : CrossRuntimeReviewCauses.TargetRepoMismatch;
@@ -1559,9 +1650,28 @@ internal static class IssuePublishFlowCommand
                 },
             ],
             Digest = null,
-            Domain = resolution.Domain,
-            Team = resolution.Team,
+            Domain = cause is CrossRuntimeReviewCauses.PacketInvalid or CrossRuntimeReviewCauses.PacketUnreadable
+                ? null
+                : resolution.Domain,
+            Team = cause is CrossRuntimeReviewCauses.PacketInvalid or CrossRuntimeReviewCauses.PacketUnreadable
+                ? null
+                : resolution.Team,
         };
+    }
+
+    private static CrossRuntimeDesignReviewField? BuildTitleRefusalDesignReviewField(
+        CliContext context,
+        string executionUnit,
+        string repo)
+    {
+        if (!context.Config.CrossRuntimeReview.IsGatedRepo(repo))
+        {
+            return null;
+        }
+
+        var resolution = CrossRuntimeReviewPublishResolver.Resolve(
+            context.RepoRoot, executionUnit, repo, context.Config.CrossRuntimeReview);
+        return BuildResolutionRefusalField(resolution);
     }
 
     private static CrossRuntimeDesignReviewField EvaluateDeclaredDesignGate(
@@ -2280,14 +2390,18 @@ internal static class IssuePublishFlowCommand
         byte[] githubBodyBytes)
     {
         var packetText = DecodePacketText(packetYamlBytes);
-        if (PacketYamlDocument.TryParse(packetText, out var document, out _) && document is not null)
+        if (!PacketYamlDocument.TryParseWithLocation(packetText, out var document, out var parseError) || document is null)
         {
-            foreach (var key in PacketTitleKeys)
+            throw new InvalidOperationException(parseError is null
+                ? "packet.yaml could not be parsed."
+                : PacketYamlParseMessages.ComposePublishFlowParseDetail("packet.yaml", parseError, changedAfterFirstRead: true));
+        }
+
+        foreach (var key in PacketTitleKeys)
+        {
+            if (document.Fields.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
             {
-                if (document.Fields.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
-                {
-                    return (value.Trim(), TitleSourcePacketYaml);
-                }
+                return (value.Trim(), TitleSourcePacketYaml);
             }
         }
 
@@ -2406,36 +2520,60 @@ internal static class IssuePublishFlowCommand
         "title",
     ];
 
-    private static string? TryReadPacketTitle(string packetYamlPath)
+    private static bool TryResolveLiveTitle(
+        string executionUnit,
+        string packetYamlPath,
+        string githubBodyPath,
+        out string? title,
+        out string? titleSource,
+        out string? refusalCause,
+        out string? refusalDetail)
     {
-        // G826: this used to scan for a line starting with "title:", which the
-        // scaffold never writes, so canonically scaffolded packets published as
-        // "<id> (untitled)". Parse through PacketYamlDocument (YAML and JSON
-        // packet forms) like queue-seed-from-packet does.
+        title = null;
+        titleSource = null;
+        refusalCause = null;
+        refusalDetail = null;
+
         string text;
         try
         {
-            text = File.ReadAllText(packetYamlPath);
+            text = PacketFileReader.ReadAllText(packetYamlPath);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            return null;
+            refusalCause = PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable;
+            refusalDetail = PacketYamlParseMessages.ComposePublishFlowReadDetail(packetYamlPath, exception.Message);
+            return false;
         }
 
-        if (!PacketYamlDocument.TryParse(text, out var document, out _) || document is null)
+        if (!PacketYamlDocument.TryParseWithLocation(text, out var document, out var parseError) || document is null)
         {
-            return null;
+            refusalCause = PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable;
+            refusalDetail = PacketYamlParseMessages.ComposePublishFlowParseDetail(packetYamlPath, parseError!);
+            return false;
         }
 
         foreach (var key in PacketTitleKeys)
         {
             if (document.Fields.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
             {
-                return value.Trim();
+                title = value.Trim();
+                titleSource = TitleSourcePacketYaml;
+                return true;
             }
         }
 
-        return null;
+        return true;
+    }
+
+    private static string? TryReadPacketTitle(string packetYamlPath)
+    {
+        if (!TryResolveLiveTitle(string.Empty, packetYamlPath, string.Empty, out var title, out _, out _, out _))
+        {
+            return null;
+        }
+
+        return title;
     }
 
     private static bool TryParseArguments(
