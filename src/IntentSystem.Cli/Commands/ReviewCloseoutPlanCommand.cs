@@ -344,16 +344,15 @@ internal static class ReviewCloseoutPlanCommand
                 var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
                 if (File.Exists(packetYamlPath))
                 {
-                    try
+                    if (PacketYamlDocument.TryParse(File.ReadAllText(packetYamlPath), out var document, out _)
+                        && document is not null)
                     {
-                        var packetFields = PreparedPacketYamlScalarParser.Parse(File.ReadAllText(packetYamlPath));
-                        packetFields.TryGetValue("domain", out packetDeclaredDomain);
+                        document.Fields.TryGetValue("domain", out packetDeclaredDomain);
                     }
-                    catch (FormatException)
+                    else
                     {
-                        // Malformed packet.yaml is surfaced elsewhere (G361
-                        // validation on the write-side commands); here it
-                        // just means no domain can be derived from it.
+                        // G841: malformed packet.yaml is surfaced elsewhere;
+                        // here it just means no domain can be derived from it.
                         packetDeclaredDomain = null;
                     }
                 }

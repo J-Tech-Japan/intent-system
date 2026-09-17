@@ -8,8 +8,7 @@ namespace IntentSystem.Cli.Commands;
 ///
 /// G565 unified projection onto a real YAML parser. This is the same move one
 /// surface further upstream, and on a MUTATION path: the queue-seed lane read
-/// packet fields with <see cref="PreparedPacketYamlScalarParser"/>, a
-/// line-and-regex reader that never parses the document, so a packet the schema
+/// packet fields with a line-and-regex reader that never parsed the document, so a packet the schema
 /// and projection surfaces both reject could still classify
 /// <c>queue-seed-ready</c> and put a malformed unit into the queue. The failure
 /// then surfaces at publish or preflight time, far from its cause.
@@ -127,6 +126,63 @@ internal sealed class PacketYamlDocument
         if (root is null)
         {
             error = "packet.yaml is empty or its top-level document is not a mapping.";
+            return false;
+        }
+
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        var sequences = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        Flatten(root, prefix: null, fields, sequences);
+        document = new PacketYamlDocument(fields, sequences);
+        return true;
+    }
+
+    /// <summary>
+    /// G841: same parse as <see cref="TryParse"/>, but returns a structured
+    /// <see cref="PacketYamlParseError"/> whose <c>Message</c> omits the
+    /// <c>packet.yaml is not valid YAML: </c> prefix and carries nullable
+    /// line/column from <see cref="YamlDotNet.Core.YamlException.Start"/>.
+    /// Separately named to avoid CS0121 on existing <c>out _</c> callers.
+    /// </summary>
+    public static bool TryParseWithLocation(string yaml, out PacketYamlDocument? document, out PacketYamlParseError? error)
+    {
+        document = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(yaml))
+        {
+            error = new PacketYamlParseError("packet.yaml is empty.", null, null);
+            return false;
+        }
+
+        YamlMappingNode? root;
+        try
+        {
+            var stream = new YamlStream();
+            using var reader = new StringReader(yaml);
+            stream.Load(reader);
+            root = stream.Documents.Count == 0 ? null : stream.Documents[0].RootNode as YamlMappingNode;
+        }
+        catch (YamlDotNet.Core.YamlException exception)
+        {
+            var start = exception.Start;
+            error = new PacketYamlParseError(
+                exception.Message,
+                (int)start.Line,
+                (int)start.Column);
+            return false;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException)
+        {
+            error = new PacketYamlParseError(exception.Message, null, null);
+            return false;
+        }
+
+        if (root is null)
+        {
+            error = new PacketYamlParseError(
+                "packet.yaml is empty or its top-level document is not a mapping.",
+                null,
+                null);
             return false;
         }
 

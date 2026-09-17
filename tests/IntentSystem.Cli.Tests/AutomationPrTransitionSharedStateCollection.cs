@@ -5,7 +5,7 @@ namespace IntentSystem.Cli.Tests;
 /// original pr-transition tests and by the cross-runtime review gate tests, so
 /// both classes share one xUnit collection (G580 static-seam serialization).
 /// </summary>
-[CollectionDefinition(Name)]
+[CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class AutomationPrTransitionSharedStateCollection
 {
     public const string Name = "AutomationPrTransitionSharedState";

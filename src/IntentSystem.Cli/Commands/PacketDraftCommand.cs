@@ -187,7 +187,28 @@ internal static class PacketDraftCommand
         // refreshes the generated block to match current references —
         // never the surrounding hand-owned content.
         var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
-        var intentReferences = ReadIntentReferences(packetYamlPath);
+        IReadOnlyList<string> intentReferences;
+        try
+        {
+            intentReferences = ReadIntentReferences(packetYamlPath);
+        }
+        catch (PacketDraftUnreadableException)
+        {
+            return new PacketDraftResult
+            {
+                ExecutionUnit = executionUnit,
+                Domain = domain,
+                TargetRepo = targetRepo,
+                PacketDirectory = packetDirectory,
+                Mode = mode,
+                Files = Array.Empty<PacketDraftFile>(),
+                MissingCanonicalFiles = Array.Empty<string>(),
+                MissingContractSections = Array.Empty<string>(),
+                RefusalReasons = [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
+                RecommendedActions = Array.Empty<string>(),
+                ContractPublishable = false,
+            };
+        }
         var facetDomainRoot = ResolveFacetDomainRoot(context, domain);
         var facetSelection = FacetContextSelector.Select(facetDomainRoot, domain, intentReferences, facetFilter: null);
 
@@ -241,11 +262,31 @@ internal static class PacketDraftCommand
         string? ReadPacketFile(string name)
         {
             var path = Path.Combine(packetDirectory, name);
-            return File.Exists(path) ? File.ReadAllText(path) : null;
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            if (string.Equals(name, PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml, StringComparison.Ordinal))
+            {
+                try
+                {
+                    return PacketFileReader.ReadAllText(path);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    throw new PacketDraftUnreadableException(path, exception.Message);
+                }
+            }
+
+            return PacketFileReader.ReadAllText(path);
         }
 
         var regexResolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, domain);
-        var readiness = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        PreparedPacketCommitReadyResult readiness;
+        try
+        {
+            readiness = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
         {
             ExecutionUnit = executionUnit,
             PacketYaml = ReadPacketFile(PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml),
@@ -255,7 +296,25 @@ internal static class PacketDraftCommand
             ExecutionUnitRegex = regexResolution.Pattern,
             RequestedTargetRepo = targetRepo,
             RequireDomainBinding = true,
-        });
+            });
+        }
+        catch (PacketDraftUnreadableException)
+        {
+            return new PacketDraftResult
+            {
+                ExecutionUnit = executionUnit,
+                Domain = domain,
+                TargetRepo = targetRepo,
+                PacketDirectory = packetDirectory,
+                Mode = mode,
+                Files = files,
+                MissingCanonicalFiles = Array.Empty<string>(),
+                MissingContractSections = Array.Empty<string>(),
+                RefusalReasons = [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
+                RecommendedActions = Array.Empty<string>(),
+                ContractPublishable = false,
+            };
+        }
 
         IReadOnlyList<string> recommendedActions = readiness.RecommendedActions;
         if (readiness.Classification != PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady)
@@ -687,7 +746,7 @@ internal static class PacketDraftCommand
         try
         {
             var yaml = new YamlDotNet.RepresentationModel.YamlStream();
-            using var reader = new StringReader(File.ReadAllText(packetYamlPath));
+            using var reader = new StringReader(PacketFileReader.ReadAllText(packetYamlPath));
             yaml.Load(reader);
 
             if (yaml.Documents.Count == 0
@@ -711,6 +770,10 @@ internal static class PacketDraftCommand
         catch (YamlDotNet.Core.YamlException)
         {
             return Array.Empty<string>();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new PacketDraftUnreadableException(packetYamlPath, exception.Message);
         }
     }
 
@@ -1087,4 +1150,12 @@ internal sealed record PacketDraftFile
     /// </summary>
     [JsonPropertyName("detail")]
     public string? Detail { get; init; }
+}
+
+internal sealed class PacketDraftUnreadableException : Exception
+{
+    public PacketDraftUnreadableException(string packetPath, string message)
+        : base(PacketYamlParseMessages.ComposePacketDraftReadDetail(packetPath, message))
+    {
+    }
 }

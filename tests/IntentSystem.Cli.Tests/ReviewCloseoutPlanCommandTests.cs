@@ -1670,4 +1670,60 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
             }
         }
     }
+
+    // ── G841 AC11 site 11 (shares ReviewCloseoutPlanCommand static seam) ─────
+
+    [Fact]
+    public void Site11_CloseoutPlan_Le_TwoCandidateDomains_ExitZero_SilentDegrade()
+    {
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-LE", Site11PacketYaml("LE"), withContractBody: true);
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Site11_CloseoutPlan_Su_TwoCandidateDomains_ExitOne_SilentDegrade()
+    {
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-SU", G841DegradeFixtures.PacketYaml("SU"));
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
+        Assert.Contains("Candidate domains: alpha, beta", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Site11_CloseoutPlan_EdQuotedHash_TwoCandidateDomains_ExitZero_ReadsDomain()
+    {
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-ED-QH", Site11PacketYaml("ED-QH"), withContractBody: true);
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Site11_CloseoutPlan_EdPlainColon_TwoCandidateDomains_ExitOne_AmbiguityRefusal()
+    {
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-ED-PC", G841DegradeFixtures.PacketYaml("ED-PC"), withContractBody: true);
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
+        Assert.Contains("Candidate domains: alpha, beta", output, StringComparison.Ordinal);
+    }
+
+    private static string Site11PacketYaml(string inputClass) =>
+        $"domain: {G841TestHelpers.AlphaDomain}\n{G841DegradeFixtures.PacketYaml(inputClass)}";
+
+    private static (int ExitCode, string Output) RunSite11CloseoutPlan(string unit, string yaml, bool withContractBody = false)
+    {
+        using var workspace = new G841DegradeWorkspace();
+        workspace.WriteIntentsDomainDirectory(G841TestHelpers.AlphaDomain);
+        workspace.WriteIntentsDomainDirectory(G841TestHelpers.BetaDomain);
+        workspace.WriteQueueState(G841DegradeFixtures.CloseoutQueueState(unit));
+        G841DegradeWorkspace.WritePacketFiles(workspace.Root, unit, yaml, withContractBody: withContractBody);
+        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
+            () => new FakePrClosingIssuesFetcher([900]);
+        using var writer = new StringWriter();
+        var exitCode = ReviewCloseoutPlanCommand.Execute(
+            workspace.Context,
+            ["--repo", G841TestHelpers.Repo, "--pr", "901", "--format", "json"],
+            writer);
+        return (exitCode, writer.ToString());
+    }
 }
