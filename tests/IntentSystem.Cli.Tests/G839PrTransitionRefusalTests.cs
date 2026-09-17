@@ -193,7 +193,8 @@ public sealed class G839PrTransitionRefusalTests : IDisposable
             "blocked" => "[cross-runtime-review-blocked]",
             "rereview-missing" => "[cross-runtime-review-rereview-missing]",
             "record-unreadable" => "[cross-runtime-review-record-unreadable]",
-            _ => string.Empty,
+            "head-required" => "declares cross-runtime review; pass `--head-sha",
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, "unknown refusal scenario"),
         };
 
     private void WritePacket(string unit, string? domain)

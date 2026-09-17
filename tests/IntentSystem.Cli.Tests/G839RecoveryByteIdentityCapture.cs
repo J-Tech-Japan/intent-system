@@ -8,15 +8,18 @@ namespace IntentSystem.Cli.Tests;
 
 public sealed partial class G839RecoveryByteIdentityTests
 {
-    internal static string CaptureRecovery(string fixtureId)
+    internal static string CaptureRecovery(string fixtureId) =>
+        CaptureRecovery(fixtureId, G839ByteIdentityHarness.Unit);
+
+    internal static string CaptureRecovery(string fixtureId, string executionUnit)
     {
         using var scope = new RecoverySeams();
         using var workspace = fixtureId.StartsWith("recovery-host-state-missing", StringComparison.Ordinal)
             ? new G839ByteIdentityHarness.RecoveryWorkspace()
-            : G839ByteIdentityHarness.CreateProceedWorkspace();
+            : G839ByteIdentityHarness.CreateProceedWorkspace(executionUnit);
         if (!fixtureId.StartsWith("recovery-host-state-missing", StringComparison.Ordinal))
         {
-            SeedRecoveryGitHubFakes(workspace);
+            SeedRecoveryGitHubFakes(workspace, executionUnit);
         }
         else
         {
@@ -28,7 +31,9 @@ public sealed partial class G839RecoveryByteIdentityTests
         }
 
         ConfigureRecoveryScenario(workspace, fixtureId);
-        var output = G839ByteIdentityHarness.RunRecovery(workspace, G839ByteIdentityHarness.BuildRecoveryArgs(fixtureId));
+        var output = G839ByteIdentityHarness.RunRecovery(
+            workspace,
+            G839ByteIdentityHarness.BuildRecoveryArgs(fixtureId, executionUnit));
         return G839ByteIdentityHarness.NormalizeCapturedOutput(output, workspace.RootPath);
     }
 
@@ -178,10 +183,10 @@ public sealed partial class G839RecoveryByteIdentityTests
                 throw new ArgumentOutOfRangeException(nameof(fixtureId), fixtureId, "unknown recovery scenario");
         }
     }
-    private static void SeedRecoveryGitHubFakes(G839ByteIdentityHarness.RecoveryWorkspace workspace)
+    private static void SeedRecoveryGitHubFakes(G839ByteIdentityHarness.RecoveryWorkspace workspace, string executionUnit)
     {
         AutomationPrCreatedStaleRecoveryCommand.IssueLookupFactory = () =>
-            new FakeIssueLookup(G839ByteIdentityHarness.OpenIssue("intent-target", "intent-pr-created"));
+            new FakeIssueLookup(G839ByteIdentityHarness.OpenIssueForExecutionUnit(executionUnit, "intent-target", "intent-pr-created"));
         AutomationPrCreatedStaleRecoveryCommand.PrLookupFactory = () =>
             new FakePrLookup(G839ByteIdentityHarness.ClosedUnmerged(G839ByteIdentityHarness.Pr));
         AutomationPrCreatedStaleRecoveryCommand.CandidateListerFactory = () => new FakeLister();

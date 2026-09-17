@@ -7,6 +7,69 @@ namespace IntentSystem.Cli.Tests;
 /// </summary>
 internal static class G839FixtureExpectations
 {
+    internal static readonly string[][] FixtureGroups =
+    [
+        G839ByteIdentityHarness.RecoveryScenarioIds,
+        G839ByteIdentityHarness.PrTransitionRefusalTextScenarioIds,
+        G839ByteIdentityHarness.PrTransitionNonRefusalScenarioIds,
+        [
+            "planned-labels-automation-summary",
+            "planned-labels-automation-doctor",
+            "planned-labels-worker-next-action",
+            "planned-labels-worker-pr-comment-preflight",
+        ],
+    ];
+
+    internal static string GetNeighborFixtureId(string fixtureId)
+    {
+        var group = FixtureGroups.First(candidate => candidate.Contains(fixtureId));
+        var index = Array.IndexOf(group, fixtureId);
+        for (var offset = 1; offset < group.Length; offset++)
+        {
+            var neighbourId = group[(index + offset) % group.Length];
+            if (!HasSameExpectation(fixtureId, neighbourId))
+            {
+                return neighbourId;
+            }
+        }
+
+        throw new InvalidOperationException($"No distinct neighbour found for fixture '{fixtureId}'.");
+    }
+
+    private static bool HasSameExpectation(string leftFixtureId, string rightFixtureId)
+    {
+        if (TryGetRecoveryExpectation(leftFixtureId, out var leftField, out var leftValue)
+            && TryGetRecoveryExpectation(rightFixtureId, out var rightField, out var rightValue))
+        {
+            return string.Equals(leftField, rightField, StringComparison.Ordinal)
+                && string.Equals(leftValue, rightValue, StringComparison.Ordinal);
+        }
+
+        if (PrTransitionJsonExpectations.TryGetValue(leftFixtureId, out var leftJson)
+            && PrTransitionJsonExpectations.TryGetValue(rightFixtureId, out var rightJson))
+        {
+            return leftJson == rightJson;
+        }
+
+        if (PrTransitionTextExpectations.TryGetValue(leftFixtureId, out var leftText)
+            && PrTransitionTextExpectations.TryGetValue(rightFixtureId, out var rightText))
+        {
+            return leftText == rightText;
+        }
+
+        if (leftFixtureId is "pr-transition-help" or "recovery-help")
+        {
+            return string.Equals(leftFixtureId, rightFixtureId, StringComparison.Ordinal);
+        }
+
+        if (leftFixtureId is "pr-transition-parse-error" or "recovery-parse-error")
+        {
+            return string.Equals(leftFixtureId, rightFixtureId, StringComparison.Ordinal);
+        }
+
+        return string.Equals(leftFixtureId, rightFixtureId, StringComparison.Ordinal);
+    }
+
     internal static void AssertMatchesFixtureName(string fixtureId, string output)
     {
         if (TryGetRecoveryExpectation(fixtureId, out var recoveryField, out var recoveryValue))
@@ -15,61 +78,180 @@ internal static class G839FixtureExpectations
             return;
         }
 
-        if (fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal))
+        if (PrTransitionJsonExpectations.TryGetValue(fixtureId, out var jsonExpectation))
         {
-            Assert.Contains(GetPrTransitionRefusalCause(fixtureId), output, StringComparison.Ordinal);
+            AssertPrTransitionJson(output, jsonExpectation, fixtureId);
+            return;
+        }
+
+        if (PrTransitionTextExpectations.TryGetValue(fixtureId, out var textExpectation))
+        {
+            AssertPrTransitionText(output, textExpectation, fixtureId);
             return;
         }
 
         switch (fixtureId)
         {
             case "pr-transition-help":
-                Assert.Contains("Usage: intent-cli automation pr-transition", output, StringComparison.Ordinal);
+                Assert.StartsWith("automation pr-transition", output, StringComparison.Ordinal);
+                Assert.Contains("Supported transitions:", output, StringComparison.Ordinal);
                 return;
             case "pr-transition-parse-error":
-                Assert.Contains("--pr is required", output, StringComparison.Ordinal);
-                return;
-            case "pr-transition-failure-may-have-applied-write-json":
-                AssertPrTransitionMayHaveApplied(output, expected: true, fixtureId);
-                return;
-            case "pr-transition-failure-known-unapplied-write-json":
-                AssertPrTransitionMayHaveApplied(output, expected: false, fixtureId);
+                Assert.StartsWith("--pr is required.", output, StringComparison.Ordinal);
                 return;
             case "recovery-help":
-                Assert.Contains("Usage: intent-cli automation pr-created-stale-recovery", output, StringComparison.Ordinal);
+                Assert.Equal(
+                    "Usage: intent-cli automation pr-created-stale-recovery --repo <owner/repo> --issue <n> --execution-unit <unit> --team <team> --ruling <text> [--write] [--format json|markdown]",
+                    output.TrimEnd());
                 return;
             case "recovery-parse-error":
-                Assert.Contains("--issue is required", output, StringComparison.Ordinal);
+                Assert.StartsWith("--issue is required.", output, StringComparison.Ordinal);
                 return;
             case "planned-labels-automation-summary":
-                Assert.Contains("\"host_pr_transition_commands\"", output, StringComparison.Ordinal);
+                Assert.Contains(
+                    "intent-cli automation pr-transition --transition review-start --write adds intent-target, intent-pr-reviewing and removes intent-pr-rereview-ready, rereview-ready when present",
+                    output,
+                    StringComparison.Ordinal);
                 return;
             case "planned-labels-automation-doctor":
                 Assert.Contains("status: ok", output, StringComparison.Ordinal);
+                Assert.Contains("binary_source: cwd-local-shim", output, StringComparison.Ordinal);
                 return;
             case "planned-labels-worker-next-action":
-                Assert.Contains("\"action\"", output, StringComparison.Ordinal);
+                AssertJsonField(output, "action", "wait", fixtureId);
+                AssertJsonField(output, "recommended_workflow", "pr-comment-fix", fixtureId);
                 return;
             case "planned-labels-worker-pr-comment-preflight":
-                Assert.Contains("\"actionable\"", output, StringComparison.Ordinal);
+                AssertJsonField(output, "classification", "repair-required", fixtureId);
+                AssertJsonField(output, "actionable", true, fixtureId);
+                AssertJsonField(output, "recommended_action", "repair-pr", fixtureId);
                 return;
         }
 
-        if (fixtureId.StartsWith("pr-transition-", StringComparison.Ordinal)
-            && fixtureId.EndsWith("-json", StringComparison.Ordinal))
-        {
-            AssertPrTransitionApplied(output, fixtureId.Contains("-write-", StringComparison.Ordinal), fixtureId);
-            return;
-        }
-
-        if (fixtureId.StartsWith("pr-transition-", StringComparison.Ordinal)
-            && fixtureId.EndsWith("-text", StringComparison.Ordinal)
-            && !fixtureId.StartsWith("pr-transition-refusal-", StringComparison.Ordinal))
-        {
-            var expectedApplied = fixtureId.Contains("-write-", StringComparison.Ordinal);
-            Assert.Contains($"applied: {expectedApplied}", output, StringComparison.OrdinalIgnoreCase);
-        }
+        throw new ArgumentOutOfRangeException(nameof(fixtureId), fixtureId, "unknown fixture");
     }
+
+    private sealed record PrTransitionJsonExpectation(
+        string Transition,
+        bool Applied,
+        string[] AddLabels,
+        string[] RemoveLabels,
+        string Repo = G839ByteIdentityHarness.Repo,
+        string? GateDecision = null,
+        string? GateCause = null,
+        bool? MayHaveApplied = null,
+        string? ErrorContains = null);
+
+    private sealed record PrTransitionTextExpectation(
+        string SummaryLine,
+        string Mode,
+        bool Applied,
+        string? CrossRuntimeReviewLine = null);
+
+    private static readonly Dictionary<string, PrTransitionJsonExpectation> PrTransitionJsonExpectations =
+        new(StringComparer.Ordinal)
+        {
+            ["pr-transition-review-start-dry-run-json"] = new(
+                "review-start", false,
+                ["intent-target", "intent-pr-reviewing"],
+                ["intent-pr-rereview-ready", "rereview-ready"]),
+            ["pr-transition-review-start-write-json"] = new(
+                "review-start", true,
+                ["intent-target", "intent-pr-reviewing"],
+                []),
+            ["pr-transition-request-update-dry-run-json"] = new(
+                "request-update", false,
+                ["intent-pr-request-update"],
+                ["intent-pr-reviewing"]),
+            ["pr-transition-request-update-write-json"] = new(
+                "request-update", true,
+                ["intent-pr-request-update"],
+                ["intent-pr-reviewing"]),
+            ["pr-transition-review-release-write-json"] = new(
+                "review-release", true,
+                [],
+                ["intent-pr-reviewing"]),
+            ["pr-transition-approved-ungated-dry-run-json"] = new(
+                "approved", false,
+                ["intent-pr-approved"],
+                ["intent-pr-reviewing", "intent-pr-rereview-ready", "rereview-ready", "intent-pr-request-update", "intent-pr-update-in-progress"],
+                Repo: G839ByteIdentityHarness.UngatedRepo),
+            ["pr-transition-approved-undeclared-dry-run-json"] = new(
+                "approved", false,
+                ["intent-pr-approved"],
+                ["intent-pr-reviewing", "intent-pr-rereview-ready", "rereview-ready", "intent-pr-request-update", "intent-pr-update-in-progress"]),
+            ["pr-transition-approved-undeclared-write-json"] = new(
+                "approved", true,
+                ["intent-pr-approved"],
+                ["intent-pr-reviewing"]),
+            ["pr-transition-approved-satisfied-dry-run-json"] = new(
+                "approved", false,
+                ["intent-pr-approved"],
+                ["intent-pr-reviewing", "intent-pr-rereview-ready", "rereview-ready", "intent-pr-request-update", "intent-pr-update-in-progress"],
+                GateDecision: "satisfied"),
+            ["pr-transition-approved-satisfied-write-json"] = new(
+                "approved", true,
+                ["intent-pr-approved"],
+                ["intent-pr-reviewing"],
+                GateDecision: "satisfied"),
+            ["pr-transition-failure-may-have-applied-write-json"] = new(
+                "request-update", false,
+                ["intent-pr-request-update"],
+                ["intent-pr-rereview-ready"],
+                MayHaveApplied: true,
+                ErrorContains: "simulated ambiguous gh API failure"),
+            ["pr-transition-failure-known-unapplied-write-json"] = new(
+                "approved", false,
+                ["intent-pr-approved"],
+                ["intent-pr-rereview-ready"],
+                MayHaveApplied: false,
+                ErrorContains: "failed to apply PR transition"),
+        };
+
+    private static readonly Dictionary<string, PrTransitionTextExpectation> PrTransitionTextExpectations =
+        new(StringComparer.Ordinal)
+        {
+            ["pr-transition-review-start-dry-run-text"] = new(
+                "Would apply host PR transition 'review-start': add intent-target, intent-pr-reviewing; remove intent-pr-rereview-ready, rereview-ready.",
+                "dry-run", false),
+            ["pr-transition-review-start-write-text"] = new(
+                "Would apply host PR transition 'review-start': add intent-target, intent-pr-reviewing; remove (none).",
+                "write", true),
+            ["pr-transition-request-update-dry-run-text"] = new(
+                "Would apply host PR transition 'request-update': add intent-pr-request-update; remove intent-pr-reviewing.",
+                "dry-run", false),
+            ["pr-transition-review-release-write-text"] = new(
+                "Would apply host PR transition 'review-release': add (none); remove intent-pr-reviewing.",
+                "write", true),
+            ["pr-transition-approved-satisfied-dry-run-text"] = new(
+                "Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing, intent-pr-rereview-ready, rereview-ready, intent-pr-request-update, intent-pr-update-in-progress.",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: satisfied"),
+            ["pr-transition-approved-satisfied-write-text"] = new(
+                "Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing.",
+                "write", true,
+                CrossRuntimeReviewLine: "cross_runtime_review: satisfied"),
+            ["pr-transition-refusal-head-required-text"] = new(
+                "cross-runtime-review-head-required: team 'intent-cli/intent-cli-dev' declares cross-runtime review; pass `--head-sha <head-sha>` with the exact head the reviewers approved.",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: refused (cross-runtime-review-head-required)"),
+            ["pr-transition-refusal-head-stale-text"] = new(
+                "cross-runtime-review-head-stale: --head-sha 2222222222222222222222222222222222222222 is not the current head of PR #1823 in J-Tech-Japan/intent-system (3333333333333333333333333333333333333333); review and CI must bind to the current head.",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: refused (cross-runtime-review-head-stale)"),
+            ["pr-transition-refusal-team-unresolved-text"] = new(
+                "cross-runtime-review-team-unresolved: execution unit 'G839' has no held claim with a team (claim status 'unheld': unheld). Fix: acquire the execution-unit claim with a team: `intent-cli claim acquire --scope execution-unit:G839 --actor <actor> --team <team> --reason <text> --write`.",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: refused (cross-runtime-review-team-unresolved)"),
+            ["pr-transition-refusal-missing-text"] = new(
+                "cross-runtime-review-missing: [cross-runtime-review-missing] head 2222222222222222222222222222222222222222 has no approve whose latest record comes from a runtime other than the conductor runtime 'claude' (cross-runtime review).",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: missing (cross-runtime-review-missing)"),
+            ["pr-transition-refusal-blocked-text"] = new(
+                "cross-runtime-review-blocked: [cross-runtime-review-blocked] the latest record on head 2222222222222222222222222222222222222222 from codex is request-changes. [cross-runtime-review-missing] head 2222222222222222222222222222222222222222 has no approve whose latest record comes from a runtime other than the conductor runtime 'claude' (cross-runtime review).",
+                "dry-run", false,
+                CrossRuntimeReviewLine: "cross_runtime_review: blocked (cross-runtime-review-blocked)"),
+        };
 
     private static bool TryGetRecoveryExpectation(string fixtureId, out string fieldName, out string expectedValue)
     {
@@ -150,31 +332,83 @@ internal static class G839FixtureExpectations
             StringComparison.Ordinal);
     }
 
-    private static string GetPrTransitionRefusalCause(string fixtureId) => fixtureId switch
-    {
-        "pr-transition-refusal-head-required-text" => "cross-runtime-review-head-required",
-        "pr-transition-refusal-head-stale-text" => "cross-runtime-review-head-stale",
-        "pr-transition-refusal-team-unresolved-text" => "cross-runtime-review-team-unresolved",
-        "pr-transition-refusal-missing-text" => "cross-runtime-review-missing",
-        "pr-transition-refusal-blocked-text" => "cross-runtime-review-blocked",
-        _ => throw new ArgumentOutOfRangeException(nameof(fixtureId), fixtureId, "unknown pr-transition refusal fixture"),
-    };
-
-    private static void AssertPrTransitionMayHaveApplied(string output, bool expected, string fixtureId)
+    private static void AssertPrTransitionJson(string output, PrTransitionJsonExpectation expected, string fixtureId)
     {
         using var document = JsonDocument.Parse(output);
-        var actual = document.RootElement.GetProperty("may_have_applied").GetBoolean();
-        Assert.True(
-            actual == expected,
-            $"Fixture '{fixtureId}' expected may_have_applied={expected} but got {actual}.");
+        var root = document.RootElement;
+
+        Assert.Equal(expected.Repo, root.GetProperty("repo").GetString());
+        Assert.Equal(expected.Transition, root.GetProperty("transition").GetString());
+        Assert.Equal(expected.Applied, root.GetProperty("applied").GetBoolean());
+        AssertLabelSet(root, "add_labels", expected.AddLabels, fixtureId);
+        AssertLabelSet(root, "remove_labels", expected.RemoveLabels, fixtureId);
+
+        if (expected.GateDecision is not null)
+        {
+            var gate = root.GetProperty("cross_runtime_review");
+            Assert.Equal(expected.GateDecision, gate.GetProperty("decision").GetString());
+            if (expected.GateCause is not null)
+            {
+                Assert.Equal(expected.GateCause, gate.GetProperty("cause").GetString());
+            }
+        }
+        else if (root.TryGetProperty("cross_runtime_review", out _))
+        {
+            Assert.Fail($"Fixture '{fixtureId}' expected no cross_runtime_review gate but one was present.");
+        }
+
+        if (expected.MayHaveApplied is not null)
+        {
+            Assert.Equal(expected.MayHaveApplied.Value, root.GetProperty("may_have_applied").GetBoolean());
+        }
+
+        if (expected.ErrorContains is not null)
+        {
+            var error = root.GetProperty("error").GetString();
+            Assert.NotNull(error);
+            Assert.Contains(expected.ErrorContains, error, StringComparison.Ordinal);
+        }
     }
 
-    private static void AssertPrTransitionApplied(string output, bool expectedApplied, string fixtureId)
+    private static void AssertPrTransitionText(string output, PrTransitionTextExpectation expected, string fixtureId)
+    {
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Equal(expected.SummaryLine, lines[0]);
+        Assert.Contains($"mode: {expected.Mode}", output, StringComparison.Ordinal);
+        Assert.Contains($"applied: {expected.Applied.ToString().ToLowerInvariant()}", output, StringComparison.OrdinalIgnoreCase);
+
+        if (expected.CrossRuntimeReviewLine is not null)
+        {
+            Assert.Contains(expected.CrossRuntimeReviewLine, output, StringComparison.Ordinal);
+        }
+    }
+
+    private static void AssertLabelSet(JsonElement root, string propertyName, string[] expected, string fixtureId)
+    {
+        var actual = root.GetProperty(propertyName)
+            .EnumerateArray()
+            .Select(element => element.GetString())
+            .ToArray();
+        Assert.True(
+            expected.SequenceEqual(actual!, StringComparer.Ordinal),
+            $"Fixture '{fixtureId}' expected {propertyName} [{string.Join(", ", expected)}] but got [{string.Join(", ", actual!)}].");
+    }
+
+    private static void AssertJsonField(string output, string propertyName, string expected, string fixtureId)
     {
         using var document = JsonDocument.Parse(output);
-        var actual = document.RootElement.GetProperty("applied").GetBoolean();
+        var actual = document.RootElement.GetProperty(propertyName).GetString();
         Assert.True(
-            actual == expectedApplied,
-            $"Fixture '{fixtureId}' expected applied={expectedApplied} but got {actual}.");
+            string.Equals(expected, actual, StringComparison.Ordinal),
+            $"Fixture '{fixtureId}' expected {propertyName} '{expected}' but got '{actual}'.");
+    }
+
+    private static void AssertJsonField(string output, string propertyName, bool expected, string fixtureId)
+    {
+        using var document = JsonDocument.Parse(output);
+        var actual = document.RootElement.GetProperty(propertyName).GetBoolean();
+        Assert.True(
+            actual == expected,
+            $"Fixture '{fixtureId}' expected {propertyName}={expected} but got {actual}.");
     }
 }

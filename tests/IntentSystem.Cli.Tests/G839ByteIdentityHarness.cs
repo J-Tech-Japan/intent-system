@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Infrastructure;
@@ -32,6 +33,22 @@ internal static class G839ByteIdentityHarness
 
     internal static readonly DateTimeOffset FixedNow = new(2026, 9, 16, 12, 0, 0, TimeSpan.Zero);
 
+    private static readonly JsonSerializerOptions[] JsonEscapeOptions =
+    [
+        new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            WriteIndented = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+        },
+        new()
+        {
+            WriteIndented = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+        },
+        new(),
+    ];
+
     internal static string NormalizeCapturedOutput(string output, params string[] workspaceRoots)
     {
         var normalized = output;
@@ -40,18 +57,37 @@ internal static class G839ByteIdentityHarness
                      .Distinct(StringComparer.Ordinal)
                      .OrderByDescending(root => root.Length))
         {
-            normalized = normalized.Replace(root, WorkspaceRootPlaceholder, StringComparison.Ordinal);
-            if (Path.DirectorySeparatorChar != '/')
+            foreach (var form in GetRootReplacementForms(root))
             {
-                normalized = normalized.Replace(
-                    root.Replace('\\', '/'),
-                    WorkspaceRootPlaceholder,
-                    StringComparison.Ordinal);
+                normalized = normalized.Replace(form, WorkspaceRootPlaceholder, StringComparison.Ordinal);
             }
         }
 
         return normalized;
     }
+
+    private static IEnumerable<string> GetRootReplacementForms(string root)
+    {
+        yield return root;
+
+        var forwardSlashRoot = root.Replace('\\', '/');
+        if (!string.Equals(root, forwardSlashRoot, StringComparison.Ordinal))
+        {
+            yield return forwardSlashRoot;
+        }
+
+        foreach (var options in JsonEscapeOptions)
+        {
+            yield return JsonSerializedStringContents(root, options);
+            if (!string.Equals(root, forwardSlashRoot, StringComparison.Ordinal))
+            {
+                yield return JsonSerializedStringContents(forwardSlashRoot, options);
+            }
+        }
+    }
+
+    private static string JsonSerializedStringContents(string value, JsonSerializerOptions options) =>
+        JsonSerializer.Serialize(value, options)[1..^1];
 
     internal static readonly string[] RecoveryScenarioIds =
     [
@@ -186,7 +222,7 @@ internal static class G839ByteIdentityHarness
 
 
 
-    internal static string[] BuildRecoveryArgs(string fixtureId)
+    internal static string[] BuildRecoveryArgs(string fixtureId, string? executionUnit = null)
     {
         if (fixtureId == "recovery-help")
         {
@@ -198,11 +234,12 @@ internal static class G839ByteIdentityHarness
             return ["--repo", Repo];
         }
 
+        var unit = executionUnit ?? Unit;
         var args = new List<string>
         {
             "--repo", Repo,
             "--issue", Issue.ToString(CultureInfo.InvariantCulture),
-            "--execution-unit", Unit,
+            "--execution-unit", unit,
             "--team", Team,
         };
 
@@ -239,10 +276,10 @@ internal static class G839ByteIdentityHarness
         return writer.ToString();
     }
 
-    internal static RecoveryWorkspace CreateProceedWorkspace()
+    internal static RecoveryWorkspace CreateProceedWorkspace(string? executionUnit = null)
     {
         var workspace = new RecoveryWorkspace();
-        workspace.WriteProceedHostState(linkedPr: Pr);
+        workspace.WriteProceedHostState(linkedPr: Pr, queueExecutionUnit: executionUnit);
         workspace.EnsureClaimsStore();
         return workspace;
     }
@@ -253,6 +290,14 @@ internal static class G839ByteIdentityHarness
         Number = Issue,
         State = "OPEN",
         Title = $"{Unit}: stale pr-created recovery fixture",
+        Labels = labels.Select(name => new GitHubIssueLabel { Name = name }).ToArray(),
+    };
+
+    internal static GitHubIssueLookupResult OpenIssueForExecutionUnit(string executionUnit, params string[] labels) => new()
+    {
+        Number = Issue,
+        State = "OPEN",
+        Title = $"{executionUnit}: stale pr-created recovery fixture",
         Labels = labels.Select(name => new GitHubIssueLabel { Name = name }).ToArray(),
     };
 
@@ -436,12 +481,7 @@ internal static class G839ByteIdentityHarness
     {
         public RecoveryWorkspace()
         {
-            RootPath = Path.Combine(Path.GetTempPath(), "g839-byte-recovery-fixture");
-            if (Directory.Exists(RootPath))
-            {
-                Directory.Delete(RootPath, recursive: true);
-            }
-
+            RootPath = Directory.CreateTempSubdirectory("g839-byte-recovery-").FullName;
             Directory.CreateDirectory(Path.Combine(RootPath, ".intent-cli"));
             Context = new CliContext
             {
@@ -469,9 +509,10 @@ internal static class G839ByteIdentityHarness
             bool includeQueueItem = true,
             string? queueExecutionUnit = null)
         {
+            var executionUnit = queueExecutionUnit ?? Unit;
             if (includeQueueItem)
             {
-                WriteQueueState(linkedPr, publishPr ?? linkedPr, duplicateQueueItem, queueExecutionUnit);
+                WriteQueueState(linkedPr, publishPr ?? linkedPr, duplicateQueueItem, executionUnit);
             }
             else
             {
@@ -482,16 +523,16 @@ internal static class G839ByteIdentityHarness
                 }
             }
 
-            var issueDir = Path.Combine(RootPath, ".intent-cli", "issues", Unit);
+            var issueDir = Path.Combine(RootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(issueDir);
             File.WriteAllText(
                 Path.Combine(issueDir, "publish.yaml"),
                 IssuePublishArtifactYaml.Serialize(new IssuePublishArtifact
                 {
-                    ExecutionUnit = Unit,
+                    ExecutionUnit = executionUnit,
                     PublishStatus = "published",
-                    PacketPath = $".intent-cli/issues/{Unit}/packet.yaml",
-                    IssueBodyPath = $".intent-cli/issues/{Unit}/issue-body.md",
+                    PacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml",
+                    IssueBodyPath = $".intent-cli/issues/{executionUnit}/issue-body.md",
                     CreatedIssueNumber = Issue,
                     CreatedIssueUrl = $"https://github.com/{Repo}/issues/{Issue}",
                     PublishedLabelName = "intent-target",
@@ -661,15 +702,10 @@ internal static class G839ByteIdentityHarness
 
     private sealed class DoctorWorkspace : IDisposable
     {
-        private readonly string rootPath = Path.Combine(Path.GetTempPath(), "automation-doctor-g839-byte-identity");
+        private readonly string rootPath = Directory.CreateTempSubdirectory("automation-doctor-g839-").FullName;
 
         public DoctorWorkspace()
         {
-            if (Directory.Exists(rootPath))
-            {
-                Directory.Delete(rootPath, recursive: true);
-            }
-
             Directory.CreateDirectory(rootPath);
             var binPath = Path.Combine(rootPath, ".intent-cli", "bin");
             Directory.CreateDirectory(binPath);

@@ -17,16 +17,11 @@ public sealed partial class G839ByteIdentityTests
 
     private sealed class PrTransitionSeams : IDisposable
     {
-    private readonly string root = Path.Combine(Path.GetTempPath(), "g839-pr-transition-fixture");
+    private readonly string root = Directory.CreateTempSubdirectory("g839-pr-transition-").FullName;
     private readonly Dictionary<string, string?> claims = new(StringComparer.Ordinal) { [G839ByteIdentityHarness.Unit] = G839ByteIdentityHarness.Team };
 
         public PrTransitionSeams(string fixtureId)
         {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-
             CrossRuntimeReviewTeamResolver.ClaimReader = (_, scope) =>
             {
                 var unit = scope["execution-unit:".Length..];
