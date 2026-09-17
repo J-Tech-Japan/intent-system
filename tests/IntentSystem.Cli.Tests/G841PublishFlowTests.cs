@@ -123,21 +123,13 @@ public sealed class G841PublishFlowTests : IDisposable
         using var workspace = new G841PublishFlowWorkspace(declare: true);
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo, yaml: G841TestHelpers.UnparseableYaml);
         workspace.WriteIncompleteGithubBody();
-        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        const string expectedReviewDetail = G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf;
 
-        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
-        Assert.Equal(1, exit);
-        using var json = JsonDocument.Parse(output);
-        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, json.RootElement.GetProperty("cause").GetString());
-        var review = json.RootElement.GetProperty("cross_runtime_design_review");
-        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, review.GetProperty("decision").GetString());
-        Assert.Equal(
-            CrossRuntimeReviewCauses.PacketInvalid,
-            review.GetProperty("reasons")[0].GetProperty("cause").GetString());
-        Assert.Equal(expectedReviewDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
-        Assert.False(json.RootElement.GetProperty("created").GetBoolean());
+        var dryRun = AssertGatedPacketRefusal(workspace, write: false, expectedReviewDetail);
+        var writeRun = AssertGatedPacketRefusal(workspace, write: true, expectedReviewDetail);
+        Assert.Equal(dryRun.ReviewJson, writeRun.ReviewJson);
+        Assert.Equal(0, dryRun.CheckerCalls);
+        Assert.Equal(0, writeRun.CheckerCalls);
     }
 
     [Fact]
@@ -155,16 +147,21 @@ public sealed class G841PublishFlowTests : IDisposable
         var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
         var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
 
-        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
-        Assert.Equal(1, exit);
-        using var json = JsonDocument.Parse(output);
-        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable, json.RootElement.GetProperty("cause").GetString());
-        var review = json.RootElement.GetProperty("cross_runtime_design_review");
-        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, review.GetProperty("decision").GetString());
-        Assert.Equal(
+        var dryRun = AssertGatedPacketRefusal(
+            workspace,
+            write: false,
+            expectedReviewDetail,
             CrossRuntimeReviewCauses.PacketUnreadable,
-            review.GetProperty("reasons")[0].GetProperty("cause").GetString());
-        Assert.Equal(expectedReviewDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
+            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable);
+        var writeRun = AssertGatedPacketRefusal(
+            workspace,
+            write: true,
+            expectedReviewDetail,
+            CrossRuntimeReviewCauses.PacketUnreadable,
+            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable);
+        Assert.Equal(dryRun.ReviewJson, writeRun.ReviewJson);
+        Assert.Equal(0, dryRun.CheckerCalls);
+        Assert.Equal(0, writeRun.CheckerCalls);
     }
 
     [Fact]
@@ -178,9 +175,7 @@ public sealed class G841PublishFlowTests : IDisposable
             using var workspace = new G841PublishFlowWorkspace(edgeRoot, declare: true);
             workspace.WriteFullPacket(Unit, G841TestHelpers.Repo, yaml: G841TestHelpers.UnparseableYaml);
             workspace.WriteIncompleteGithubBody();
-            Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-            var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-            var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+            const string expectedReviewDetail = G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf;
 
             var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
             Assert.Equal(1, exit);
@@ -205,14 +200,9 @@ public sealed class G841PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo, yaml: G841TestHelpers.UnparseableYaml);
         workspace.WriteIncompleteGithubBody();
 
-        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
-        Assert.Equal(1, exit);
-        using var json = JsonDocument.Parse(output);
-        Assert.True(json.RootElement.TryGetProperty("cross_runtime_design_review", out var reviewNode), output);
-        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, reviewNode.GetProperty("decision").GetString());
-        Assert.Equal(
-            CrossRuntimeReviewCauses.PacketInvalid,
-            reviewNode.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        var dryRun = AssertGatedPacketRefusal(workspace, write: false, G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf);
+        var writeRun = AssertGatedPacketRefusal(workspace, write: true, G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf);
+        Assert.Equal(dryRun.ReviewJson, writeRun.ReviewJson);
     }
 
     [Fact]
@@ -228,12 +218,42 @@ public sealed class G841PublishFlowTests : IDisposable
             841,
             $"https://github.com/{G841TestHelpers.Repo}/issues/841");
 
+        var dryRun = AssertGatedPacketRefusal(workspace, write: false, G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf);
+        var writeRun = AssertGatedPacketRefusal(workspace, write: true, G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf);
+        Assert.Equal(dryRun.ReviewJson, writeRun.ReviewJson);
+        Assert.NotEqual(CrossRuntimeReviewGate.DecisionIdempotentNotGated, JsonDocument.Parse(dryRun.ReviewJson!).RootElement.GetProperty("decision").GetString());
+    }
+
+    [Fact]
+    public void PublishFlow_Gated_ContractComplete_QuotedHash_DryRun_ExitZero_NoPacketRefusal_G841Ac1()
+    {
+        using var workspace = new G841PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(
+            Unit,
+            G841TestHelpers.Repo,
+            yaml:
+            """
+            implementation_issue_packet:
+              issue_title: "G841PF Real title"
+              domain: intent-cli
+              target_repo: J-Tech-Japan/intent-system
+              source_artifact: "review of PR #1823"
+            """);
+
         var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
-        Assert.Equal(1, exit);
+        Assert.Equal(0, exit);
         using var json = JsonDocument.Parse(output);
-        Assert.True(json.RootElement.TryGetProperty("cross_runtime_design_review", out var reviewNode), output);
-        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, reviewNode.GetProperty("decision").GetString());
-        Assert.NotEqual(CrossRuntimeReviewGate.DecisionIdempotentNotGated, reviewNode.GetProperty("decision").GetString());
+        Assert.Equal(IssuePublishFlowCommand.TitleSourcePacketYaml, json.RootElement.GetProperty("title_source").GetString());
+        if (json.RootElement.TryGetProperty("cross_runtime_design_review", out var review)
+            && review.TryGetProperty("reasons", out var reasons))
+        {
+            foreach (var reason in reasons.EnumerateArray())
+            {
+                var cause = reason.GetProperty("cause").GetString();
+                Assert.NotEqual(CrossRuntimeReviewCauses.PacketInvalid, cause);
+                Assert.NotEqual(CrossRuntimeReviewCauses.PacketUnreadable, cause);
+            }
+        }
     }
 
     [Fact]
@@ -312,9 +332,7 @@ public sealed class G841PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo);
         workspace.WriteIncompleteGithubBody();
         var packetPath = workspace.PacketYamlPath(Unit);
-        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        const string expectedReviewDetail = G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf;
         var reads = 0;
         PacketFileReader.ReadAllText = path =>
         {
@@ -386,13 +404,8 @@ public sealed class G841PublishFlowTests : IDisposable
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
         IssuePublishFlowCommand.BeforeLookupSnapshotHook = () =>
             File.WriteAllBytes(packetYamlPath, Encoding.UTF8.GetBytes(G841TestHelpers.UnparseableYaml));
-        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-        var expectedError = PacketYamlParseMessages.ComposePublishFlowParseDetail(
-            packetYamlPath,
-            parseError!,
-            changedAfterFirstRead: true);
-        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        var expectedError = G841TestHelpers.ExpectedPublishFlowParseDetail(packetYamlPath, changedAfterFirstRead: true);
+        const string expectedReviewDetail = G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf;
         var preHookResolution = CrossRuntimeReviewPublishResolver.Resolve(
             workspace.Context.RepoRoot,
             Unit,
@@ -470,9 +483,7 @@ public sealed class G841PublishFlowTests : IDisposable
     [Fact]
     public void BuildResolutionRefusalField_UnresolvedPacketInvalid_PreservesCauseAndDetail_G841M13()
     {
-        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-        var expectedDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        const string expectedDetail = G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf;
         var resolution = new CrossRuntimeReviewPublishResolver.PublishResolution
         {
             Resolved = false,
@@ -517,9 +528,7 @@ public sealed class G841PublishFlowTests : IDisposable
         using var workspace = new G841PublishFlowWorkspace(declare: true);
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo, yaml: G841TestHelpers.UnparseableYaml);
         workspace.WriteIncompleteGithubBody();
-        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        const string expectedReviewDetail = G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf;
         var expectedResolution = CrossRuntimeReviewPublishResolver.Resolve(
             workspace.Context.RepoRoot,
             Unit,
@@ -546,9 +555,7 @@ public sealed class G841PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo);
         workspace.WriteIncompleteGithubBody();
         var packetPath = workspace.PacketYamlPath(Unit);
-        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        const string expectedReviewDetail = G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf;
         var expectedResolution = CrossRuntimeReviewPublishResolver.Resolve(
             workspace.Context.RepoRoot,
             Unit,
@@ -672,11 +679,7 @@ public sealed class G841PublishFlowTests : IDisposable
         var packetBytes = Encoding.UTF8.GetBytes(G841TestHelpers.UnparseableYaml);
         var bodyBytes = Encoding.UTF8.GetBytes(G841TestHelpers.MinimalContractBody("Borrowed H1"));
         var packetYamlPath = G841TestHelpers.PacketPath(root, Unit);
-        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-        var expectedMessage = PacketYamlParseMessages.ComposePublishFlowParseDetail(
-            packetYamlPath,
-            parseError!,
-            changedAfterFirstRead: true);
+        var expectedMessage = G841TestHelpers.ExpectedPublishFlowParseDetail(packetYamlPath, changedAfterFirstRead: true);
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
             IssuePublishFlowCommand.ResolveTitleWithSourceFromSnapshot(Unit, packetYamlPath, packetBytes, bodyBytes));
@@ -747,6 +750,33 @@ public sealed class G841PublishFlowTests : IDisposable
     }
 
     private void AssertZeroCreates() => Assert.Equal(0, throwingCreator.CallCount);
+
+    private GatedPacketRefusalResult AssertGatedPacketRefusal(
+        G841PublishFlowWorkspace workspace,
+        bool write,
+        string expectedReviewDetail,
+        string expectedCause = CrossRuntimeReviewCauses.PacketInvalid,
+        string expectedTopLevelCause = PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable)
+    {
+        var checker = new RecordingExistingIssueChecker(defaultChecker);
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write);
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(expectedTopLevelCause, json.RootElement.GetProperty("cause").GetString());
+        Assert.False(json.RootElement.GetProperty("created").GetBoolean());
+        var review = json.RootElement.GetProperty("cross_runtime_design_review");
+        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, review.GetProperty("decision").GetString());
+        Assert.Equal(1, review.GetProperty("reasons").GetArrayLength());
+        Assert.Equal(expectedCause, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.Equal(expectedReviewDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
+        AssertJsonAbsentOrNull(review, "digest");
+        AssertJsonAbsentOrNull(review, "domain");
+        AssertJsonAbsentOrNull(review, "team");
+        return new GatedPacketRefusalResult(review.GetRawText(), checker.CallCount);
+    }
+
+    private readonly record struct GatedPacketRefusalResult(string? ReviewJson, int CheckerCalls);
 
     private static CrossRuntimeDesignReviewField InvokeBuildResolutionRefusalField(
         CrossRuntimeReviewPublishResolver.PublishResolution resolution,

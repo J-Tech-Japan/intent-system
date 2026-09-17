@@ -198,7 +198,7 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
             """;
         WritePacketYaml(duplicateYaml);
         var digest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDir());
-        var expectedDetail = G841TestHelpers.ExpectedCrossRuntimeParseDetail(PacketRelativePath(), duplicateYaml);
+        const string expectedDetail = G841TestHelpers.DuplicateKeyCrossRuntimeParseDetailG841;
 
         var (exit, output) = Route(DesignRecordArgs(digest));
         Assert.Equal(1, exit);
@@ -223,7 +223,6 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
     [Theory]
     [InlineData(Ac8Surface.RecordImplementation)]
     [InlineData(Ac8Surface.StatusImplementation)]
-    [InlineData(Ac8Surface.PrTransition)]
     [InlineData(Ac8Surface.RecordDesign)]
     [InlineData(Ac8Surface.StatusDesign)]
     public void Ac8_UnparseablePacket_RefusesPacketInvalid(Ac8Surface surface)
@@ -234,6 +233,21 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
         Assert.Equal(1, exit);
         using var json = JsonDocument.Parse(output);
         AssertSurfacePacketInvalid(json.RootElement, surface, mutator);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Ac8_PrTransition_UnparseablePacket_RefusesPacketInvalid(bool write)
+    {
+        ResetHappyPath();
+        WritePacketYaml(G841TestHelpers.UnparseableYaml);
+        var mutator = new RecordingMutator { Labels = ["intent-pr-reviewing"] };
+        AutomationPrTransitionCommand.PrHeadReader = (_, _) => Head;
+        var (exit, output) = RunTransition(Context(), "approved", write, mutator);
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        AssertPrTransitionPacketInvalidRefusal(json.RootElement, mutator, write);
     }
 
     [Theory]
@@ -530,23 +544,68 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
         var expectedDetail = ExpectedUnparseableDetail();
         if (surface == Ac8Surface.PrTransition)
         {
-            var gate = json.GetProperty("cross_runtime_review");
-            Assert.Equal(CrossRuntimeReviewCauses.PacketInvalid, gate.GetProperty("cause").GetString());
-            Assert.DoesNotContain("packet-unreadable", json.GetRawText(), StringComparison.Ordinal);
-            Assert.Equal(
-                $"{expectedDetail} Fix: repair `{PacketRelativePath()}` so the whole document parses as YAML.",
-                gate.GetProperty("detail").GetString());
-            Assert.False(json.GetProperty("applied").GetBoolean());
-            Assert.StartsWith($"{CrossRuntimeReviewCauses.PacketInvalid}: {expectedDetail}", json.GetProperty("error").GetString(), StringComparison.Ordinal);
-            Assert.Empty(mutator!.Applied);
+            AssertPrTransitionPacketInvalidRefusal(json, mutator!, write: false);
             return;
         }
 
         G841TestHelpers.AssertCrossRuntimeParseRefusal(json, expectedDetail, PacketRelativePath());
     }
 
-    private static string ExpectedUnparseableDetail() =>
-        G841TestHelpers.ExpectedCrossRuntimeParseDetail(PacketRelativePath(), G841TestHelpers.UnparseableYaml);
+    private static void AssertPrTransitionPacketInvalidRefusal(JsonElement json, RecordingMutator mutator, bool write)
+    {
+        Assert.False(json.TryGetProperty("missing", out _));
+        Assert.False(json.TryGetProperty("fix", out _));
+        foreach (var key in G834PrTransitionRefusalTopLevelKeys)
+        {
+            Assert.True(json.TryGetProperty(key, out _), $"missing top-level key '{key}'");
+        }
+
+        if (write)
+        {
+            foreach (var key in new[] { "intended_labels", "intendedLabels", "recovery_command", "recoveryCommand" })
+            {
+                Assert.True(json.TryGetProperty(key, out _), $"missing write-mode key '{key}'");
+            }
+        }
+        Assert.False(json.GetProperty("applied").GetBoolean());
+        Assert.Equal(ExpectedPrTransitionPacketInvalidError(), json.GetProperty("error").GetString());
+        var gate = json.GetProperty("cross_runtime_review");
+        Assert.Equal(G834PrTransitionRefusalGateKeys.OrderBy(key => key, StringComparer.Ordinal).ToArray(),
+            gate.EnumerateObject().Select(property => property.Name).OrderBy(key => key, StringComparer.Ordinal).ToArray());
+        Assert.Equal("refused", gate.GetProperty("decision").GetString());
+        Assert.Equal(CrossRuntimeReviewCauses.PacketInvalid, gate.GetProperty("cause").GetString());
+        Assert.Equal(ExpectedPrTransitionPacketInvalidDetail(), gate.GetProperty("detail").GetString());
+        Assert.Equal(0, gate.GetProperty("reasons").GetArrayLength());
+        Assert.Equal(Unit, gate.GetProperty("execution_unit").GetString());
+        Assert.True(gate.GetProperty("domain").ValueKind is JsonValueKind.Null);
+        Assert.True(gate.GetProperty("team").ValueKind is JsonValueKind.Null);
+        Assert.DoesNotContain("packet-unreadable", json.GetRawText(), StringComparison.Ordinal);
+        Assert.Equal(1, mutator.ReadLabelCalls);
+        Assert.Empty(mutator.Applied);
+    }
+
+    private static string ExpectedUnparseableDetail() => G841TestHelpers.UnparseableCrossRuntimeParseDetailG841;
+
+    private static string ExpectedUnparseableFix() =>
+        $"repair `{PacketRelativePath()}` so the whole document parses as YAML.";
+
+    private static string ExpectedPrTransitionPacketInvalidDetail() =>
+        $"{ExpectedUnparseableDetail()} Fix: {ExpectedUnparseableFix()}";
+
+    private static string ExpectedPrTransitionPacketInvalidError() =>
+        $"{CrossRuntimeReviewCauses.PacketInvalid}: {ExpectedPrTransitionPacketInvalidDetail()}";
+
+    private static readonly string[] G834PrTransitionRefusalTopLevelKeys =
+    [
+        "repo", "pr", "transition", "mode", "applied", "add_labels", "addLabels",
+        "remove_labels", "removeLabels", "current_labels", "currentLabels", "summary",
+        "error", "cross_runtime_review", "may_have_applied", "mayHaveApplied", "ci_wait_cleared",
+    ];
+
+    private static readonly string[] G834PrTransitionRefusalGateKeys =
+    [
+        "decision", "cause", "detail", "reasons", "execution_unit", "domain", "team",
+    ];
 
     private (int ExitCode, string Output, RecordingMutator? Mutator) RouteSurface(Ac8Surface surface)
     {
@@ -739,8 +798,13 @@ public sealed class G841CrossRuntimeReviewTests : IDisposable
 
         public List<string> Applied { get; } = [];
 
-        public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number) =>
-            Labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray();
+        public int ReadLabelCalls { get; private set; }
+
+        public IReadOnlyList<GitHubAutomationLabel> ReadLabels(string repo, string kind, int number)
+        {
+            ReadLabelCalls++;
+            return Labels.Select(name => new GitHubAutomationLabel { Name = name }).ToArray();
+        }
 
         public void ApplyLabelTransitions(string repo, string kind, int number, IReadOnlyCollection<string> addLabels, IReadOnlyCollection<string> removeLabels) =>
             Applied.Add($"apply +{string.Join(",", addLabels)} -{string.Join(",", removeLabels)}");

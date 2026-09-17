@@ -1673,45 +1673,53 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
 
     // ── G841 AC11 site 11 (shares ReviewCloseoutPlanCommand static seam) ─────
 
-    [Theory]
-    [InlineData("LE")]
-    [InlineData("SU")]
-    [InlineData("ED")]
-    public void Site11_CloseoutPlan_AllInputClasses_SilentDegrade_NoWarnings_G841Ac11(string inputClass)
+    [Fact]
+    public void Site11_CloseoutPlan_Le_TwoCandidateDomains_ExitZero_SilentDegrade()
     {
-        using var workspace = new G841DegradeWorkspace();
-        workspace.WriteQueueState(G841DegradeFixtures.CloseoutQueueState("G841-S11"));
-        G841DegradeWorkspace.WritePacketFiles(workspace.Root, "G841-S11", G841DegradeFixtures.PacketYaml(inputClass));
-        ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
-            () => new FakePrClosingIssuesFetcher([900]);
-
-        using var writer = new StringWriter();
-        var exitCode = ReviewCloseoutPlanCommand.Execute(
-            workspace.Context,
-            ["--repo", G841TestHelpers.Repo, "--domain", G841TestHelpers.Domain, "--pr", "901", "--format", "json"],
-            writer);
-
-        using var doc = JsonDocument.Parse(writer.ToString());
-        Assert.False(doc.RootElement.TryGetProperty("warnings", out _));
-        Assert.True(exitCode == 0 || exitCode == 1);
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-LE", G841DegradeFixtures.PacketYaml("LE"));
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Site11_CloseoutPlan_Ed_PlainColonLine_ExitMayFlipWithoutWarnings_G841Ac11()
+    public void Site11_CloseoutPlan_Su_TwoCandidateDomains_ExitZero_SilentDegrade()
+    {
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-SU", G841DegradeFixtures.PacketYaml("SU"));
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Site11_CloseoutPlan_EdQuotedHash_TwoCandidateDomains_ExitZero_ReadsDomain()
+    {
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-ED-QH", G841DegradeFixtures.PacketYaml("ED-QH"));
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Site11_CloseoutPlan_EdPlainColon_TwoCandidateDomains_ExitOne_AmbiguityRefusal()
+    {
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-ED-PC", G841DegradeFixtures.PacketYaml("ED-PC"), withContractBody: true);
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
+        Assert.Contains("Candidate domains: alpha, beta", output, StringComparison.Ordinal);
+    }
+
+    private static (int ExitCode, string Output) RunSite11CloseoutPlan(string unit, string yaml, bool withContractBody = false)
     {
         using var workspace = new G841DegradeWorkspace();
-        workspace.WriteQueueState(G841DegradeFixtures.CloseoutQueueState("G841-S11-ED"));
-        G841DegradeWorkspace.WritePacketFiles(workspace.Root, "G841-S11-ED", G841DegradeFixtures.PacketYaml("ED-PC"), withContractBody: true);
+        workspace.WriteIntentsDomainDirectory(G841TestHelpers.AlphaDomain);
+        workspace.WriteIntentsDomainDirectory(G841TestHelpers.BetaDomain);
+        workspace.WriteQueueState(G841DegradeFixtures.CloseoutQueueState(unit));
+        G841DegradeWorkspace.WritePacketFiles(workspace.Root, unit, yaml, withContractBody: withContractBody);
         ReviewCloseoutPlanCommand.PrClosingIssuesFetcherFactory =
-            () => new FakePrClosingIssuesFetcher([902]);
-
+            () => new FakePrClosingIssuesFetcher([900]);
         using var writer = new StringWriter();
         var exitCode = ReviewCloseoutPlanCommand.Execute(
             workspace.Context,
-            ["--repo", G841TestHelpers.Repo, "--domain", G841TestHelpers.Domain, "--pr", "903", "--format", "json"],
+            ["--repo", G841TestHelpers.Repo, "--pr", "901", "--format", "json"],
             writer);
-
-        Assert.True(exitCode == 0 || exitCode == 1);
-        Assert.DoesNotContain("packet.yaml at '", writer.ToString(), StringComparison.Ordinal);
+        return (exitCode, writer.ToString());
     }
 }

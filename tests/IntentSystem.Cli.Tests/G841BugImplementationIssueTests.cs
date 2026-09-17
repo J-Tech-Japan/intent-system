@@ -9,6 +9,43 @@ namespace IntentSystem.Cli.Tests;
 public sealed class G841BugImplementationIssueTests
 {
     [Fact]
+    public void BugImplementationIssue_BlockStyleDependencies_LegacyEquivalent_ExitsWithG337RecoveryMessage()
+    {
+        using var temp = new TemporaryDirectory();
+        var repoRoot = temp.CreateDirectory("repo");
+        WriteRepairArtifacts(temp, "repo", "BUG-G841D", "G841D");
+        temp.CreateFile(
+            Path.Combine("repo", ".intent-cli", "issues", "G841D", "packet.yaml"),
+            G841TestHelpers.BlockStyleDependenciesPacket);
+        temp.CreateDirectory(Path.Combine("repo", "submodules", "intent-system"));
+
+        var publisher = new CapturingPublisher();
+        var originalPublisher = BugImplementationIssueCommand.PublisherFactory;
+        var originalGit = BugImplementationIssueCommand.GitCommandRunnerFactory;
+        try
+        {
+            BugImplementationIssueCommand.PublisherFactory = () => publisher;
+            BugImplementationIssueCommand.GitCommandRunnerFactory = () => new ResolvedRepoGitRunner("J-Tech-Japan/intent-system");
+
+            using var writer = new StringWriter();
+            var exitCode = BugImplementationIssueCommand.Execute(CreateContext(repoRoot), ["BUG-G841D"], writer);
+            var output = writer.ToString();
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains(
+                "Recorded repair target '.intent-cli/issues/G841D/packet.yaml' uses the G337 'implementation_issue_packet' schema, but bug implementation-issue expects the legacy ProjectionPacketRuntimeReader 'execution_unit' schema. Run `intent-cli issue publish-flow G841D --repo J-Tech-Japan/intent-system --write` to publish the recorded repair packet before retrying.",
+                output,
+                StringComparison.Ordinal);
+            Assert.Equal(0, publisher.CallCount);
+        }
+        finally
+        {
+            BugImplementationIssueCommand.PublisherFactory = originalPublisher;
+            BugImplementationIssueCommand.GitCommandRunnerFactory = originalGit;
+        }
+    }
+
+    [Fact]
     public void BugImplementationIssue_QuotedHashPacket_ExitsWithG337RecoveryMessage_NotFormatException()
     {
         using var temp = new TemporaryDirectory();
@@ -76,10 +113,8 @@ public sealed class G841BugImplementationIssueTests
             var output = writer.ToString();
 
             Assert.Equal(1, exitCode);
-            Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
-            var expectedDetail = PacketYamlParseMessages.ComposePublishFlowParseDetail(
-                Path.Combine(repoRoot, ".intent-cli", "issues", "G841U", "packet.yaml"),
-                parseError!);
+            var expectedDetail = G841TestHelpers.ExpectedPublishFlowParseDetail(
+                Path.Combine(repoRoot, ".intent-cli", "issues", "G841U", "packet.yaml"));
             Assert.Contains(expectedDetail, output, StringComparison.Ordinal);
             Assert.DoesNotContain("FormatException", output, StringComparison.Ordinal);
             Assert.DoesNotContain("StackTrace", output, StringComparison.Ordinal);

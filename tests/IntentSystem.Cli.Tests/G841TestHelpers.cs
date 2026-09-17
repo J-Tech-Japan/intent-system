@@ -19,6 +19,29 @@ internal static class G841TestHelpers
     internal const string PlainColonLine = "  target_part: retire the reader: all eleven sites\n";
     internal const string UnparseableYaml = "implementation_issue_packet:\n  domain: intent-cli\n  broken: [\n";
 
+    internal const string UnparseableParserMessage =
+        "While parsing a node, did not find expected node content.";
+
+    internal const string UnparseableCrossRuntimeParseDetailG841 =
+        "packet '.intent-cli/issues/G841/packet.yaml' could not be parsed at line 4, column 1: While parsing a node, did not find expected node content.";
+
+    internal const string UnparseableCrossRuntimeParseDetailG841Pf =
+        "packet '.intent-cli/issues/G841PF/packet.yaml' could not be parsed at line 4, column 1: While parsing a node, did not find expected node content.";
+
+    internal const string DuplicateKeyCrossRuntimeParseDetailG841 =
+        "packet '.intent-cli/issues/G841/packet.yaml' could not be parsed at line 3, column 3: Duplicate key domain";
+
+    internal const string BlockStyleDependenciesPacket =
+        """
+        implementation_issue_packet:
+          issue_title: "G841 fixture title"
+          domain: intent-cli
+          target_repo: submodules/intent-system
+          dependencies:
+            - G815
+            - G823
+        """;
+
     internal const string UnterminatedFlowSequenceYaml =
         """
         implementation_issue_packet:
@@ -260,10 +283,12 @@ internal static class G841TestHelpers
         return idProcess.ExitCode == 0 && !string.Equals(effectiveUserId, "0", StringComparison.Ordinal);
     }
 
-    internal static string ExpectedCrossRuntimeParseDetail(string relativePath, string yaml)
+    internal static string ExpectedPublishFlowParseDetail(string packetPath, bool changedAfterFirstRead = false)
     {
-        Assert.False(PacketYamlDocument.TryParseWithLocation(yaml, out _, out var error));
-        return PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePath, error!);
+        var prefix = changedAfterFirstRead
+            ? $"packet '{packetPath}' changed after it was first read and could not be parsed"
+            : $"packet '{packetPath}' could not be parsed";
+        return $"{prefix} at line 4, column 1: {UnparseableParserMessage}";
     }
 
     internal static void AssertCrossRuntimeParseRefusal(
