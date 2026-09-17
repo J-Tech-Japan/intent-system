@@ -598,6 +598,14 @@ public sealed class G841PublishFlowTests : IDisposable
             G841TestHelpers.MinimalContractBody("Borrowed H1"));
         var packetPath = workspace.PacketYamlPath(Unit);
         const string deniedMessage = "Access to the path is denied.";
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
+        var expectedResolution = CrossRuntimeReviewPublishResolver.Resolve(
+            workspace.Context.RepoRoot,
+            Unit,
+            G841TestHelpers.Repo,
+            workspace.Context.Config.CrossRuntimeReview);
+        Assert.True(expectedResolution.Resolved && expectedResolution.Declared);
         var reads = 0;
         PacketFileReader.ReadAllText = path =>
         {
@@ -609,22 +617,15 @@ public sealed class G841PublishFlowTests : IDisposable
 
             return File.ReadAllText(path);
         };
-        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
-        var expectedResolution = CrossRuntimeReviewPublishResolver.Resolve(
-            workspace.Context.RepoRoot,
-            Unit,
-            G841TestHelpers.Repo,
-            workspace.Context.Config.CrossRuntimeReview);
-        Assert.True(expectedResolution.Resolved && expectedResolution.Declared);
 
         var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: true);
         Assert.Equal(1, exit);
         using var json = JsonDocument.Parse(output);
         Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable, json.RootElement.GetProperty("cause").GetString());
         Assert.False(json.RootElement.GetProperty("created").GetBoolean());
+        Assert.True(json.RootElement.TryGetProperty("cross_runtime_design_review", out var reviewNode), output);
         AssertTitleRefusalFieldMatchesResolver(
-            json.RootElement.GetProperty("cross_runtime_design_review"),
+            reviewNode,
             CrossRuntimeReviewCauses.PacketUnreadable,
             expectedReviewDetail,
             expectedResolution);
