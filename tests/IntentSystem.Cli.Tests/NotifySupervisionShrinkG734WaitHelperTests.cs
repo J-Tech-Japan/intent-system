@@ -47,9 +47,7 @@ public sealed class NotifySupervisionShrinkG734WaitHelperTests
         try
         {
             var currentProcess = Process.GetCurrentProcess();
-            var runningState = currentProcess.HasExited
-                ? $"exited:{currentProcess.ExitCode}"
-                : "running";
+            var runningState = NotifySupervisionShrinkG734Tests.DescribeProcessState(currentProcess);
             Assert.Equal(
                 "supervisor_process=running; cycles_lines=0; cycles_last=<none>",
                 NotifySupervisionShrinkG734Tests.DescribeLiveFixture(
@@ -65,18 +63,17 @@ public sealed class NotifySupervisionShrinkG734WaitHelperTests
             using var child = Process.Start(new ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = "--version",
+                Arguments = "this-command-does-not-exist-g840",
                 RedirectStandardOutput = true,
+                RedirectStandardError = true,
                 UseShellExecute = false,
             });
             Assert.NotNull(child);
             child.WaitForExit();
-            var exitedState = child.HasExited ? $"exited:{child.ExitCode}" : "running";
-            Assert.StartsWith(
-                "supervisor_process=exited:",
-                NotifySupervisionShrinkG734Tests.DescribeLiveFixture(exitedState, cyclesPath));
-            Assert.Contains(
-                "cycles_lines=3",
+            Assert.NotEqual(0, child.ExitCode);
+            var exitedState = NotifySupervisionShrinkG734Tests.DescribeProcessState(child);
+            Assert.Equal(
+                $"supervisor_process=exited:{child.ExitCode}; cycles_lines=3; cycles_last=line-3",
                 NotifySupervisionShrinkG734Tests.DescribeLiveFixture(exitedState, cyclesPath));
         }
         finally

@@ -537,7 +537,7 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
                 () => File.Exists(cyclesPath) && File.ReadLines(cyclesPath).Any(),
                 TimeSpan.FromSeconds(10),
                 diagnostics: () => DescribeLiveFixture(
-                    supervisor.HasExited ? $"exited:{supervisor.ExitCode}" : "running",
+                    DescribeProcessState(supervisor),
                     cyclesPath));
             var cycleCountBeforeShrink = File.ReadLines(cyclesPath).Count();
 
@@ -553,9 +553,7 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
             Assert.True(shrink.ExitCode == 0, shrinkOutput + shrinkError);
             using var shrinkJson = JsonDocument.Parse(shrinkOutput);
             var rootElement = shrinkJson.RootElement;
-            var supervisorProcessState = supervisor.HasExited
-                ? $"exited:{supervisor.ExitCode}"
-                : "running";
+            var supervisorProcessState = DescribeProcessState(supervisor);
             var supervisorStdout = supervisorOutput?.IsCompleted == true
                 ? await supervisorOutput
                 : "<not-complete>";
@@ -573,7 +571,7 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
                 () => File.ReadLines(cyclesPath).Count() > cycleCountBeforeShrink,
                 TimeSpan.FromSeconds(10),
                 diagnostics: () => DescribeLiveFixture(
-                    supervisor.HasExited ? $"exited:{supervisor.ExitCode}" : "running",
+                    DescribeProcessState(supervisor),
                     cyclesPath));
             var cycleCountAfterShrink = File.ReadLines(cyclesPath).Count();
             var rawStalls = File.ReadAllText(stallsPath);
@@ -709,6 +707,9 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         Assert.NotNull(process);
         return process!;
     }
+
+    internal static string DescribeProcessState(Process process) =>
+        process.HasExited ? $"exited:{process.ExitCode}" : "running";
 
     internal static string DescribeLiveFixture(string processState, string cyclesPath)
     {
