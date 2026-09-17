@@ -1,0 +1,7 @@
+cross-runtime-review-team-unresolved: execution unit 'G839' has no held claim with a team (claim status 'unheld': unheld). Fix: acquire the execution-unit claim with a team: `intent-cli claim acquire --scope execution-unit:G839 --actor <actor> --team <team> --reason <text> --write`.
+mode: dry-run
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false
+cross_runtime_review: refused (cross-runtime-review-team-unresolved)

@@ -1,0 +1,11 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: write
+- outcome: recovery-completed
+- linked_pr: #1823
+- applied: true
+- summary: appended recovered event for the open started key; label removal was not observed by this run.
+
+## Warnings
+- the earlier run may have aborted.

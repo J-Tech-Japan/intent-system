@@ -6,6 +6,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection(WorkerPrCommentPreflightSharedStateCollection.Name)]
 public sealed class WorkerPrCommentPreflightCommandTests : IDisposable
 {
     public WorkerPrCommentPreflightCommandTests()

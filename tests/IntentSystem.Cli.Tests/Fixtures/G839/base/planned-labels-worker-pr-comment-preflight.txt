@@ -1,0 +1,46 @@
+{
+  "actionable": true,
+  "classification": "repair-required",
+  "pr": 616,
+  "repo": "J-Tech-Japan/intent-system",
+  "title": "Targeted PR",
+  "pr_state": "open",
+  "is_draft": false,
+  "labels": [
+    "intent-target"
+  ],
+  "source_issue": 100,
+  "sourceIssue": 100,
+  "source_issue_labels": [
+    "intent-target",
+    "intent-pr-created"
+  ],
+  "actionable_comments": [
+    {
+      "id": "RT_actionable",
+      "author": "human-reviewer",
+      "kind": "review_thread",
+      "excerpt": "Please add a null check before dereferencing config in Foo().",
+      "requested_edit_paths": [],
+      "host_evidence_paths": [],
+      "targets_host_metadata": false
+    }
+  ],
+  "actionableComments": [
+    {
+      "id": "RT_actionable",
+      "author": "human-reviewer",
+      "kind": "review_thread",
+      "excerpt": "Please add a null check before dereferencing config in Foo().",
+      "requested_edit_paths": [],
+      "host_evidence_paths": [],
+      "targets_host_metadata": false
+    }
+  ],
+  "reasons": [
+    "pr has 1 actionable comment(s) requiring repair"
+  ],
+  "recommended_action": "repair-pr",
+  "recommendedAction": "repair-pr",
+  "summary_line": "Worker pr-comment-preflight for J-Tech-Japan/intent-system#616 \u2014 classification=repair-required, actionable=true."
+}

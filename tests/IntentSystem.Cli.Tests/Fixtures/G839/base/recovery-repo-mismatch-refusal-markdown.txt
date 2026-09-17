@@ -1,0 +1,8 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: dry-run
+- outcome: refused
+- cause: repo-mismatch
+- applied: false
+- summary: refusing: publish.yaml created_issue_url does not match --repo and --issue.

@@ -1,0 +1,36 @@
+{
+  "repo": "J-Tech-Japan/intent-system",
+  "pr": 1823,
+  "transition": "request-update",
+  "mode": "dry-run",
+  "applied": false,
+  "add_labels": [
+    "intent-pr-request-update"
+  ],
+  "addLabels": [
+    "intent-pr-request-update"
+  ],
+  "remove_labels": [
+    "intent-pr-reviewing"
+  ],
+  "removeLabels": [
+    "intent-pr-reviewing"
+  ],
+  "current_labels": [
+    "intent-target",
+    "intent-pr-reviewing"
+  ],
+  "currentLabels": [
+    "intent-target",
+    "intent-pr-reviewing"
+  ],
+  "summary": "Would apply host PR transition \u0027request-update\u0027: add intent-pr-request-update; remove intent-pr-reviewing.",
+  "ci_wait_cleared": false,
+  "may_have_applied": false,
+  "mayHaveApplied": false,
+  "intended_labels": null,
+  "intendedLabels": null,
+  "recovery_command": null,
+  "recoveryCommand": null,
+  "error": null
+}

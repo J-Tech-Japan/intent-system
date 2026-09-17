@@ -1,0 +1,19 @@
+{
+  "action": "wait",
+  "repo": "J-Tech-Japan/intent-system",
+  "number": 514,
+  "url": "https://github.com/J-Tech-Japan/intent-system/pull/514",
+  "reason": "PR carries intent-pr-request-update but has no resolvable source issue (no closing reference / no Closes/Fixes/Resolves #N in body); the requested update is not a narrow child PR-branch repair. Route to the host/review/design lane \u2014 the child implementation loop must not claim it.",
+  "recommended_workflow": "pr-comment-fix",
+  "recommendedWorkflow": "pr-comment-fix",
+  "warnings": [],
+  "must_create_pr": null,
+  "allowed_terminal_outcomes": null,
+  "forbidden_terminal_outcomes": null,
+  "source_classification": "request-update-pending-not-child-actionable",
+  "sourceClassification": "request-update-pending-not-child-actionable",
+  "github_only": null,
+  "githubOnly": null,
+  "github_api_status": "healthy",
+  "degraded": false
+}

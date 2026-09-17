@@ -371,8 +371,9 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
                 {
-                    writer.WriteLine($"failed to append recovered event: {exception.Message}");
-                    return 1;
+                    return Refuse(writer, format, repo!, issue!.Value, executionUnit!, team!, ModeWrite,
+                        "recovered-event-append-failed", currentRecoveryKey.PrNumber, false, warnings,
+                        $"audit-only completion: intent-pr-created was already absent and no GitHub mutation was made, but the recovered event could not be appended: {exception.Message}. Re-run `intent-cli automation pr-created-stale-recovery --write` to complete the audit trail.");
                 }
 
                 return EmitSuccess(writer, format, repo!, issue!.Value, executionUnit!, team!, mode, "event-completed",
@@ -639,8 +640,9 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
         {
-            writer.WriteLine($"failed to append recovered event: {exception.Message}");
-            return 1;
+            return Refuse(writer, format, repo, issue, executionUnit, team, ModeWrite,
+                "recovered-event-append-failed", started.Key.PrNumber, false, warnings,
+                $"interrupted recovery not completed: no GitHub mutation was made and the started event for PR #{started.Key.PrNumber} stays open, because the recovered event could not be appended: {exception.Message}. Re-run `intent-cli automation pr-created-stale-recovery --write` to complete the audit trail.");
         }
 
         return EmitSuccess(writer, format, repo, issue, executionUnit, team, ModeWrite, "recovery-completed",
@@ -704,11 +706,31 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or JsonException or UnauthorizedAccessException)
         {
-            writer.WriteLine($"re-check refused but aborted event append failed: {exception.Message}");
-            return 1;
+            var gluedRecheckSummary = GlueRecheckSummaryForAbortedAppendFailure(summary);
+            return Refuse(writer, format, repo, issue, executionUnit, team, ModeWrite,
+                "aborted-event-append-failed", key.PrNumber, false, warnings,
+                $"{gluedRecheckSummary} No GitHub mutation was made, but the aborted event could not be appended: {exception.Message}; the started event for PR #{key.PrNumber} stays open. Re-run `intent-cli automation pr-created-stale-recovery --write` to close it.",
+                recheckCause: cause);
         }
 
         return Refuse(writer, format, repo, issue, executionUnit, team, ModeWrite, cause, key.PrNumber, false, warnings, summary);
+    }
+
+    private static string GlueRecheckSummaryForAbortedAppendFailure(string recheckSummary)
+    {
+        var trimmed = recheckSummary.TrimEnd();
+        if (trimmed.Length == 0)
+        {
+            return trimmed;
+        }
+
+        var last = trimmed[^1];
+        if (last is not '.' and not '!' and not '?' and not '…')
+        {
+            trimmed += '.';
+        }
+
+        return trimmed;
     }
 
     private static int FailPostStartedWrite(
@@ -1109,7 +1131,8 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
         int? linkedPr,
         bool applied,
         IReadOnlyList<string> warnings,
-        string summary) =>
+        string summary,
+        string? recheckCause = null) =>
         Emit(writer, format, new AutomationPrCreatedStaleRecoveryResult
         {
             Repo = repo,
@@ -1123,6 +1146,7 @@ internal static class AutomationPrCreatedStaleRecoveryCommand
             Applied = applied,
             Warnings = warnings,
             Summary = summary,
+            RecheckCause = recheckCause,
         }, 1);
 
     private static int EmitSuccess(

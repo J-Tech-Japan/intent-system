@@ -1,0 +1,6 @@
+Would apply host PR transition 'review-start': add intent-target, intent-pr-reviewing; remove (none).
+mode: write
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: true
+ci_wait_cleared: true

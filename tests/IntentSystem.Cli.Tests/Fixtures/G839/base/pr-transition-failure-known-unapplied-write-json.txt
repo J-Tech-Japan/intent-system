@@ -1,0 +1,36 @@
+{
+  "repo": "J-Tech-Japan/intent-system",
+  "pr": 1823,
+  "transition": "approved",
+  "mode": "write",
+  "applied": false,
+  "add_labels": [
+    "intent-pr-approved"
+  ],
+  "addLabels": [
+    "intent-pr-approved"
+  ],
+  "remove_labels": [
+    "intent-pr-rereview-ready"
+  ],
+  "removeLabels": [
+    "intent-pr-rereview-ready"
+  ],
+  "current_labels": [
+    "intent-target",
+    "intent-pr-rereview-ready"
+  ],
+  "currentLabels": [
+    "intent-target",
+    "intent-pr-rereview-ready"
+  ],
+  "summary": "Would apply host PR transition \u0027approved\u0027: add intent-pr-approved; remove intent-pr-rereview-ready.",
+  "ci_wait_cleared": false,
+  "may_have_applied": false,
+  "mayHaveApplied": false,
+  "intended_labels": null,
+  "intendedLabels": null,
+  "recovery_command": null,
+  "recoveryCommand": null,
+  "error": "failed to apply PR transition on PR #1823 in J-Tech-Japan/intent-system: failed to apply PR transition"
+}

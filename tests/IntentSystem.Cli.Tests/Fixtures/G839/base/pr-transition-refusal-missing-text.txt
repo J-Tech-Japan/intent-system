@@ -1,0 +1,7 @@
+cross-runtime-review-missing: [cross-runtime-review-missing] head 2222222222222222222222222222222222222222 has no approve whose latest record comes from a runtime other than the conductor runtime 'claude' (cross-runtime review).
+mode: dry-run
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false
+cross_runtime_review: missing (cross-runtime-review-missing)

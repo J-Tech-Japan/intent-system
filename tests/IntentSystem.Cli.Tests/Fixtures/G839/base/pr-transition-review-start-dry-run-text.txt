@@ -1,0 +1,6 @@
+Would apply host PR transition 'review-start': add intent-target, intent-pr-reviewing; remove intent-pr-rereview-ready, rereview-ready.
+mode: dry-run
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false

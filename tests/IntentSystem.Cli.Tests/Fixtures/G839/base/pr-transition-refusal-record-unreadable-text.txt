@@ -1,0 +1,7 @@
+cross-runtime-review-record-unreadable: [cross-runtime-review-record-unreadable] record '.intent-cli/cross-runtime-reviews/j-tech-japan__intent-system/pr-1823/zz.json' failed validation and fails the gate closed: record is not a valid cross-runtime-review-record: JSON deserialization for type 'IntentSystem.Cli.Commands.CrossRuntimeReviewRecord' was missing required properties including: 'artifact_kind', 'repo', 'pr', 'head_sha', 'execution_unit', 'domain'.
+mode: dry-run
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false
+cross_runtime_review: blocked (cross-runtime-review-record-unreadable)

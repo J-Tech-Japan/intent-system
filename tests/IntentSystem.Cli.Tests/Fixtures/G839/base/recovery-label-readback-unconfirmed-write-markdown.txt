@@ -1,0 +1,12 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: write
+- outcome: refused
+- cause: label-readback-unconfirmed
+- linked_pr: #1823
+- applied: false
+- summary: label readback unconfirmed: intent-pr-created is still present after removal.
+
+## Warnings
+- open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing.

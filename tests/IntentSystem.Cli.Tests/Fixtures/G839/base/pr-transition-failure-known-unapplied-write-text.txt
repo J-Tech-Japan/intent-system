@@ -1,0 +1,6 @@
+failed to apply PR transition on PR #1823 in J-Tech-Japan/intent-system: failed to apply PR transition
+mode: write
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: false
+ci_wait_cleared: false

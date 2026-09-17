@@ -1,0 +1,12 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: write
+- outcome: refused
+- cause: label-changed
+- linked_pr: #1823
+- applied: false
+- summary: re-check refused: intent-pr-created is already absent.
+
+## Warnings
+- open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing.

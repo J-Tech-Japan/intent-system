@@ -1,0 +1,9 @@
+--pr is required.
+automation pr-transition
+Usage: intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition <review-start|request-update|approved|review-release> [--head-sha <sha>] [--execution-unit <unit>] [--write] [--dry-run] [--format text|json]
+Supported transitions:
+- review-start
+- request-update
+- approved
+- review-release (G292: drop intent-pr-reviewing without adding intent-pr-request-update; use when host-owned metadata blocks closeout)
+G834: for a PR in a repository listed by [[cross_runtime_review.teams]], approved resolves the team from queue-state, packet, and claim; a declared team requires --head-sha <sha> equal to the PR's current head and a satisfied cross-runtime review gate (`intent-cli review cross-runtime status`). Run it from the host root. --execution-unit <unit> names the unit of a PR the host queue has not linked.

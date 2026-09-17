@@ -1,0 +1,8 @@
+# automation pr-created-stale-recovery (J-Tech-Japan/intent-system #839)
+
+- execution_unit: G839
+- mode: dry-run
+- outcome: refused
+- cause: host-state-missing
+- applied: false
+- summary: refusing: queue-state.json is missing at the host root (host-state-missing).

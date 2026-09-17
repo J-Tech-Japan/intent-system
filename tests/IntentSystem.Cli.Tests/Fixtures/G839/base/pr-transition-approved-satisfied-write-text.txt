@@ -1,0 +1,7 @@
+Would apply host PR transition 'approved': add intent-pr-approved; remove intent-pr-reviewing.
+mode: write
+repo: J-Tech-Japan/intent-system
+pr: 1823
+applied: true
+ci_wait_cleared: true
+cross_runtime_review: satisfied

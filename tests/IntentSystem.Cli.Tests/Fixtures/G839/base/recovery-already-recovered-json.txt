@@ -1,0 +1,16 @@
+{
+  "repo": "J-Tech-Japan/intent-system",
+  "issue": 839,
+  "execution_unit": "G839",
+  "team": "intent-cli-dev",
+  "mode": "dry-run",
+  "outcome": "already-recovered",
+  "cause": null,
+  "linked_pr": 1823,
+  "applied": false,
+  "planned_mutations": [],
+  "warnings": [
+    "open-closing-PR check considers at most the first 200 OPEN pull requests returned by the repository listing."
+  ],
+  "summary": "already recovered for this key; no mutation needed."
+}

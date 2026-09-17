@@ -1,0 +1,14 @@
+{
+  "repo": "J-Tech-Japan/intent-system",
+  "issue": 839,
+  "execution_unit": "G839",
+  "team": "intent-cli-dev",
+  "mode": "dry-run",
+  "outcome": "refused",
+  "cause": "started-ambiguous",
+  "linked_pr": null,
+  "applied": false,
+  "planned_mutations": [],
+  "warnings": [],
+  "summary": "refusing: more than one open pr-created-stale-recovery-started event exists for the current key."
+}
