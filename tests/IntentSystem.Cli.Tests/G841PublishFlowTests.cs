@@ -127,6 +127,7 @@ public sealed class G841PublishFlowTests : IDisposable
 
         var dryRun = AssertGatedPacketRefusal(workspace, write: false, expectedReviewDetail);
         var writeRun = AssertGatedPacketRefusal(workspace, write: true, expectedReviewDetail);
+        Assert.Equal(dryRun.ExitCode, writeRun.ExitCode);
         Assert.Equal(dryRun.ReviewJson, writeRun.ReviewJson);
         Assert.Equal(0, dryRun.CheckerCalls);
         Assert.Equal(0, writeRun.CheckerCalls);
@@ -159,6 +160,7 @@ public sealed class G841PublishFlowTests : IDisposable
             expectedReviewDetail,
             CrossRuntimeReviewCauses.PacketUnreadable,
             PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable);
+        Assert.Equal(dryRun.ExitCode, writeRun.ExitCode);
         Assert.Equal(dryRun.ReviewJson, writeRun.ReviewJson);
         Assert.Equal(0, dryRun.CheckerCalls);
         Assert.Equal(0, writeRun.CheckerCalls);
@@ -202,6 +204,7 @@ public sealed class G841PublishFlowTests : IDisposable
 
         var dryRun = AssertGatedPacketRefusal(workspace, write: false, G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf);
         var writeRun = AssertGatedPacketRefusal(workspace, write: true, G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf);
+        Assert.Equal(dryRun.ExitCode, writeRun.ExitCode);
         Assert.Equal(dryRun.ReviewJson, writeRun.ReviewJson);
     }
 
@@ -220,6 +223,7 @@ public sealed class G841PublishFlowTests : IDisposable
 
         var dryRun = AssertGatedPacketRefusal(workspace, write: false, G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf);
         var writeRun = AssertGatedPacketRefusal(workspace, write: true, G841TestHelpers.UnparseableCrossRuntimeParseDetailG841Pf);
+        Assert.Equal(dryRun.ExitCode, writeRun.ExitCode);
         Assert.Equal(dryRun.ReviewJson, writeRun.ReviewJson);
         Assert.NotEqual(CrossRuntimeReviewGate.DecisionIdempotentNotGated, JsonDocument.Parse(dryRun.ReviewJson!).RootElement.GetProperty("decision").GetString());
     }
@@ -773,10 +777,12 @@ public sealed class G841PublishFlowTests : IDisposable
         AssertJsonAbsentOrNull(review, "digest");
         AssertJsonAbsentOrNull(review, "domain");
         AssertJsonAbsentOrNull(review, "team");
-        return new GatedPacketRefusalResult(review.GetRawText(), checker.CallCount);
+        Assert.False(review.TryGetProperty("domain", out var domainProp) && domainProp.ValueKind is JsonValueKind.String);
+        Assert.False(review.TryGetProperty("team", out var teamProp) && teamProp.ValueKind is JsonValueKind.String);
+        return new GatedPacketRefusalResult(exit, review.GetRawText(), checker.CallCount);
     }
 
-    private readonly record struct GatedPacketRefusalResult(string? ReviewJson, int CheckerCalls);
+    private readonly record struct GatedPacketRefusalResult(int ExitCode, string? ReviewJson, int CheckerCalls);
 
     private static CrossRuntimeDesignReviewField InvokeBuildResolutionRefusalField(
         CrossRuntimeReviewPublishResolver.PublishResolution resolution,

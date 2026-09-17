@@ -713,6 +713,12 @@ public sealed class G841DegradeSiteStalledWorkTests : IDisposable
         Assert.Equal(
             [G841DegradeFixtures.ExpectedParseWarning(workspace.Root, unit)],
             warnings);
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("excluded").EnumerateArray(),
+            entry => entry.GetProperty("execution_unit").GetString() == unit);
+        Assert.DoesNotContain(
+            doc.RootElement.GetProperty("items").EnumerateArray(),
+            entry => entry.GetProperty("execution_unit").GetString() == unit);
     }
 
     [Fact]

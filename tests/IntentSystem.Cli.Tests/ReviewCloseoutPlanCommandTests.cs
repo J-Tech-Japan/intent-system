@@ -1676,23 +1676,24 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
     [Fact]
     public void Site11_CloseoutPlan_Le_TwoCandidateDomains_ExitZero_SilentDegrade()
     {
-        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-LE", G841DegradeFixtures.PacketYaml("LE"));
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-LE", Site11PacketYaml("LE"), withContractBody: true);
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Site11_CloseoutPlan_Su_TwoCandidateDomains_ExitZero_SilentDegrade()
+    public void Site11_CloseoutPlan_Su_TwoCandidateDomains_ExitOne_SilentDegrade()
     {
         var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-SU", G841DegradeFixtures.PacketYaml("SU"));
-        Assert.Equal(0, exitCode);
+        Assert.Equal(1, exitCode);
         Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
+        Assert.Contains("Candidate domains: alpha, beta", output, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Site11_CloseoutPlan_EdQuotedHash_TwoCandidateDomains_ExitZero_ReadsDomain()
     {
-        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-ED-QH", G841DegradeFixtures.PacketYaml("ED-QH"));
+        var (exitCode, output) = RunSite11CloseoutPlan("G841-S11-ED-QH", Site11PacketYaml("ED-QH"), withContractBody: true);
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
     }
@@ -1705,6 +1706,9 @@ public sealed class ReviewCloseoutPlanCommandTests : IDisposable
         Assert.DoesNotContain("warnings", output, StringComparison.Ordinal);
         Assert.Contains("Candidate domains: alpha, beta", output, StringComparison.Ordinal);
     }
+
+    private static string Site11PacketYaml(string inputClass) =>
+        $"domain: {G841TestHelpers.AlphaDomain}\n{G841DegradeFixtures.PacketYaml(inputClass)}";
 
     private static (int ExitCode, string Output) RunSite11CloseoutPlan(string unit, string yaml, bool withContractBody = false)
     {
