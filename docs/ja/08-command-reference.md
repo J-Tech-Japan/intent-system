@@ -82,12 +82,15 @@ intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> 
   --result-nonce <nonce> --dry-run --format json
 ```
 
-move は、記録済み herdr role ごとに完全な old-to-new pane map を明示的に必要とし、team と role の
-workspace/pane id を一つの atomic operation で更新します。role membership、cwd、kind、delivery method、
-reader、profile、その他すべての field は維持します。herdr query、workspace の discover、pane の作成、
-per-role refusal の repair は行いません。writer は CAS lock を保持し、置換前に topology digest を比較します。
-stale な `--current-digest` は拒否されます。既存の per-role mismatch message は sanctioned な whole-team
-transition としてこの command を示します。
+move は、記録済み herdr pane ごとに完全な old-to-new pane map を明示的に必要とし（複数 role が同一 pane を
+共有する場合はその pane を一度だけ指定すればよく、全 role がその pane の新しい pane へ一緒に移動する）、
+team と role の workspace/pane id を一つの atomic operation で更新します。role membership、cwd、kind、
+delivery method、reader、profile、その他すべての field は維持します。herdr query、workspace の discover、
+pane の作成、per-role refusal の repair は行いません。writer は CAS lock を保持し、置換前に topology digest を
+比較します。stale な `--current-digest` は拒否されます。2 つの異なる記録済み pane を 1 つの新しい pane へ
+統合する map は genuinely ambiguous として拒否を維持するため、pane 共有 team は pane を 1 対 1 で
+割り当てて rebuild する（2 pane を 1 pane に統合しない）。既存の per-role mismatch message は sanctioned な
+whole-team transition としてこの command を示します。
 
 ---
 

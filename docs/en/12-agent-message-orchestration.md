@@ -1597,11 +1597,14 @@ G697 adds the intentional workspace rebuild path. The installed
 `guide next --role review`, and `guide orchestrator-thread`; it renders the
 complete inspect → dry-run preview → explicit write → validate → notify
 preflight sequence. The move requires a complete operator-supplied old-pane to
-new-pane map for herdr roles, holds a CAS lock, compares the topology digest,
-and atomically updates the team and role workspace/pane ids while preserving
-all other role fields. It never queries herdr, creates panes, changes
+new-pane map for the recorded herdr panes — one pair per pane, so roles that
+share one pane travel together (G735) — holds a CAS lock, compares the topology
+digest, and atomically updates the team and role workspace/pane ids while
+preserving all other role fields. It never queries herdr, creates panes, changes
 membership, or repairs a per-role conflict; that refusal names this move
-command as its sanctioned whole-team transition.
+command as its sanctioned whole-team transition. A map that merges two different
+recorded panes into one new pane remains refused as genuinely ambiguous — a
+shared-pane team is rebuilt by mapping each pane one to one.
 
 Agent kind is whatever herdr can start: Claude, Codex, Copilot, Cursor, OpenCode,
 and others are examples, not a supported-set restriction. Logical role defaults

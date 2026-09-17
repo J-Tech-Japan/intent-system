@@ -87,12 +87,17 @@ intent-cli notify delegate --domain <domain> --team <team> --from <sender-role> 
   --result-nonce <nonce> --dry-run --format json
 ```
 
-The move requires a complete explicit old-to-new pane map for recorded herdr
-roles, updates the team and role workspace/pane ids in one atomic operation,
-and preserves role membership, cwd, kind, delivery method, readers, profiles,
+The move requires a complete explicit old-to-new pane map for the recorded
+herdr panes — one pair per recorded pane, so several roles sharing one pane
+map together and travel to that pane's new pane — updates the team and role
+workspace/pane ids in one atomic operation, and preserves role membership, cwd,
+kind, delivery method, readers, profiles,
 and all other fields. It never queries herdr, discovers a workspace, creates
 panes, or repairs a per-role refusal. The writer holds a CAS lock and compares
 the topology digest before replacement; a stale `--current-digest` is refused.
+A map that merges two different recorded panes into one new pane stays refused
+as genuinely ambiguous, so a shared-pane team is rebuilt by mapping its panes
+one to one, never by collapsing two panes into one.
 The existing per-role mismatch message points to this command as the
 sanctioned whole-team transition.
 

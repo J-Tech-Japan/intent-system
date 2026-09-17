@@ -182,6 +182,91 @@ public sealed class TopologyWorkspaceMoveG697Tests
     }
 
     [Fact]
+    public void Move_SharedPaneRolesTravelTogetherWhilePaneMergeStaysRefused_G735()
+    {
+        var context = CreateFixture();
+        SetHerdrOnly(context);
+        RecordHerdr(context, "orchestrator", "wS:p1", "/orchestrator", "codex", "inline");
+        RecordHerdr(context, "orchestration", "wS:p1", "/orchestration", "codex", "inline");
+        RecordHerdr(context, "implementation", "wS:p2", "/implementation", "claude", "file-backed");
+        var topologyPath = NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, Domain, Team);
+        Assert.True(File.Exists(topologyPath));
+
+        var shared = Run(context, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44", "--pane-map", "wS:p1=w44:p1", "--pane-map", "wS:p2=w44:p2",
+            "--write", "--format", "json",
+        ]);
+        Assert.False(shared.GetProperty("conflict").GetBoolean());
+        Assert.True(shared.GetProperty("applied").GetBoolean());
+        Assert.Equal("w44", shared.GetProperty("workspace_id").GetString());
+        Assert.Equal(2, shared.GetProperty("after").GetProperty("roles").EnumerateObject()
+            .Count(entry => entry.Value.GetProperty("pane_id").GetString() == "w44:p1"));
+
+        var validation = Run(context, [
+            "session-layer", "topology", "validate", "--domain", Domain, "--team", Team, "--format", "json",
+        ]);
+        Assert.True(validation.GetProperty("valid").GetBoolean());
+
+        var ambiguousContext = CreateFixture();
+        SetHerdrOnly(ambiguousContext);
+        RecordHerdr(ambiguousContext, "orchestrator", "wS:p1", "/orchestrator", "codex", "inline");
+        RecordHerdr(ambiguousContext, "orchestration", "wS:p2", "/orchestration", "codex", "inline");
+        var ambiguousPath = NotifyRoleTopologyStore.ResolvePath(ambiguousContext.RepoRoot, Domain, Team);
+        var beforeAmbiguous = File.ReadAllText(ambiguousPath);
+
+        var merge = Run(ambiguousContext, [
+            "session-layer", "topology", "move", "--domain", Domain, "--team", Team,
+            "--workspace-id", "w44", "--pane-map", "wS:p1=w44:p1", "--pane-map", "wS:p2=w44:p1",
+            "--dry-run", "--format", "json",
+        ], expectedExitCode: 1);
+        Assert.True(merge.GetProperty("conflict").GetBoolean());
+        Assert.Contains("more than one recorded pane", merge.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Equal(beforeAmbiguous, File.ReadAllText(ambiguousPath));
+    }
+
+    [Fact]
+    public void Guide_StatesPaneKeyedMapAndSharedPaneRemedy_G735()
+    {
+        var context = CreateFixture();
+        using var writer = new StringWriter();
+        Assert.Equal(0, GuideTopologyWorkspaceMoveCommand.Execute(
+            context,
+            ["--domain", Domain, "--team", Team, "--format", "markdown"],
+            writer));
+        Assert.Contains("every role on it travels together", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("merges two different recorded panes", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Record_WhenTeamAlreadyRecordsWorkspaceNamesMoveAndSharedPaneRemedy_G735()
+    {
+        var context = CreateFixture();
+        SetHerdrOnly(context);
+        RecordHerdr(context, "orchestration", "wS:p1", "/orchestration", "codex", "inline");
+
+        var sharedPane = RecordHerdrResult(context, "review", "wS:p1", "/review", "claude", "inline");
+        Assert.Equal(0, sharedPane.ExitCode);
+        Assert.False(sharedPane.Result.GetProperty("conflict").GetBoolean());
+
+        var foreign = RecordHerdrResult(context, "implementation", "w33:p2", "/implementation", "claude", "inline");
+        Assert.Equal(1, foreign.ExitCode);
+        var summary = foreign.Result.GetProperty("summary").GetString()!;
+        Assert.Contains("session-layer topology move", summary, StringComparison.Ordinal);
+        Assert.Contains("travel with their pane", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("use topology move", summary, StringComparison.Ordinal);
+
+        var recorded = Run(context, [
+            "session-layer", "topology", "record", "--domain", Domain, "--team", Team, "--role", "review",
+            "--resident", "herdr", "--workspace-id", "wS", "--pane-id", "wS:p1",
+            "--cwd", "/review", "--kind", "claude", "--delivery-method", "inline", "--write", "--format", "json",
+        ]);
+        Assert.False(recorded.GetProperty("conflict").GetBoolean());
+        Assert.Equal("wS", JsonNode.Parse(File.ReadAllText(
+            NotifyRoleTopologyStore.ResolvePath(context.RepoRoot, Domain, Team)))!["workspace_id"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void InstalledRecipe_IsReachableFromDirectAndRoleFacingGuides_G697()
     {
         var context = CreateFixture();

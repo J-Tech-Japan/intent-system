@@ -1363,11 +1363,14 @@ intent-cli session-layer topology move --domain <domain> --team <team> --workspa
 G697 は意図的な workspace rebuild の path を追加します。インストール済みの
 `guide topology-workspace-move` recipe は `guide review`、`guide next --role review`、
 `guide orchestrator-thread` から到達でき、inspect → dry-run preview → explicit write →
-validate → notify preflight の完全な順序を表示します。move は herdr role ごとの operator-supplied
-old-pane から new-pane への完全な map を必要とし、CAS lock を保持して topology digest を比較します。
+validate → notify preflight の完全な順序を表示します。move は記録済み herdr pane ごとの operator-supplied
+old-pane から new-pane への完全な対応表を必要とし（pane 単位で 1 組指定すればよく、同一 pane を共有する role は
+一緒に移動する — G735）、CAS lock を保持して topology digest を比較します。
 team と role の workspace/pane id だけを atomic に更新し、他の role field は維持します。herdr query、
 pane 作成、membership 変更、per-role conflict の repair は行いません。既存の refusal は sanctioned な
-whole-team transition としてこの move command を示します。
+whole-team transition としてこの move command を示します。2 つの異なる記録済み pane を 1 つの新しい pane へ
+統合する対応表は genuinely ambiguous として拒否を維持する — pane 共有 team は各 pane を 1 対 1 で
+割り当てて rebuild する。
 
 agent kind は herdr が起動できる任意の kind です。Claude、Codex、Copilot、Cursor、OpenCode などは
 例であり、supported-set の制約ではありません。logical role の既定値は `implementation`、`review`、

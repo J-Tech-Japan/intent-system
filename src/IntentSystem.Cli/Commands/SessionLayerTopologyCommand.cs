@@ -1184,7 +1184,9 @@ internal static class SessionLayerTopologyWriter
                     + $"'{request.Role}' requested '{request.WorkspaceId}'. Refusing to repair the conflict. "
                     + "For an operator-approved whole-team rebuild, use `intent-cli session-layer topology move "
                     + "--domain <domain> --team <team> --workspace-id <new-workspace-id> --pane-map "
-                    + "<old-pane>=<new-pane> --write`.");
+                    + "<old-pane>=<new-pane> --write` and map each recorded pane to its own new pane: a pane "
+                    + "shared by several roles maps once and those roles travel with their pane, and only a "
+                    + "mapping that merges two different recorded panes into one new pane is refused.");
             }
 
             if (string.IsNullOrWhiteSpace(recordedWorkspace))
@@ -1339,7 +1341,17 @@ internal static class SessionLayerTopologyWriter
             }
 
             var recordedPanes = new HashSet<string>(StringComparer.Ordinal);
-            var mappedPanes = new HashSet<string>(StringComparer.Ordinal);
+            if (IsAmbiguousPaneMap(request.PaneMap, out var ambiguousNewPane))
+            {
+                return MoveConflict(
+                    request,
+                    path,
+                    currentDigest,
+                    $"--pane-map maps more than one recorded pane to new pane '{ambiguousNewPane}'; refusing "
+                    + "an ambiguous workspace move. Roles that share one old pane may map to one new pane "
+                    + "together, but two different old panes must not merge into one new pane.");
+            }
+
             foreach (var (roleName, roleNode) in roles!.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             {
                 if (roleNode is not JsonObject role)
@@ -1375,16 +1387,6 @@ internal static class SessionLayerTopologyWriter
                         currentDigest,
                         $"No --pane-map was supplied for recorded herdr pane '{oldPane}' (role '{roleName}'); "
                         + "refusing a partial workspace move.");
-                }
-
-                if (!mappedPanes.Add(newPane))
-                {
-                    return MoveConflict(
-                        request,
-                        path,
-                        currentDigest,
-                        $"--pane-map maps more than one recorded role to new pane '{newPane}'; refusing an "
-                        + "ambiguous workspace move.");
                 }
 
                 var paneWorkspace = WorkspaceFromPane(newPane);
@@ -2105,6 +2107,35 @@ internal static class SessionLayerTopologyWriter
         }
 
         WriteAtomically(path, content);
+    }
+
+    // G735: the ambiguity guard is keyed on old-pane identity. A repeat new
+    // pane is only ambiguous when the repeated mappings come from two
+    // different recorded old panes; roles sharing one old pane travel with
+    // that pane.
+    internal static bool IsAmbiguousPaneMap(
+        IReadOnlyDictionary<string, string> paneMap,
+        out string ambiguousNewPane)
+    {
+        var oldPanesPerNewPane = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var (oldPane, newPane) in paneMap)
+        {
+            if (!oldPanesPerNewPane.TryGetValue(newPane, out var oldPanes))
+            {
+                oldPanes = new HashSet<string>(StringComparer.Ordinal);
+                oldPanesPerNewPane[newPane] = oldPanes;
+            }
+
+            oldPanes.Add(oldPane);
+            if (oldPanes.Count > 1)
+            {
+                ambiguousNewPane = newPane;
+                return true;
+            }
+        }
+
+        ambiguousNewPane = string.Empty;
+        return false;
     }
 
     private static SessionLayerTopologyMoveResult MoveConflict(
