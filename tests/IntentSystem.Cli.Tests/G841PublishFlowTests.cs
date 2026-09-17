@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using IntentSystem.Cli;
@@ -467,6 +468,170 @@ public sealed class G841PublishFlowTests : IDisposable
     }
 
     [Fact]
+    public void BuildResolutionRefusalField_UnresolvedPacketInvalid_PreservesCauseAndDetail_G841M13()
+    {
+        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        var resolution = new CrossRuntimeReviewPublishResolver.PublishResolution
+        {
+            Resolved = false,
+            Cause = CrossRuntimeReviewCauses.PacketInvalid,
+            Detail = expectedDetail,
+            ExecutionUnit = Unit,
+        };
+
+        var field = InvokeBuildResolutionRefusalField(resolution);
+
+        Assert.Equal(CrossRuntimeReviewCauses.PacketInvalid, field.Reasons[0].Cause);
+        Assert.Equal(expectedDetail, field.Reasons[0].Detail);
+        Assert.Null(field.Domain);
+        Assert.Null(field.Team);
+    }
+
+    [Fact]
+    public void BuildResolutionRefusalField_UnresolvedPacketUnreadable_PreservesCauseAndDetail_G841M13()
+    {
+        const string deniedMessage = "Access to the path is denied.";
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
+        var resolution = new CrossRuntimeReviewPublishResolver.PublishResolution
+        {
+            Resolved = false,
+            Cause = CrossRuntimeReviewCauses.PacketUnreadable,
+            Detail = expectedDetail,
+            ExecutionUnit = Unit,
+        };
+
+        var field = InvokeBuildResolutionRefusalField(resolution);
+
+        Assert.Equal(CrossRuntimeReviewCauses.PacketUnreadable, field.Reasons[0].Cause);
+        Assert.Equal(expectedDetail, field.Reasons[0].Detail);
+        Assert.Null(field.Domain);
+        Assert.Null(field.Team);
+    }
+
+    [Fact]
+    public void PublishFlow_Gated_DeclaredFixture_TitleRefusalField_MatchesResolver_G841M12()
+    {
+        using var workspace = new G841PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, G841TestHelpers.Repo, yaml: G841TestHelpers.UnparseableYaml);
+        workspace.WriteIncompleteGithubBody();
+        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        var expectedResolution = CrossRuntimeReviewPublishResolver.Resolve(
+            workspace.Context.RepoRoot,
+            Unit,
+            G841TestHelpers.Repo,
+            workspace.Context.Config.CrossRuntimeReview);
+        Assert.False(expectedResolution.Resolved);
+        Assert.Equal(CrossRuntimeReviewCauses.PacketInvalid, expectedResolution.Cause);
+
+        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, json.RootElement.GetProperty("cause").GetString());
+        AssertTitleRefusalFieldMatchesResolver(
+            json.RootElement.GetProperty("cross_runtime_design_review"),
+            CrossRuntimeReviewCauses.PacketInvalid,
+            expectedReviewDetail,
+            expectedResolution);
+    }
+
+    [Fact]
+    public void PublishFlow_Gated_LiveTitleRace_UnparseableThenValid_TitleRefusalField_MatchesResolver_G841M12()
+    {
+        using var workspace = new G841PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, G841TestHelpers.Repo);
+        workspace.WriteIncompleteGithubBody();
+        var packetPath = workspace.PacketYamlPath(Unit);
+        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+        var expectedResolution = CrossRuntimeReviewPublishResolver.Resolve(
+            workspace.Context.RepoRoot,
+            Unit,
+            G841TestHelpers.Repo,
+            workspace.Context.Config.CrossRuntimeReview);
+        Assert.True(expectedResolution.Resolved && expectedResolution.Declared);
+        Assert.Equal(G841TestHelpers.Domain, expectedResolution.Domain);
+        Assert.Equal(G841TestHelpers.Team, expectedResolution.Team);
+        var reads = 0;
+        PacketFileReader.ReadAllText = path =>
+        {
+            if (string.Equals(path, packetPath, StringComparison.Ordinal)
+                && Interlocked.Increment(ref reads) == 1)
+            {
+                return G841TestHelpers.UnparseableYaml;
+            }
+
+            return File.ReadAllText(path);
+        };
+
+        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, json.RootElement.GetProperty("cause").GetString());
+        AssertTitleRefusalFieldMatchesResolver(
+            json.RootElement.GetProperty("cross_runtime_design_review"),
+            CrossRuntimeReviewCauses.PacketInvalid,
+            expectedReviewDetail,
+            expectedResolution);
+    }
+
+    [Fact]
+    public void PublishFlow_Gated_SecondTitleReadFails_RefusesWithDesignReview_G841R4()
+    {
+        using var workspace = new G841PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(
+            Unit,
+            G841TestHelpers.Repo,
+            yaml:
+            """
+            implementation_issue_packet:
+              domain: intent-cli
+              target_repo: J-Tech-Japan/intent-system
+            """);
+        File.WriteAllText(
+            Path.Combine(workspace.PacketDirectory(Unit), "github-body.md"),
+            G841TestHelpers.MinimalContractBody("Borrowed H1"));
+        var packetPath = workspace.PacketYamlPath(Unit);
+        const string deniedMessage = "Access to the path is denied.";
+        var reads = 0;
+        PacketFileReader.ReadAllText = path =>
+        {
+            if (string.Equals(path, packetPath, StringComparison.Ordinal)
+                && Interlocked.Increment(ref reads) == 2)
+            {
+                throw new UnauthorizedAccessException(deniedMessage);
+            }
+
+            return File.ReadAllText(path);
+        };
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
+        var expectedResolution = CrossRuntimeReviewPublishResolver.Resolve(
+            workspace.Context.RepoRoot,
+            Unit,
+            G841TestHelpers.Repo,
+            workspace.Context.Config.CrossRuntimeReview);
+        Assert.True(expectedResolution.Resolved && expectedResolution.Declared);
+
+        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: true);
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable, json.RootElement.GetProperty("cause").GetString());
+        Assert.False(json.RootElement.GetProperty("created").GetBoolean());
+        AssertTitleRefusalFieldMatchesResolver(
+            json.RootElement.GetProperty("cross_runtime_design_review"),
+            CrossRuntimeReviewCauses.PacketUnreadable,
+            expectedReviewDetail,
+            expectedResolution);
+        AssertZeroCreates();
+    }
+
+    [Fact]
     public void PublishFlow_Ungated_SecondTitleReadFails_RefusesWithoutCreating_G841R3()
     {
         WriteUngatedPacket(
@@ -581,6 +746,40 @@ public sealed class G841PublishFlowTests : IDisposable
     }
 
     private void AssertZeroCreates() => Assert.Equal(0, throwingCreator.CallCount);
+
+    private static CrossRuntimeDesignReviewField InvokeBuildResolutionRefusalField(
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution,
+        string? overrideCause = null,
+        string? overrideDetail = null)
+    {
+        var method = typeof(IssuePublishFlowCommand).GetMethod(
+            "BuildResolutionRefusalField",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (CrossRuntimeDesignReviewField)method.Invoke(null, [resolution, overrideCause, overrideDetail])!;
+    }
+
+    private static void AssertTitleRefusalFieldMatchesResolver(
+        JsonElement review,
+        string expectedCause,
+        string expectedDetail,
+        CrossRuntimeReviewPublishResolver.PublishResolution expectedResolution)
+    {
+        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, review.GetProperty("decision").GetString());
+        Assert.Equal(expectedCause, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.Equal(expectedDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
+        AssertJsonAbsentOrNull(review, "digest");
+        if (expectedResolution.Resolved)
+        {
+            Assert.Equal(expectedResolution.Domain, review.GetProperty("domain").GetString());
+            Assert.Equal(expectedResolution.Team, review.GetProperty("team").GetString());
+        }
+        else
+        {
+            AssertJsonAbsentOrNull(review, "domain");
+            AssertJsonAbsentOrNull(review, "team");
+        }
+    }
 
     private static void AssertSnapshotPacketRefusalDesignReviewField(
         JsonElement review,

@@ -88,6 +88,38 @@ public sealed class G841PacketDraftTests : IDisposable
     }
 
     [Fact]
+    public void PacketDraft_SecondPacketYamlReadFails_RefusesWithPacketYamlUnreadable_G841R3()
+    {
+        WritePacket(G841TestHelpers.LegacyEquivalentPacket(extra: $"  target_repo: {Repo}\n"));
+        WriteBorrowedGithubBody();
+        File.WriteAllText(
+            Path.Combine(G841TestHelpers.PacketDir(root, Unit), "review-context.md"),
+            "# review\n");
+        File.WriteAllText(
+            Path.Combine(G841TestHelpers.PacketDir(root, Unit), "implementation.md"),
+            "# notes\n");
+        var packetPath = G841TestHelpers.PacketPath(root, Unit);
+        var reads = 0;
+        PacketFileReader.ReadAllText = path =>
+        {
+            if (string.Equals(path, packetPath, StringComparison.Ordinal)
+                && Interlocked.Increment(ref reads) == 2)
+            {
+                throw new UnauthorizedAccessException("Access to the path is denied.");
+            }
+
+            return File.ReadAllText(path);
+        };
+
+        var (exitCode, json) = RunPacketDraftDryRun();
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
+            RefusalReasons(json));
+        Assert.False(json.RootElement.GetProperty("contract_publishable").GetBoolean());
+    }
+
+    [Fact]
     public void PacketDraft_UnreadableSiblingImplementationMd_PropagatesUnauthorizedAccessLikeBase_G841R3()
     {
         if (OperatingSystem.IsWindows())
