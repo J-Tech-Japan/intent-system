@@ -149,8 +149,8 @@ public sealed class G841PublishFlowTests : IDisposable
             packetPath,
             ArmDeniedPacketReader,
             DisarmDeniedPacketReader,
-            out _);
-        const string deniedMessage = "Access to the path is denied.";
+            out var usedInjection);
+        var deniedMessage = ResolveUnreadablePacketExceptionMessage(packetPath, usedInjection);
         var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
         var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
 
@@ -818,6 +818,25 @@ public sealed class G841PublishFlowTests : IDisposable
         {
             CallCount++;
             return inner.FindExistingIssue(repo, executionUnit, expectedTitle, expectedBody);
+        }
+    }
+
+    private static string ResolveUnreadablePacketExceptionMessage(string packetPath, bool usedInjection)
+    {
+        const string injectedMessage = "Access to the path is denied.";
+        if (usedInjection)
+        {
+            return injectedMessage;
+        }
+
+        try
+        {
+            _ = File.ReadAllText(packetPath);
+            return injectedMessage;
+        }
+        catch (Exception exception)
+        {
+            return exception.Message;
         }
     }
 
