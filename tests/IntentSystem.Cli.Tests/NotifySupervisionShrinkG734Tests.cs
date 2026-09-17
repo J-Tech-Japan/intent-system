@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using IntentSystem.Cli;
@@ -519,7 +520,9 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
                 "Release",
                 "net10.0",
                 "IntentSystem.Cli.dll");
-            Assert.True(File.Exists(cliDll), $"missing built CLI: {cliDll}");
+            Assert.True(
+                File.Exists(cliDll),
+                $"missing built CLI: {cliDll}; build with: dotnet build src/IntentSystem.Cli/IntentSystem.Cli.csproj -c Release");
             supervisor = StartCli(
                 liveRoot,
                 cliDll,
@@ -532,7 +535,10 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
             var cyclesPath = NotifySupervisionStore.ResolveCyclePath(artifactRoot, Domain, Team);
             await WaitUntilAsync(
                 () => File.Exists(cyclesPath) && File.ReadLines(cyclesPath).Any(),
-                TimeSpan.FromSeconds(10));
+                TimeSpan.FromSeconds(10),
+                diagnostics: () => DescribeLiveFixture(
+                    DescribeProcessState(supervisor),
+                    cyclesPath));
             var cycleCountBeforeShrink = File.ReadLines(cyclesPath).Count();
 
             using var shrink = StartCli(
@@ -547,9 +553,7 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
             Assert.True(shrink.ExitCode == 0, shrinkOutput + shrinkError);
             using var shrinkJson = JsonDocument.Parse(shrinkOutput);
             var rootElement = shrinkJson.RootElement;
-            var supervisorProcessState = supervisor.HasExited
-                ? $"exited:{supervisor.ExitCode}"
-                : "running";
+            var supervisorProcessState = DescribeProcessState(supervisor);
             var supervisorStdout = supervisorOutput?.IsCompleted == true
                 ? await supervisorOutput
                 : "<not-complete>";
@@ -565,7 +569,10 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
 
             await WaitUntilAsync(
                 () => File.ReadLines(cyclesPath).Count() > cycleCountBeforeShrink,
-                TimeSpan.FromSeconds(10));
+                TimeSpan.FromSeconds(10),
+                diagnostics: () => DescribeLiveFixture(
+                    DescribeProcessState(supervisor),
+                    cyclesPath));
             var cycleCountAfterShrink = File.ReadLines(cyclesPath).Count();
             var rawStalls = File.ReadAllText(stallsPath);
             Assert.DoesNotContain(NotifySupervisionStore.HerdrRegistrationDefinition, rawStalls, StringComparison.Ordinal);
@@ -701,20 +708,61 @@ public sealed class NotifySupervisionShrinkG734Tests : IDisposable
         return process!;
     }
 
-    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+    internal static string DescribeProcessState(Process process) =>
+        process.HasExited ? $"exited:{process.ExitCode}" : "running";
+
+    internal static string DescribeLiveFixture(string processState, string cyclesPath)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        string cyclesLast = "<none>";
+        var cyclesLines = 0;
+        if (File.Exists(cyclesPath))
         {
-            if (predicate())
+            try
             {
-                return;
+                var lines = File.ReadAllLines(cyclesPath);
+                cyclesLines = lines.Length;
+                if (cyclesLines > 0)
+                {
+                    cyclesLast = lines[^1];
+                }
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        return $"supervisor_process={processState}; cycles_lines={cyclesLines}; cycles_last={cyclesLast}";
+    }
+
+    internal static async Task WaitUntilAsync(
+        Func<bool> predicate,
+        TimeSpan timeout,
+        Func<string>? diagnostics = null,
+        [CallerArgumentExpression(nameof(predicate))] string? description = null)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        Exception? lastError = null;
+        var passes = 0;
+        while (stopwatch.Elapsed < timeout)
+        {
+            passes++;
+            try
+            {
+                if (predicate())
+                {
+                    return;
+                }
+            }
+            catch (Exception exception)
+            {
+                lastError = exception;
             }
 
             await Task.Delay(50);
         }
 
-        Assert.True(predicate(), "Timed out waiting for the live supervision fixture.");
+        var diagnostic = $"{description}: timed out; elapsed_ms={stopwatch.ElapsedMilliseconds}; passes={passes}; last_error={lastError?.Message ?? "<none>"}; {diagnostics?.Invoke() ?? "<no fixture diagnostics>"}";
+        Assert.Fail(diagnostic);
     }
 
     private static void WriteVerificationArtifact(string name, object payload)
