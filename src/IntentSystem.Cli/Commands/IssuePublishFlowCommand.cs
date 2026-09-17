@@ -239,7 +239,9 @@ internal static class IssuePublishFlowCommand
                     out title,
                     out titleSource,
                     out var titleRefusalCause,
-                    out var titleRefusalDetail))
+                    out var titleRefusalDetail,
+                    out var titleRefusalParseError,
+                    out var titleRefusalReadExceptionMessage))
             {
                 var titleRefusalResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                     packetExists: true,
@@ -258,7 +260,12 @@ internal static class IssuePublishFlowCommand
                     titleSource: null,
                     cause: titleRefusalCause,
                     crossRuntimeDesignReview: BuildTitleRefusalDesignReviewField(
-                        context, executionUnit!, repo!, titleRefusalCause!, titleRefusalDetail!));
+                        context,
+                        executionUnit!,
+                        repo!,
+                        titleRefusalCause!,
+                        titleRefusalParseError,
+                        titleRefusalReadExceptionMessage));
                 EmitResult(writer, titleRefusalResult, format);
                 return 1;
             }
@@ -1721,33 +1728,26 @@ internal static class IssuePublishFlowCommand
         string executionUnit,
         string repo,
         string titleRefusalCause,
-        string titleRefusalDetail)
+        PacketYamlParseError? parseError,
+        string? readExceptionMessage)
     {
         if (!context.Config.CrossRuntimeReview.IsGatedRepo(repo))
         {
             return null;
         }
 
-        var crossRuntimeCause = titleRefusalCause switch
+        var relativePacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml";
+        var (crossRuntimeCause, crossRuntimeDetail) = titleRefusalCause switch
         {
-            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable => CrossRuntimeReviewCauses.PacketUnreadable,
-            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable => CrossRuntimeReviewCauses.PacketInvalid,
+            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable => (
+                CrossRuntimeReviewCauses.PacketUnreadable,
+                PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, readExceptionMessage!)),
+            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable => (
+                CrossRuntimeReviewCauses.PacketInvalid,
+                PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!)),
             _ => throw new InvalidOperationException($"unexpected title refusal cause: {titleRefusalCause}"),
         };
-        var relativePacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml";
-        var crossRuntimeDetail = RewritePublishFlowPacketDetailForCrossRuntime(titleRefusalDetail, relativePacketPath);
         return BuildPacketRefusalDesignReviewField(crossRuntimeCause, crossRuntimeDetail);
-    }
-
-    private static string RewritePublishFlowPacketDetailForCrossRuntime(
-        string publishFlowDetail,
-        string relativePacketPath)
-    {
-        const string marker = " could not be ";
-        var markerIndex = publishFlowDetail.IndexOf(marker, StringComparison.Ordinal);
-        return markerIndex < 0
-            ? publishFlowDetail
-            : $"packet '{relativePacketPath}'{publishFlowDetail[markerIndex..]}";
     }
 
     private static CrossRuntimeDesignReviewField EvaluateDeclaredDesignGate(
@@ -2616,12 +2616,16 @@ internal static class IssuePublishFlowCommand
         out string? title,
         out string? titleSource,
         out string? refusalCause,
-        out string? refusalDetail)
+        out string? refusalDetail,
+        out PacketYamlParseError? refusalParseError,
+        out string? refusalReadExceptionMessage)
     {
         title = null;
         titleSource = null;
         refusalCause = null;
         refusalDetail = null;
+        refusalParseError = null;
+        refusalReadExceptionMessage = null;
 
         string text;
         try
@@ -2631,6 +2635,7 @@ internal static class IssuePublishFlowCommand
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             refusalCause = PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable;
+            refusalReadExceptionMessage = exception.Message;
             refusalDetail = PacketYamlParseMessages.ComposePublishFlowReadDetail(packetYamlPath, exception.Message);
             return false;
         }
@@ -2638,6 +2643,7 @@ internal static class IssuePublishFlowCommand
         if (!PacketYamlDocument.TryParseWithLocation(text, out var document, out var parseError) || document is null)
         {
             refusalCause = PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable;
+            refusalParseError = parseError;
             refusalDetail = PacketYamlParseMessages.ComposePublishFlowParseDetail(packetYamlPath, parseError!);
             return false;
         }
@@ -2657,7 +2663,7 @@ internal static class IssuePublishFlowCommand
 
     private static string? TryReadPacketTitle(string packetYamlPath)
     {
-        if (!TryResolveLiveTitle(string.Empty, packetYamlPath, string.Empty, out var title, out _, out _, out _))
+        if (!TryResolveLiveTitle(string.Empty, packetYamlPath, string.Empty, out var title, out _, out _, out _, out _, out _))
         {
             return null;
         }

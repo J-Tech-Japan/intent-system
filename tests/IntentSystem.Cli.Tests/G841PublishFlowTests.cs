@@ -122,6 +122,9 @@ public sealed class G841PublishFlowTests : IDisposable
         using var workspace = new G841PublishFlowWorkspace(declare: true);
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo, yaml: G841TestHelpers.UnparseableYaml);
         workspace.WriteIncompleteGithubBody();
+        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
 
         var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
         Assert.Equal(1, exit);
@@ -132,6 +135,7 @@ public sealed class G841PublishFlowTests : IDisposable
         Assert.Equal(
             CrossRuntimeReviewCauses.PacketInvalid,
             review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.Equal(expectedReviewDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
         Assert.False(json.RootElement.GetProperty("created").GetBoolean());
     }
 
@@ -146,6 +150,9 @@ public sealed class G841PublishFlowTests : IDisposable
             ArmDeniedPacketReader,
             DisarmDeniedPacketReader,
             out _);
+        const string deniedMessage = "Access to the path is denied.";
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
 
         var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
         Assert.Equal(1, exit);
@@ -156,6 +163,38 @@ public sealed class G841PublishFlowTests : IDisposable
         Assert.Equal(
             CrossRuntimeReviewCauses.PacketUnreadable,
             review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.Equal(expectedReviewDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
+    }
+
+    [Fact]
+    public void PublishFlow_Gated_UnparseablePacket_FixturePathContainsCouldNotBePhrase_NestedDetailMatchesResolver_G841R4()
+    {
+        var parent = Directory.CreateTempSubdirectory("g841-edge-parent-").FullName;
+        var edgeRoot = Path.Combine(parent, "edge x could not be y");
+        Directory.CreateDirectory(edgeRoot);
+        try
+        {
+            using var workspace = new G841PublishFlowWorkspace(edgeRoot, declare: true);
+            workspace.WriteFullPacket(Unit, G841TestHelpers.Repo, yaml: G841TestHelpers.UnparseableYaml);
+            workspace.WriteIncompleteGithubBody();
+            Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+            var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+            var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
+
+            var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write: false);
+            Assert.Equal(1, exit);
+            using var json = JsonDocument.Parse(output);
+            Assert.Equal(
+                expectedReviewDetail,
+                json.RootElement.GetProperty("cross_runtime_design_review").GetProperty("reasons")[0].GetProperty("detail").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(parent))
+            {
+                Directory.Delete(parent, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -272,6 +311,9 @@ public sealed class G841PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo);
         workspace.WriteIncompleteGithubBody();
         var packetPath = workspace.PacketYamlPath(Unit);
+        Assert.False(PacketYamlDocument.TryParseWithLocation(G841TestHelpers.UnparseableYaml, out _, out var parseError));
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!);
         var reads = 0;
         PacketFileReader.ReadAllText = path =>
         {
@@ -293,6 +335,7 @@ public sealed class G841PublishFlowTests : IDisposable
         Assert.Equal(
             CrossRuntimeReviewCauses.PacketInvalid,
             review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.Equal(expectedReviewDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
         Assert.NotEqual(CrossRuntimeReviewCauses.TargetRepoMismatch, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
     }
 
@@ -303,13 +346,16 @@ public sealed class G841PublishFlowTests : IDisposable
         workspace.WriteFullPacket(Unit, G841TestHelpers.Repo);
         workspace.WriteIncompleteGithubBody();
         var packetPath = workspace.PacketYamlPath(Unit);
+        const string deniedMessage = "Access to the path is denied.";
+        var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
         var reads = 0;
         PacketFileReader.ReadAllText = path =>
         {
             if (string.Equals(path, packetPath, StringComparison.Ordinal)
                 && Interlocked.Increment(ref reads) == 1)
             {
-                throw new UnauthorizedAccessException("Access to the path is denied.");
+                throw new UnauthorizedAccessException(deniedMessage);
             }
 
             return File.ReadAllText(path);
@@ -323,6 +369,7 @@ public sealed class G841PublishFlowTests : IDisposable
         Assert.Equal(
             CrossRuntimeReviewCauses.PacketUnreadable,
             review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        Assert.Equal(expectedReviewDetail, review.GetProperty("reasons")[0].GetProperty("detail").GetString());
         Assert.NotEqual(CrossRuntimeReviewCauses.TargetRepoMismatch, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
     }
 
@@ -390,7 +437,7 @@ public sealed class G841PublishFlowTests : IDisposable
             deniedMessage,
             changedAfterFirstRead: true);
         var relativePacketPath = $".intent-cli/issues/{Unit}/packet.yaml";
-        var expectedReviewDetail = $"packet '{relativePacketPath}' could not be read: {deniedMessage}";
+        var expectedReviewDetail = PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePacketPath, deniedMessage);
         var preHookResolution = CrossRuntimeReviewPublishResolver.Resolve(
             workspace.Context.RepoRoot,
             Unit,

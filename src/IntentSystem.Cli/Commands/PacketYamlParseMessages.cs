@@ -15,6 +15,9 @@ internal static class PacketYamlParseMessages
     public static string ComposeCrossRuntimeParseDetail(string relativePacketPath, PacketYamlParseError error) =>
         ComposeParseDetail($"packet '{relativePacketPath}' could not be parsed", error);
 
+    public static string ComposeCrossRuntimeReadDetail(string relativePacketPath, string exceptionMessage) =>
+        $"packet '{relativePacketPath}' could not be read: {exceptionMessage}";
+
     public static string ComposePublishFlowParseDetail(string packetPath, PacketYamlParseError error, bool changedAfterFirstRead = false)
     {
         var prefix = changedAfterFirstRead
