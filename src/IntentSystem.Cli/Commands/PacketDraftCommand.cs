@@ -267,14 +267,19 @@ internal static class PacketDraftCommand
                 return null;
             }
 
-            try
+            if (string.Equals(name, PreparedPacketCommitReadyAnalyzer.FileNamePacketYaml, StringComparison.Ordinal))
             {
-                return PacketFileReader.ReadAllText(path);
+                try
+                {
+                    return PacketFileReader.ReadAllText(path);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    throw new PacketDraftUnreadableException(path, exception.Message);
+                }
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                throw new PacketDraftUnreadableException(path, exception.Message);
-            }
+
+            return PacketFileReader.ReadAllText(path);
         }
 
         var regexResolution = NextSliceDomainBindingsExecutionUnitRegex.Resolve(context, domain);
@@ -762,7 +767,7 @@ internal static class PacketDraftCommand
                 .Where(value => value.Length > 0)
                 .ToArray();
         }
-        catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidOperationException)
+        catch (YamlDotNet.Core.YamlException)
         {
             return Array.Empty<string>();
         }

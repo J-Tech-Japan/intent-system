@@ -467,6 +467,40 @@ public sealed class G841PublishFlowTests : IDisposable
     }
 
     [Fact]
+    public void PublishFlow_Ungated_SecondTitleReadFails_RefusesWithoutCreating_G841R3()
+    {
+        WriteUngatedPacket(
+            """
+            implementation_issue_packet:
+              domain: intent-cli
+              target_repo: J-Tech-Japan/other
+            """);
+        WriteBorrowedGithubBody();
+        var packetPath = G841TestHelpers.PacketPath(root, Unit);
+        var reads = 0;
+        PacketFileReader.ReadAllText = path =>
+        {
+            if (string.Equals(path, packetPath, StringComparison.Ordinal)
+                && Interlocked.Increment(ref reads) == 2)
+            {
+                throw new UnauthorizedAccessException("Access to the path is denied.");
+            }
+
+            return File.ReadAllText(path);
+        };
+        var deniedMessage = "Access to the path is denied.";
+        var expectedError = PacketYamlParseMessages.ComposePublishFlowReadDetail(packetPath, deniedMessage);
+
+        var (exit, output) = RunUngated(write: true);
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable, json.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(expectedError, json.RootElement.GetProperty("error").GetString());
+        Assert.False(json.RootElement.GetProperty("created").GetBoolean());
+        AssertZeroCreates();
+    }
+
+    [Fact]
     public void ResolveTitleWithSourceFromSnapshot_UnparseableBytes_DoesNotReturnGithubBodyH1_G841Ac14b()
     {
         var packetBytes = Encoding.UTF8.GetBytes(G841TestHelpers.UnparseableYaml);

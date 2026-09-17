@@ -274,9 +274,45 @@ internal static class IssuePublishFlowCommand
             {
                 title = FormatIssueTitle(executionUnit!, title);
             }
+            else if (!TryResolveTitleWithSource(
+                executionUnit!,
+                packetDirectory,
+                githubBodyPath,
+                out title,
+                out titleSource,
+                out var secondTitleRefusalCause,
+                out var secondTitleRefusalDetail,
+                out var secondTitleRefusalParseError,
+                out var secondTitleRefusalReadExceptionMessage))
+            {
+                var secondTitleRefusalResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                    packetExists: true,
+                    githubBodyPresent: true,
+                    missingSections: missing,
+                    title: null,
+                    created: false,
+                    idempotent: false,
+                    durableStateSynced: false,
+                    issueUrl: null,
+                    issueNumber: null,
+                    queueStatePatched: false,
+                    publishYamlPatched: false,
+                    runsAppended: false,
+                    error: secondTitleRefusalDetail,
+                    titleSource: null,
+                    cause: secondTitleRefusalCause,
+                    crossRuntimeDesignReview: BuildTitleRefusalDesignReviewField(
+                        context,
+                        executionUnit!,
+                        repo!,
+                        secondTitleRefusalCause!,
+                        secondTitleRefusalParseError,
+                        secondTitleRefusalReadExceptionMessage));
+                EmitResult(writer, secondTitleRefusalResult, format);
+                return 1;
+            }
             else
             {
-                (title, titleSource) = ResolveTitleWithSource(executionUnit!, packetDirectory, githubBodyPath);
                 title = FormatIssueTitle(executionUnit!, title);
             }
         }
@@ -1657,13 +1693,17 @@ internal static class IssuePublishFlowCommand
             crossRuntimeDesignReview: designReview);
 
     private static CrossRuntimeDesignReviewField BuildResolutionRefusalField(
-        CrossRuntimeReviewPublishResolver.PublishResolution resolution)
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution,
+        string? overrideCause = null,
+        string? overrideDetail = null)
     {
-        var cause = !resolution.Resolved
-            ? resolution.Cause ?? CrossRuntimeReviewCauses.TeamUnresolved
-            : resolution.DomainMismatch
-                ? CrossRuntimeReviewCauses.DomainMismatch
-                : CrossRuntimeReviewCauses.TargetRepoMismatch;
+        var cause = overrideCause
+            ?? (!resolution.Resolved
+                ? resolution.Cause ?? CrossRuntimeReviewCauses.TeamUnresolved
+                : resolution.DomainMismatch
+                    ? CrossRuntimeReviewCauses.DomainMismatch
+                    : CrossRuntimeReviewCauses.TargetRepoMismatch);
+        var detail = overrideDetail ?? resolution.Detail ?? string.Empty;
         return new CrossRuntimeDesignReviewField
         {
             Decision = CrossRuntimeReviewGate.DecisionBlocked,
@@ -1672,16 +1712,20 @@ internal static class IssuePublishFlowCommand
                 new CrossRuntimeReviewGateReason
                 {
                     Cause = cause,
-                    Detail = resolution.Detail ?? string.Empty,
+                    Detail = detail,
                 },
             ],
             Digest = null,
-            Domain = cause is CrossRuntimeReviewCauses.PacketInvalid or CrossRuntimeReviewCauses.PacketUnreadable
-                ? null
-                : resolution.Domain,
-            Team = cause is CrossRuntimeReviewCauses.PacketInvalid or CrossRuntimeReviewCauses.PacketUnreadable
-                ? null
-                : resolution.Team,
+            Domain = overrideCause is not null
+                ? resolution.Resolved ? resolution.Domain : null
+                : cause is CrossRuntimeReviewCauses.PacketInvalid or CrossRuntimeReviewCauses.PacketUnreadable
+                    ? null
+                    : resolution.Domain,
+            Team = overrideCause is not null
+                ? resolution.Resolved ? resolution.Team : null
+                : cause is CrossRuntimeReviewCauses.PacketInvalid or CrossRuntimeReviewCauses.PacketUnreadable
+                    ? null
+                    : resolution.Team,
         };
     }
 
@@ -1736,8 +1780,13 @@ internal static class IssuePublishFlowCommand
             return null;
         }
 
+        var resolution = CrossRuntimeReviewPublishResolver.Resolve(
+            context.RepoRoot,
+            executionUnit,
+            repo,
+            context.Config.CrossRuntimeReview);
         var relativePacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml";
-        var (crossRuntimeCause, crossRuntimeDetail) = titleRefusalCause switch
+        var (overrideCause, overrideDetail) = titleRefusalCause switch
         {
             PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable => (
                 CrossRuntimeReviewCauses.PacketUnreadable,
@@ -1747,7 +1796,7 @@ internal static class IssuePublishFlowCommand
                 PacketYamlParseMessages.ComposeCrossRuntimeParseDetail(relativePacketPath, parseError!)),
             _ => throw new InvalidOperationException($"unexpected title refusal cause: {titleRefusalCause}"),
         };
-        return BuildPacketRefusalDesignReviewField(crossRuntimeCause, crossRuntimeDetail);
+        return BuildResolutionRefusalField(resolution, overrideCause, overrideDetail);
     }
 
     private static CrossRuntimeDesignReviewField EvaluateDeclaredDesignGate(
@@ -2514,31 +2563,47 @@ internal static class IssuePublishFlowCommand
         return ($"{executionUnit} (untitled)", TitleSourceFallbackUntitled);
     }
 
-    /// <summary>
-    /// G290: resolves the title in priority order: packet.yaml title (G826: `issue_title`, then legacy `title`) →
-    /// body H1 (`# Title`) → fallback <c>&lt;execution-unit&gt; (untitled)</c>. Returns
-    /// both the title and a structured source string so the caller can
-    /// report which path resolved it (and emit a warning when the fallback
-    /// fired).
-    /// </summary>
-    internal static (string Title, string Source) ResolveTitleWithSource(
+    internal static bool TryResolveTitleWithSource(
         string executionUnit,
         string packetDirectory,
-        string githubBodyPath)
+        string githubBodyPath,
+        out string? title,
+        out string? titleSource,
+        out string? refusalCause,
+        out string? refusalDetail,
+        out PacketYamlParseError? refusalParseError,
+        out string? refusalReadExceptionMessage)
     {
-        // (1) Prefer packet.yaml `title:` when present and non-empty.
+        title = null;
+        titleSource = null;
+        refusalCause = null;
+        refusalDetail = null;
+        refusalParseError = null;
+        refusalReadExceptionMessage = null;
+
         var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
         if (File.Exists(packetYamlPath))
         {
-            var packetTitle = TryReadPacketTitle(packetYamlPath);
-            if (!string.IsNullOrWhiteSpace(packetTitle))
+            if (!TryResolveLiveTitle(
+                executionUnit,
+                packetYamlPath,
+                githubBodyPath,
+                out title,
+                out titleSource,
+                out refusalCause,
+                out refusalDetail,
+                out refusalParseError,
+                out refusalReadExceptionMessage))
             {
-                return (packetTitle!, TitleSourcePacketYaml);
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                return true;
             }
         }
 
-        // (2) Fall back to body H1 for packets that don't carry the title in
-        // metadata (older packets, hand-authored bodies).
         if (File.Exists(githubBodyPath))
         {
             var lines = File.ReadAllLines(githubBodyPath);
@@ -2552,16 +2617,49 @@ internal static class IssuePublishFlowCommand
 
                 if (line.StartsWith("# ", StringComparison.Ordinal))
                 {
-                    return (line[2..].Trim(), TitleSourceGithubBodyH1);
+                    title = line[2..].Trim();
+                    titleSource = TitleSourceGithubBodyH1;
+                    return true;
                 }
 
                 break;
             }
         }
 
-        // (3) Last-resort deterministic fallback. The caller surfaces this
-        // as a warning so the operator can repair packet metadata.
-        return ($"{executionUnit} (untitled)", TitleSourceFallbackUntitled);
+        title = $"{executionUnit} (untitled)";
+        titleSource = TitleSourceFallbackUntitled;
+        return true;
+    }
+
+    /// <summary>
+    /// G290: resolves the title in priority order: packet.yaml title (G826: `issue_title`, then legacy `title`) →
+    /// body H1 (`# Title`) → fallback <c>&lt;execution-unit&gt; (untitled)</c>. Returns
+    /// both the title and a structured source string so the caller can
+    /// report which path resolved it (and emit a warning when the fallback
+    /// fired).
+    /// </summary>
+    internal static (string Title, string Source) ResolveTitleWithSource(
+        string executionUnit,
+        string packetDirectory,
+        string githubBodyPath)
+    {
+        if (!TryResolveTitleWithSource(
+            executionUnit,
+            packetDirectory,
+            githubBodyPath,
+            out var title,
+            out var source,
+            out var refusalCause,
+            out var refusalDetail,
+            out _,
+            out _)
+            || title is null
+            || source is null)
+        {
+            throw new InvalidOperationException(refusalDetail ?? refusalCause ?? "packet title could not be resolved.");
+        }
+
+        return (title, source);
     }
 
     /// <summary>
@@ -2659,16 +2757,6 @@ internal static class IssuePublishFlowCommand
         }
 
         return true;
-    }
-
-    private static string? TryReadPacketTitle(string packetYamlPath)
-    {
-        if (!TryResolveLiveTitle(string.Empty, packetYamlPath, string.Empty, out var title, out _, out _, out _, out _, out _))
-        {
-            return null;
-        }
-
-        return title;
     }
 
     private static bool TryParseArguments(

@@ -73,23 +73,64 @@ public sealed class G841PacketDraftTests : IDisposable
     }
 
     [Fact]
-    public void PacketDraft_UnterminatedFlowSequence_RefusesWithPacketYamlUnparseable_G841R2()
+    public void PacketDraft_UnterminatedFlowSequence_ExitsOneWithBaseInvalidOperationMessage_G841Ac15()
     {
         WritePacket(G841TestHelpers.UnterminatedFlowSequenceYaml);
         WriteBorrowedGithubBody();
-        Assert.False(PacketYamlDocument.TryParse(G841TestHelpers.UnterminatedFlowSequenceYaml, out _, out var tryParseError));
         Assert.Throws<InvalidOperationException>(() =>
         {
             var stream = new YamlDotNet.RepresentationModel.YamlStream();
             stream.Load(new StringReader(G841TestHelpers.UnterminatedFlowSequenceYaml));
         });
 
-        var (exitCode, json) = RunPacketDraftDryRun();
-        Assert.Equal(0, exitCode);
-        Assert.Equal(
-            PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable,
-            RefusalReasons(json)[0]);
-        Assert.False(json.RootElement.GetProperty("contract_publishable").GetBoolean());
+        var exception = Assert.Throws<InvalidOperationException>(() => RunPacketDraftDryRun());
+        Assert.Equal("Operation is not valid due to the current state of the object.", exception.Message);
+    }
+
+    [Fact]
+    public void PacketDraft_UnreadableSiblingImplementationMd_PropagatesUnauthorizedAccessLikeBase_G841R3()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("chmod 000 unreadable sibling fixture requires Unix file permissions.");
+        }
+
+        if (!G841TestHelpers.IsNonRootUnixUser())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip(
+                "chmod 000 unreadable sibling fixture cannot prove denial while running as root.");
+        }
+
+        WritePacket(G841TestHelpers.LegacyEquivalentPacket(extra: $"  target_repo: {Repo}\n"));
+        WriteBorrowedGithubBody();
+        File.WriteAllText(
+            Path.Combine(G841TestHelpers.PacketDir(root, Unit), "review-context.md"),
+            "# review\n");
+        var implementationPath = Path.Combine(G841TestHelpers.PacketDir(root, Unit), "implementation.md");
+        File.WriteAllText(implementationPath, "# notes\n");
+
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(implementationPath, UnixFileMode.None);
+            }
+
+            if (G841TestHelpers.CanRead(implementationPath))
+            {
+                throw Xunit.Sdk.SkipException.ForSkip(
+                    "chmod 000 unreadable sibling fixture cannot prove denial on this host.");
+            }
+
+            Assert.Throws<UnauthorizedAccessException>(() => RunPacketDraftDryRun());
+        }
+        finally
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                G841TestHelpers.RestorePacketPermissions(implementationPath);
+            }
+        }
     }
 
     [Fact]
