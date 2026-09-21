@@ -1,0 +1,27 @@
+exit_code=0
+{
+  "operation": "issue sync-body",
+  "execution_unit": "G900",
+  "repo": "J-Tech-Japan/intent-system",
+  "mode": "dry-run",
+  "outcome": "no-op",
+  "reason_code": null,
+  "issue_number": 1900,
+  "issue_url": "https://github.com/J-Tech-Japan/intent-system/issues/1900",
+  "bound_repository": null,
+  "local_sha256": "2665f84330cf7e859d6cfaf0791f98e7032c9acd566f248a42ed19f842475006",
+  "local_bytes": 50003,
+  "remote_sha256": "b69d1b6f2db846aa8ba52e3edd435e6aa4377afb676f0bc82aaa71878988fde8",
+  "remote_bytes": 50005,
+  "remote_after_sha256": null,
+  "expected_remote_sha256": null,
+  "lines_added": 0,
+  "lines_removed": 0,
+  "trailing_newline_normalized": true,
+  "may_have_applied": false,
+  "recovery_command": null,
+  "concurrency_guarantee": "read-compare-write-verified; not atomic",
+  "runs_event": null,
+  "summary": "dry-run: issue #1900 body already matches github-body.md; nothing to write.",
+  "warnings": []
+}

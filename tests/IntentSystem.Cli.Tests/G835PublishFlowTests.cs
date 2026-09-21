@@ -551,6 +551,211 @@ public sealed class G835PublishFlowTests : IDisposable
     }
 
     [Fact]
+    public void G845_Point2_StagesExactSnapshotAndCleansPrivateDirectory()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        var expected = G845BodyFixtures.ValidBytes(50003, Title());
+        File.WriteAllBytes(workspace.GithubBodyPath(Unit), expected);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        var recorder = new RecordingIssueCreator($"https://github.com/{Repo}/issues/845");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(1, recorder.CallCount);
+        Assert.Equal(expected, recorder.LastBodyBytes);
+        Assert.NotEqual(workspace.GithubBodyPath(Unit), recorder.LastBodyFilePath);
+        Assert.StartsWith(Path.GetTempPath(), recorder.LastBodyFilePath!, StringComparison.Ordinal);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, recorder.LastBodyFileMode);
+        }
+
+        Assert.False(File.Exists(recorder.LastBodyFilePath));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(recorder.LastBodyFilePath!)!));
+        Assert.DoesNotContain("body-file", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void G845_Point2_CreatorFactoryMutationIsRejectedBeforeTransmission()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        var expected = G845BodyFixtures.ValidBytes(50003, Title());
+        File.WriteAllBytes(workspace.GithubBodyPath(Unit), expected);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        var recorder = new RecordingIssueCreator($"https://github.com/{Repo}/issues/845");
+        IssuePublishFlowCommand.CreatorFactory = () =>
+        {
+            File.WriteAllBytes(workspace.GithubBodyPath(Unit), G845BodyFixtures.ValidBytes(50004, Title()));
+            return recorder;
+        };
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("cross-runtime-review-digest-stale", output, StringComparison.Ordinal);
+        Assert.Equal(0, recorder.CallCount);
+        Assert.NotEqual(expected, File.ReadAllBytes(workspace.GithubBodyPath(Unit)));
+    }
+
+    [Theory]
+    [InlineData(65535, true, "")]
+    [InlineData(65536, true, "")]
+    [InlineData(65537, false, "issue-body-too-large: github-body.md is 65537 bytes, which exceeds the 65536-byte limit.")]
+    [InlineData(70000, false, "issue-body-too-large: github-body.md is 70000 bytes, which exceeds the 65536-byte limit.")]
+    public void G845_Point2_BoundaryAndCauseAreLiteral(int bodyBytes, bool accepted, string expectedError)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.WriteAllBytes(workspace.GithubBodyPath(Unit), G845BodyFixtures.ValidBytes(bodyBytes, Title()));
+        workspace.SeedQueueState(Unit, Title());
+        if (accepted)
+        {
+            workspace.RecordSatisfiedDesignReviews(Unit);
+        }
+
+        var recorder = new RecordingIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+
+        Assert.Equal(accepted ? 0 : 1, exit);
+        Assert.Equal(accepted ? 1 : 0, recorder.CallCount);
+        if (!accepted)
+        {
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("issue-body-too-large", document.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(expectedError, document.RootElement.GetProperty("error").GetString());
+        }
+    }
+
+    [Theory]
+    [InlineData(50003)]
+    public void G845_Point2_InvalidUtf8IsRefusedBeforeCreator(int bodyBytes)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.WriteAllBytes(workspace.GithubBodyPath(Unit), G845BodyFixtures.InvalidOrdinaryTextBytes(bodyBytes, Title()));
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        var recorder = new RecordingIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal("issue-body-invalid-utf8", document.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(
+            "issue-body-invalid-utf8: github-body.md is not valid UTF-8 at byte offset 1000.",
+            document.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, recorder.CallCount);
+    }
+
+    [Fact]
+    public void G845_Point2_ExistingMalformedHeadingValidationStillWins()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.WriteAllBytes(workspace.GithubBodyPath(Unit), G845BodyFixtures.InvalidHeadingBytes(50003, Title()));
+        workspace.SeedQueueState(Unit, Title());
+        var recorder = new RecordingIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        Assert.Equal(
+            "Child Issue Contract is incomplete; the existing publish gate rejected headings or placeholder-only Related Links.",
+            root.GetProperty("error").GetString());
+        Assert.Contains(
+            "Goal",
+            root.GetProperty("missing_contract_sections").EnumerateArray().Select(section => section.GetString()));
+        Assert.False(root.GetProperty("created").GetBoolean());
+        Assert.Equal(0, recorder.CallCount);
+    }
+
+    [Fact]
+    public void G845_Point2_NonUtf8BomBodiesNeverReachCreate()
+    {
+        foreach (var bytes in new[]
+        {
+            G845BodyFixtures.Utf16Bytes(Title("UTF-16")),
+            G845BodyFixtures.Utf32Bytes(Title("UTF-32")),
+        })
+        {
+            using var workspace = new G835PublishFlowWorkspace(declare: true);
+            workspace.WriteFullPacket(Unit, Repo);
+            File.WriteAllBytes(workspace.GithubBodyPath(Unit), bytes);
+            workspace.SeedQueueState(Unit, Title());
+            workspace.RecordSatisfiedDesignReviews(Unit);
+            var recorder = new RecordingIssueCreator("unused");
+            IssuePublishFlowCommand.CreatorFactory = () => recorder;
+
+            var (exit, _) = Run(workspace, Unit, Repo, write: true);
+
+            Assert.Equal(1, exit);
+            Assert.Equal(0, recorder.CallCount);
+        }
+    }
+
+    [Fact]
+    public void G845_Point2_BomCountsRawBytesAndIsRefusedForSize()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.WriteAllBytes(workspace.GithubBodyPath(Unit), G845BodyFixtures.BomBytes(65539, Title()));
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        var recorder = new RecordingIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal("issue-body-too-large", document.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(
+            "issue-body-too-large: github-body.md is 65539 bytes, which exceeds the 65536-byte limit.",
+            document.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, recorder.CallCount);
+    }
+
+    [Fact]
+    public void G845_Point2_StagingFailureUsesTheResultErrorAndDoesNotCallCreator()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.WriteAllBytes(workspace.GithubBodyPath(Unit), G845BodyFixtures.ValidBytes(50003, Title()));
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        var recorder = new RecordingIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
+
+        try
+        {
+            IssueBodyFileStager.FileWriteOverride = (_, _) => throw new IOException("write failure");
+            var (exit, output) = Run(workspace, Unit, Repo, write: true);
+            Assert.Equal(1, exit);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(
+                "could not stage the validated body for upload (write failure). No issue was created.",
+                document.RootElement.GetProperty("error").GetString());
+            Assert.Equal(0, recorder.CallCount);
+        }
+        finally
+        {
+            IssueBodyFileStager.FileWriteOverride = null;
+        }
+    }
+
+    [Fact]
     public void PublishFlow_DeclaredTeam_CreatesWithTheSnapshotTitle_NotTheAnalysisTimeTitle()
     {
         using var workspace = new G835PublishFlowWorkspace(declare: true);
@@ -1115,11 +1320,17 @@ public sealed class G835PublishFlowTests : IDisposable
 
         public byte[]? LastBodyBytes { get; private set; }
 
+        public string? LastBodyFilePath { get; private set; }
+
+        public UnixFileMode? LastBodyFileMode { get; private set; }
+
         public IssueCreateOutcome CreateIssue(string repo, string title, string bodyFilePath)
         {
             CallCount++;
             LastTitle = title;
             LastBodyBytes = File.ReadAllBytes(bodyFilePath);
+            LastBodyFilePath = bodyFilePath;
+            LastBodyFileMode = OperatingSystem.IsWindows() ? null : File.GetUnixFileMode(bodyFilePath);
             return new IssueCreateOutcome(url);
         }
     }

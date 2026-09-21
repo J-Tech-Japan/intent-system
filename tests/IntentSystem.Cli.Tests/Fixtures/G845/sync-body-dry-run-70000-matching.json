@@ -1,0 +1,27 @@
+exit_code=1
+{
+  "operation": "issue sync-body",
+  "execution_unit": "G900",
+  "repo": "J-Tech-Japan/intent-system",
+  "mode": "dry-run",
+  "outcome": "refused",
+  "reason_code": "body-too-large",
+  "issue_number": null,
+  "issue_url": null,
+  "bound_repository": null,
+  "local_sha256": "e85fb00a179090337202696eda26b3fa7e288379b9552bcd2931b324c9cb5f72",
+  "local_bytes": 70000,
+  "remote_sha256": null,
+  "remote_bytes": null,
+  "remote_after_sha256": null,
+  "expected_remote_sha256": null,
+  "lines_added": null,
+  "lines_removed": null,
+  "trailing_newline_normalized": false,
+  "may_have_applied": false,
+  "recovery_command": null,
+  "concurrency_guarantee": "read-compare-write-verified; not atomic",
+  "runs_event": null,
+  "summary": "refused (body-too-large): github-body.md is 70000 bytes, which exceeds the 65536-byte limit. No GitHub call was made.",
+  "warnings": []
+}

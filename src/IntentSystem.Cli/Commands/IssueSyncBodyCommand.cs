@@ -208,6 +208,20 @@ internal static class IssueSyncBodyCommand
             }, exitCode: 1);
         }
 
+        // This is the write-only transmission gate. It deliberately follows
+        // the remote read, dry-run return and concurrent-edit check, and it
+        // precedes the equality/no-op decision so a bad body cannot be hidden
+        // by an apparently matching remote body.
+        var transmissionResult = IssueBodyTransmissionGate.Evaluate(localBytes, bodyPath);
+        if (transmissionResult is IssueBodyTransmissionRefusal transmissionRefusal)
+        {
+            return Emit(
+                writer,
+                format,
+                BuildTransmissionRefusal(result, transmissionRefusal));
+        }
+
+        var acceptedBody = (IssueBodyTransmissionAccepted)transmissionResult;
         var runLogPath = context.GetRunLogPath();
 
         if (equalModuloTrailingNewline)
@@ -222,35 +236,23 @@ internal static class IssueSyncBodyCommand
             });
         }
 
-        // Upload the exact bytes that passed validation, not the packet file,
-        // so an edit to github-body.md after the gate cannot reach GitHub.
-        var uploadPath = Path.Combine(Path.GetTempPath(), $"intent-cli-sync-body-{Guid.NewGuid():N}.md");
         try
         {
-            File.WriteAllBytes(uploadPath, localBytes);
+            using var staged = acceptedBody.Stage();
+            client.UpdateBody(repo!, issueNumber, staged.Path);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (IssueBodyStagingException exception)
         {
-            TryDeleteUpload(uploadPath);
             return Emit(writer, format, Refuse(result, "upload-staging-failed", string.Empty) with
             {
                 Summary = $"refused (upload-staging-failed): could not stage the validated body for upload ({exception.Message}). The issue body was read, but no update was sent.",
             });
-        }
-
-        try
-        {
-            client.UpdateBody(repo!, issueNumber, uploadPath);
         }
         catch (Exception exception) when (IsAdapterFailure(exception))
         {
             // The update request may or may not have reached GitHub.
             return Emit(writer, format, Unverified(result, runLogPath, unit!, repo!, artifact.CreatedIssueUrl, localSha, remoteSha, afterSha: null,
                 $"the body update reported an error ({exception.Message}); the body may or may not have changed."));
-        }
-        finally
-        {
-            TryDeleteUpload(uploadPath);
         }
 
         string afterBody;
@@ -280,19 +282,6 @@ internal static class IssueSyncBodyCommand
             RunsEvent = EventSynced,
             Summary = $"applied: issue #{issueNumber} body replaced ({remoteSha} -> {afterSha}) and verified by read-back.",
         });
-    }
-
-    private static void TryDeleteUpload(string uploadPath)
-    {
-        try
-        {
-            File.Delete(uploadPath);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // A leftover temp copy of an already-validated body is harmless and
-            // must not turn a sent update into an unreported crash.
-        }
     }
 
     /// <summary>
@@ -340,6 +329,27 @@ internal static class IssueSyncBodyCommand
             ExitCode = 1,
             Summary = $"refused ({reasonCode}): {detail} No GitHub call was made.",
         };
+
+    internal static IssueSyncBodyResult BuildTransmissionRefusal(
+        IssueSyncBodyResult result,
+        IssueBodyTransmissionRefusal refusal)
+    {
+        var (reasonCode, detail) = refusal.Kind switch
+        {
+            IssueBodyTransmissionFailure.TooLarge =>
+                ("body-too-large",
+                    $"github-body.md is {refusal.ByteCount} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit."),
+            IssueBodyTransmissionFailure.InvalidUtf8 =>
+                ("body-invalid-utf8",
+                    $"Issue body is not valid UTF-8 at byte offset {refusal.InvalidByteOffset}."),
+            _ => throw new InvalidOperationException("A transmission refusal requires a gate failure."),
+        };
+
+        return Refuse(result, reasonCode, detail) with
+        {
+            Summary = $"refused ({reasonCode}): {detail} The issue body was read, but no update was sent.",
+        };
+    }
 
     private static RunEvent BuildEvent(string unit, string @event, string repo, string? issueUrl, string localSha, string remoteBeforeSha, string? remoteAfterSha) =>
         new()

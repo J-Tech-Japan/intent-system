@@ -240,6 +240,52 @@ The contract hedge is: **65,536 is intent-cli's own conservative limit on the
 submitted body content; GitHub's boundary, inclusivity, unit and treatment of
 a JSON payload were not verified.**
 
+## `--body-file` transmission gate (G845)
+
+The four file-body routes—`issue publish-flow`'s normal and declared-team
+create paths, `issue publish-reviewed`, and `issue sync-body --write`—strictly
+decode UTF-8 and then count the raw bytes that will be staged for the
+`gh --body-file` call. A UTF-8 BOM is not stripped on these routes: it is part
+of the file bytes counted and staged. 65,535 and 65,536 bytes are accepted;
+65,537 bytes are refused with exit code 1. This is the route-scoped
+`--body-file` rule, not a rule for the JSON-payload routes.
+
+Malformed UTF-8 is refused before the size check, naming the offending byte
+offset. `issue publish-flow` reports causes `issue-body-too-large` and
+`issue-body-invalid-utf8`; `issue sync-body --write` reports
+`body-too-large` and `body-invalid-utf8`. Its write-only gate runs after the
+remote read, dry-run return, and concurrent-edit check, immediately before the
+equality/no-op decision. Its exact refusal summaries are:
+
+```text
+refused (body-too-large): github-body.md is <n> bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.
+refused (body-invalid-utf8): Issue body is not valid UTF-8 at byte offset <k>. The issue body was read, but no update was sent.
+```
+
+`issue publish-reviewed` has no `--format` handling and deliberately keeps its
+plain refusal lines: `source body is <n> bytes, which exceeds the 65536-byte
+limit` and `source body is not valid UTF-8 at byte offset <k>`, each with exit
+code 1 and no result surface.
+
+The gate is deliberately UTF-8-only. A UTF-16 or UTF-32 BOM body may be
+accepted by `issue validate-body`'s BOM-aware decoder, but the four transmission
+routes refuse it as invalid UTF-8 at the gate and make no transmission call.
+`validate-body` may accept a body that this gate refuses; therefore, aligning
+those surfaces is a separate follow-up. A 65,539-byte UTF-8-BOM file is validly
+decoded but refused for size because the BOM is part of the counted
+`--body-file` bytes.
+
+All four routes write the counted byte array to a fresh file in a private
+directory created under the user's temp directory, then hand that staged path
+to `gh`. On non-Windows platforms the directory is created with mode 0700 and
+the file with mode 0600 at creation; Windows receives no Unix mode setting.
+Cleanup is best-effort. The guarantee is only that, assuming no other process
+writes into the command's private staging directory, the staged bytes equal
+the counted array when `gh` is invoked; this is not an immutability claim
+against a concurrent writer.
+
+**65,536 is intent-cli's own conservative limit. GitHub's boundary, inclusivity and unit were not verified. The only remote datum is the roughly 96,000-character failure reported on 2026-09-16.** The statement above is scoped to these `--body-file` routes; it does not claim that GitHub refuses a body at this boundary or that `--body-file` transmits a file verbatim.
+
 ## Early issue-body size reporting and refusal (G846)
 
 The issue-body workflow counts the raw bytes in `github-body.md`, including a
