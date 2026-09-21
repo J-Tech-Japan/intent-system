@@ -6,6 +6,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("IssueSyncBodySharedState")]
 public sealed class IssuePublishReviewedCommandTests : IDisposable
 {
     private readonly Func<IGhIssueCreator> originalCreatorFactory;
@@ -45,7 +46,10 @@ public sealed class IssuePublishReviewedCommandTests : IDisposable
         var call = fakeCreator.Calls[0];
         Assert.Equal("owner/repo", call.Repo);
         Assert.Equal("G184 sample title", call.Title);
-        Assert.Equal(bodyPath, call.BodyFilePath);
+        Assert.Equal(File.ReadAllBytes(bodyPath), call.BodyBytes);
+        Assert.NotEqual(bodyPath, call.BodyFilePath);
+        Assert.False(File.Exists(call.BodyFilePath));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(call.BodyFilePath)!));
 
         Assert.Contains("Published G184 as https://github.com/owner/repo/issues/473", writer.ToString(), StringComparison.Ordinal);
 
@@ -55,6 +59,190 @@ public sealed class IssuePublishReviewedCommandTests : IDisposable
         Assert.Equal(473, packet.IssueNumber);
         Assert.Equal("https://github.com/owner/repo/issues/473", packet.IssueUrl);
         Assert.Equal("2026-04-28T13:00:00.000Z", packet.PublishedAtUtc);
+    }
+
+    [Theory]
+    [InlineData(65535, true, "")]
+    [InlineData(65536, true, "")]
+    [InlineData(65537, false, "source body is 65537 bytes, which exceeds the 65536-byte limit\n")]
+    [InlineData(70000, false, "source body is 70000 bytes, which exceeds the 65536-byte limit\n")]
+    public void G845_Point3_BoundaryIsInclusiveAndUsesLiteralMessage(int bodyBytes, bool accepted, string expectedMessage)
+    {
+        using var workspace = new IssuePublishWorkspace();
+        var (bodyPath, packetPath) = PreparePacketWithBytes(workspace, G845BodyFixtures.ValidBytes(bodyBytes));
+        var creator = new RecordingGhIssueCreator("https://github.com/owner/repo/issues/845");
+        IssuePublishReviewedCommand.GhIssueCreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishReviewedCommand.Execute(
+            workspace.Context,
+            ["--from-file", packetPath, "--repo", "owner/repo"],
+            writer);
+
+        Assert.Equal(accepted ? 0 : 1, exitCode);
+        Assert.Equal(accepted ? 1 : 0, creator.Calls.Count);
+        if (!accepted)
+        {
+            Assert.Equal(expectedMessage, writer.ToString().Replace(Environment.NewLine, "\n", StringComparison.Ordinal));
+        }
+        else
+        {
+            Assert.Equal(G845BodyFixtures.ValidBytes(bodyBytes), creator.Calls[0].BodyBytes);
+            Assert.NotEqual(bodyPath, creator.Calls[0].BodyFilePath);
+            Assert.False(File.Exists(creator.Calls[0].BodyFilePath));
+            Assert.False(Directory.Exists(Path.GetDirectoryName(creator.Calls[0].BodyFilePath)!));
+        }
+    }
+
+    [Fact]
+    public void G845_Point3_InvalidUtf8UsesPinnedPlainMessageAndNoCreateCall()
+    {
+        using var workspace = new IssuePublishWorkspace();
+        var (_, packetPath) = PreparePacketWithBytes(workspace, G845BodyFixtures.InvalidOrdinaryTextBytes(50003));
+        var creator = new RecordingGhIssueCreator("unused");
+        IssuePublishReviewedCommand.GhIssueCreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishReviewedCommand.Execute(
+            workspace.Context,
+            ["--from-file", packetPath, "--repo", "owner/repo"],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal("source body is not valid UTF-8 at byte offset 1000\n", writer.ToString().Replace(Environment.NewLine, "\n", StringComparison.Ordinal));
+        Assert.Empty(creator.Calls);
+    }
+
+    [Fact]
+    public void G845_Point3_MalformedOverLimitUsesEncodingPrecedence()
+    {
+        using var workspace = new IssuePublishWorkspace();
+        var (_, packetPath) = PreparePacketWithBytes(
+            workspace,
+            G845BodyFixtures.InvalidOrdinaryTextBytes(70_000));
+        var creator = new RecordingGhIssueCreator("unused");
+        IssuePublishReviewedCommand.GhIssueCreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        Assert.Equal(1, IssuePublishReviewedCommand.Execute(
+            workspace.Context,
+            ["--from-file", packetPath, "--repo", "owner/repo"],
+            writer));
+
+        Assert.Equal(
+            "source body is not valid UTF-8 at byte offset 1000\n",
+            writer.ToString().Replace(Environment.NewLine, "\n", StringComparison.Ordinal));
+        Assert.Empty(creator.Calls);
+    }
+
+    [Fact]
+    public void G845_Point3_NonUtf8BomBodiesNeverReachCreate()
+    {
+        foreach (var bytes in new[]
+        {
+            G845BodyFixtures.Utf16Bytes(),
+            G845BodyFixtures.Utf32Bytes(),
+        })
+        {
+            using var workspace = new IssuePublishWorkspace();
+            var (_, packetPath) = PreparePacketWithBytes(workspace, bytes);
+            var creator = new RecordingGhIssueCreator("unused");
+            IssuePublishReviewedCommand.GhIssueCreatorFactory = () => creator;
+
+            using var writer = new StringWriter();
+            Assert.Equal(1, IssuePublishReviewedCommand.Execute(
+                workspace.Context,
+                ["--from-file", packetPath, "--repo", "owner/repo"],
+                writer));
+
+            Assert.Empty(creator.Calls);
+        }
+    }
+
+    [Fact]
+    public void G845_Point3_BomIsValidUtf8ButCountsTowardTheFileLimit()
+    {
+        using var workspace = new IssuePublishWorkspace();
+        var (_, packetPath) = PreparePacketWithBytes(workspace, G845BodyFixtures.BomBytes(65539));
+        var creator = new RecordingGhIssueCreator("unused");
+        IssuePublishReviewedCommand.GhIssueCreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        Assert.Equal(1, IssuePublishReviewedCommand.Execute(
+            workspace.Context,
+            ["--from-file", packetPath, "--repo", "owner/repo"],
+            writer));
+
+        Assert.Equal(
+            "source body is 65539 bytes, which exceeds the 65536-byte limit\n",
+            writer.ToString().Replace(Environment.NewLine, "\n", StringComparison.Ordinal));
+        Assert.Empty(creator.Calls);
+    }
+
+    [Fact]
+    public void G845_Point3_CreatorFactoryMutationCannotChangeTheStagedSnapshot()
+    {
+        using var workspace = new IssuePublishWorkspace();
+        var expected = G845BodyFixtures.ValidBytes(50003);
+        var (bodyPath, packetPath) = PreparePacketWithBytes(workspace, expected);
+        var creator = new RecordingGhIssueCreator("https://github.com/owner/repo/issues/845");
+        IssuePublishReviewedCommand.GhIssueCreatorFactory = () =>
+        {
+            File.WriteAllBytes(bodyPath, G845BodyFixtures.ValidBytes(50004));
+            return creator;
+        };
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, IssuePublishReviewedCommand.Execute(
+            workspace.Context,
+            ["--from-file", packetPath, "--repo", "owner/repo"],
+            writer));
+
+        Assert.Equal(expected, creator.Calls[0].BodyBytes);
+        Assert.NotEqual(expected, File.ReadAllBytes(bodyPath));
+    }
+
+    [Fact]
+    public void G845_Point3_ExistingMalformedHeadingValidationStillWins()
+    {
+        using var workspace = new IssuePublishWorkspace();
+        var (_, packetPath) = PreparePacketWithBytes(workspace, G845BodyFixtures.InvalidHeadingBytes(50003));
+        var creator = new RecordingGhIssueCreator("unused");
+        IssuePublishReviewedCommand.GhIssueCreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        Assert.Equal(1, IssuePublishReviewedCommand.Execute(
+            workspace.Context,
+            ["--from-file", packetPath, "--repo", "owner/repo"],
+            writer));
+
+        Assert.Equal("source body no longer passes validation\n", writer.ToString().Replace(Environment.NewLine, "\n", StringComparison.Ordinal));
+        Assert.Empty(creator.Calls);
+    }
+
+    [Fact]
+    public void G845_Point3_StagingFailureUsesPinnedPlainLine()
+    {
+        using var workspace = new IssuePublishWorkspace();
+        var (_, packetPath) = PreparePacketWithBytes(workspace, G845BodyFixtures.ValidBytes(50003));
+        var creator = new RecordingGhIssueCreator("unused");
+        IssuePublishReviewedCommand.GhIssueCreatorFactory = () => creator;
+
+        try
+        {
+            IssueBodyFileStager.FileModeOverride = _ => throw new IOException("mode failure");
+            using var writer = new StringWriter();
+            Assert.Equal(1, IssuePublishReviewedCommand.Execute(
+                workspace.Context,
+                ["--from-file", packetPath, "--repo", "owner/repo"],
+                writer));
+            Assert.Equal("could not stage the validated body for upload (mode failure)\n", writer.ToString().Replace(Environment.NewLine, "\n", StringComparison.Ordinal));
+            Assert.Empty(creator.Calls);
+        }
+        finally
+        {
+            IssueBodyFileStager.FileModeOverride = null;
+        }
     }
 
     [Fact]
@@ -261,11 +449,27 @@ public sealed class IssuePublishReviewedCommandTests : IDisposable
 
         public string CreateIssue(string repo, string title, string bodyFilePath)
         {
-            Calls.Add(new RecordedCall(repo, title, bodyFilePath));
+            Calls.Add(new RecordedCall(repo, title, bodyFilePath, File.ReadAllBytes(bodyFilePath)));
             return urlToReturn;
         }
 
-        public sealed record RecordedCall(string Repo, string Title, string BodyFilePath);
+        public sealed record RecordedCall(string Repo, string Title, string BodyFilePath, byte[] BodyBytes);
+    }
+
+    private static (string BodyPath, string PacketPath) PreparePacketWithBytes(
+        IssuePublishWorkspace workspace,
+        byte[] bodyBytes)
+    {
+        var (bodyPath, packetPath) = workspace.PrepareValidPacket();
+        File.WriteAllBytes(bodyPath, bodyBytes);
+        var packet = JsonSerializer.Deserialize<IssueReviewedPublishPacket>(File.ReadAllText(packetPath))!;
+        File.WriteAllText(
+            packetPath,
+            JsonSerializer.Serialize(packet with
+            {
+                SourceBodySha256 = IssuePrepareCommand.ComputeSha256Hex(bodyBytes),
+            }));
+        return (bodyPath, packetPath);
     }
 
     internal sealed class IssuePublishWorkspace : IDisposable

@@ -11,17 +11,46 @@ internal static class StrictUtf8FileReader
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         var bytes = File.ReadAllBytes(path);
+        return Decode(bytes, path);
+    }
+
+    /// <summary>
+    /// Strictly decodes an already captured byte snapshot. A leading BOM is
+    /// stripped from the returned text for the existing text-reader contract;
+    /// the caller's byte array is never changed.
+    /// </summary>
+    internal static string Decode(byte[] bytes, string path)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        string text;
         try
         {
-            var text = Encoding.GetString(bytes);
-            return text.Length > 0 && text[0] == '\uFEFF'
-                ? text[1..]
-                : text;
+            text = Encoding.GetString(bytes);
         }
         catch (DecoderFallbackException exception)
         {
             throw new StrictUtf8FileReadException(path, exception.Index, exception);
         }
+
+        return text.Length > 0 && text[0] == '\uFEFF'
+            ? text[1..]
+            : text;
+    }
+
+    /// <summary>
+    /// Reads and strictly validates a file while retaining the exact bytes.
+    /// File-body transmission routes use this instead of <see cref="ReadText"/>
+    /// because a BOM is part of the file handed to <c>gh</c> on those routes.
+    /// </summary>
+    internal static byte[] ReadBytes(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var bytes = File.ReadAllBytes(path);
+        _ = Decode(bytes, path);
+        return bytes;
     }
 }
 

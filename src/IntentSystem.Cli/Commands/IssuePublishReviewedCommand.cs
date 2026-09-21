@@ -99,10 +99,24 @@ internal static class IssuePublishReviewedCommand
         }
 
         var creator = GhIssueCreatorFactory();
+        var transmissionResult = IssueBodyTransmissionGate.Evaluate(sourceBytes, packet.SourcePath);
+        if (transmissionResult is IssueBodyTransmissionRefusal transmissionRefusal)
+        {
+            writer.WriteLine(BuildTransmissionRefusal(transmissionRefusal));
+            return 1;
+        }
+
+        var acceptedBody = (IssueBodyTransmissionAccepted)transmissionResult;
         string rawUrl;
         try
         {
-            rawUrl = creator.CreateIssue(repo, packet.Title, packet.SourcePath);
+            using var staged = acceptedBody.Stage();
+            rawUrl = creator.CreateIssue(repo, packet.Title, staged.Path);
+        }
+        catch (IssueBodyStagingException exception)
+        {
+            writer.WriteLine($"could not stage the validated body for upload ({exception.Message})");
+            return 1;
         }
         catch (Exception exception) when (exception is InvalidOperationException || exception is IOException)
         {
@@ -129,6 +143,16 @@ internal static class IssuePublishReviewedCommand
         writer.WriteLine($"Published {updated.ExecutionUnit} as {issueUrl}");
         return 0;
     }
+
+    internal static string BuildTransmissionRefusal(IssueBodyTransmissionRefusal refusal) =>
+        refusal.Kind switch
+        {
+            IssueBodyTransmissionFailure.TooLarge =>
+                $"source body is {refusal.ByteCount} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit",
+            IssueBodyTransmissionFailure.InvalidUtf8 =>
+                $"source body is not valid UTF-8 at byte offset {refusal.InvalidByteOffset}",
+            _ => throw new InvalidOperationException("A transmission refusal requires a gate failure."),
+        };
 
     private static bool TryParseArguments(
         string[] args,

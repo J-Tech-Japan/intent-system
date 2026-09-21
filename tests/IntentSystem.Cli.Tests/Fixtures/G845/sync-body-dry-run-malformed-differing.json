@@ -1,0 +1,27 @@
+exit_code=0
+{
+  "operation": "issue sync-body",
+  "execution_unit": "G900",
+  "repo": "J-Tech-Japan/intent-system",
+  "mode": "dry-run",
+  "outcome": "differs",
+  "reason_code": null,
+  "issue_number": 1900,
+  "issue_url": "https://github.com/J-Tech-Japan/intent-system/issues/1900",
+  "bound_repository": null,
+  "local_sha256": "2665f84330cf7e859d6cfaf0791f98e7032c9acd566f248a42ed19f842475006",
+  "local_bytes": 50003,
+  "remote_sha256": "b71199ebd070b36beab7317920c2c2f1d777df8d05e5527d8458fda57cb17a7a",
+  "remote_bytes": 6,
+  "remote_after_sha256": null,
+  "expected_remote_sha256": null,
+  "lines_added": 49,
+  "lines_removed": 1,
+  "trailing_newline_normalized": false,
+  "may_have_applied": false,
+  "recovery_command": null,
+  "concurrency_guarantee": "read-compare-write-verified; not atomic",
+  "runs_event": null,
+  "summary": "dry-run: issue #1900 body differs (\u002B49 / -1 lines). Re-run with --write --expected-remote-sha256 b71199ebd070b36beab7317920c2c2f1d777df8d05e5527d8458fda57cb17a7a to replace it.",
+  "warnings": []
+}

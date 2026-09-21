@@ -372,4 +372,12 @@ public sealed class G841PacketDraftTests : IDisposable
         PacketFileReader.ReadAllText = File.ReadAllText;
         PacketFileReader.ReadAllBytes = File.ReadAllBytes;
     }
+
+    internal static void SetPacketReader(Func<string, string> reader) => PacketFileReader.ReadAllText = reader;
+
+    internal static void ResetPacketReader()
+    {
+        PacketFileReader.ReadAllText = File.ReadAllText;
+        PacketFileReader.ReadAllBytes = File.ReadAllBytes;
+    }
 }

@@ -1,0 +1,37 @@
+exit_code=0
+{
+  "classification": "queue-seed-ready",
+  "execution_unit": "G846",
+  "packet_directory": ".intent-cli/issues/G846/",
+  "write": false,
+  "contract_publishable": true,
+  "summary": "prepared packet \u0060.intent-cli/issues/G846/\u0060 validated; queue-state would be seeded with a new queued item for \u0060G846\u0060. Re-run with \u0060--write\u0060 to persist.",
+  "unsafe_reason": null,
+  "refusal_reasons": [],
+  "missing_canonical_files": [],
+  "missing_contract_sections": [],
+  "seeded_item": {
+    "execution_unit": "G846",
+    "title": "G846 deterministic AC9 fixture",
+    "state": 0,
+    "dependencies": [],
+    "blocked_by": [],
+    "clarification_return_path": "intents/intent-cli/clarifications/open.md",
+    "packet_paths": {
+      "implementation": ".intent-cli/issues/G846/implementation.md",
+      "review_context": ".intent-cli/issues/G846/review-context.md",
+      "yaml": ".intent-cli/issues/G846/packet.yaml"
+    },
+    "routing_snapshot": null,
+    "linked_issue": null,
+    "linked_pr": null,
+    "worker_role": "builder",
+    "review_role": "reviewer",
+    "priority": "high",
+    "retirement_reason": null,
+    "priority_revision": 0
+  },
+  "recommended_actions": [
+    "intent-cli automation queue-seed-from-packet --execution-unit G846 --target-repo J-Tech-Japan/intent-system --domain intent-cli --write"
+  ]
+}

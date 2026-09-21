@@ -64,6 +64,14 @@ public sealed class SharedStaticSeamSerializationMetaTests
                 typeof(AutomationStalledWorkG805Tests),
                 typeof(GitHubApiReadG674Tests)),
             new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueBodyFileStager.FileWriteOverride",
+                typeof(G825IssueSyncBodyCommandTests),
+                typeof(G835PublishFlowTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueBodyFileStager.FileWriteOverride",
+                typeof(G835PublishFlowTests),
+                typeof(G845TransmissionPrimitiveTests)),
+            new SplitCollectionCase(
                 "IntentSystem.Cli.Commands.PacketFileReader.ReadAllBytes",
                 typeof(G841Ac15Tests),
                 typeof(G841CrossRuntimeReviewTests)),

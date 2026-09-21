@@ -20,6 +20,7 @@ internal static class IssueValidateBodyRenderer
         ArgumentNullException.ThrowIfNull(result);
 
         writer.WriteLine($"Source: {result.SourcePath}");
+        writer.WriteLine($"Body size: {result.BodyBytes} bytes — {result.BodySizeReason ?? "within configured limits."}");
         if (result.IsValid)
         {
             writer.WriteLine("Result: valid — issue body satisfies the Child Issue Contract.");

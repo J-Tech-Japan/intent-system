@@ -228,6 +228,75 @@ contract の hedge は次のとおりです: **65,536 is intent-cli's own
 conservative limit on the submitted body content; GitHub's boundary,
 inclusivity, unit and treatment of a JSON payload were not verified.**
 
+## `--body-file` transmission gate (G845)
+
+4 つの file-body route、すなわち `issue publish-flow` の通常 create と
+declared-team create、`issue publish-reviewed`、`issue sync-body --write` は、
+`gh --body-file` call に渡すため staging する raw bytes を数えます。これらの
+route では UTF-8 BOM を取り除きません。BOM も count と staging の対象です。
+65,535 と 65,536 bytes は受理し、65,537 bytes は exit code 1 で拒否します。
+これは `--body-file` に scope された rule で、JSON-payload route の rule では
+ありません。
+
+malformed UTF-8 は size check より前に、違反した byte offset を示して拒否します。
+`issue publish-flow` の cause は `issue-body-too-large` と
+`issue-body-invalid-utf8`、`issue sync-body --write` の `reason_code` は
+`body-too-large` と `body-invalid-utf8` です。sync の write-only gate は remote
+read、dry-run return、concurrent-edit check の後、equality/no-op の判断直前です。
+拒否 summary は次の exact text です:
+
+```text
+refused (body-too-large): github-body.md is <n> bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.
+refused (body-invalid-utf8): Issue body is not valid UTF-8 at byte offset <k>. The issue body was read, but no update was sent.
+```
+
+この gate は意図的に UTF-8 のみを受け付けます。UTF-16 または UTF-32 BOM の
+body は `issue validate-body` の BOM-aware decoder では受理されることがありますが、
+4 つの transmission route は gate で invalid UTF-8 として拒否し、transmission
+call を行いません。したがって `validate-body` may accept a body that this gate
+refuses であり、surface をそろえることは別の follow-up です。65,539 bytes の
+UTF-8-BOM file は decode できますが、BOM も `--body-file` の count 対象なので size
+で拒否されます。
+
+`issue publish-reviewed` の source には `--format` handling がなく、この unit は
+result surface を追加しません。plain refusal は
+`source body is <n> bytes, which exceeds the 65536-byte limit` と
+`source body is not valid UTF-8 at byte offset <k>` で、どちらも exit code 1 です。
+
+4 route はすべて command 自身が user's temp directory の下に private directory を
+作成し、count した byte array を fresh file に書き、その staged path を `gh` に渡します。
+Windows 以外では directory は作成時 0700、file は作成時 0600 とし、Windows では
+Unix mode を設定しません。cleanup は best-effort です。他 process が private staging
+directory に書き込まないという前提の下で、`gh` invocation 時の staged bytes が count
+した array と等しいことだけを保証し、concurrent writer に対する immutability は主張
+しません。
+
+**65,536 is intent-cli's own conservative limit. GitHub's boundary, inclusivity and unit were not verified. The only remote datum is the roughly 96,000-character failure reported on 2026-09-16.** 上記は `--body-file` route に scope され、GitHub がこの boundary で拒否することも、`--body-file` が file を verbatim に transmit することも主張しません。
+
+## early issue-body size の reporting と refusal (G846)
+
+issue-body workflow は `github-body.md` 自体の raw bytes を数えます。UTF-8
+BOM も bytes に含め、decoded characters は数えません。共有する
+`IssueBodySizeLimits` は `HardLimitBytes = 65536` と
+`WarningThresholdBytes = 58000` です。warning band は 58,000 から 65,536
+bytes まで inclusive で、65,536 bytes を超える body は local create-path
+gate が拒否します。
+
+**58,000 は予算上の選択です。2026-09-16 から手作業で守ってきた自己設定のドラフティング予算であり、GitHub の上限ではありません。**
+
+`issue validate-body` は `body_bytes`、`body_too_large`、
+`body_size_warning`、`body_size_reason` を返します。`packet draft` は常に
+top-level `warnings` array を返し、default と `--dry-run` の両方で
+`issue-body-too-large` を理由に拒否しますが scaffolding は保持します。
+`issue publish-flow` は unpublished create の oversized body を creator または
+durable write の前に拒否します。already-published body は idempotent に扱い、
+size warning として `issue-body-too-large` を返します。`issue sync-body` は
+`warnings` を返し remote read の前に `reason_code: body-too-large` で拒否します。
+4 つすべての command surface で warning literal `issue-body-size-warning` を
+保持します。
+
+**65,536 is intent-cli's own conservative limit. GitHub's boundary, inclusivity and unit were not verified. The only remote datum is the roughly 96,000-character failure reported on 2026-09-16.**
+
 ## 代替: timer-loop のセットアップ
 
 timer-loop の alternative を選ぶときだけ、[実装ループの設定](05-implementation-loop.md)、続けて
