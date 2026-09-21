@@ -1,7 +1,7 @@
 # G842 runtime fixtures: manifest notes
 
 - `MANIFEST.sha256` lists every file in this directory except `MANIFEST.sha256` itself. Verify it with `shasum -a 256 -c MANIFEST.sha256`.
-- The child repository's copy of this directory additionally holds `no-launch-type-refs-3da9e7a1.tsv`, a child-only pinned table, and its manifest covers that file too.
+- The no-launch source-guard tables are measured at merge base `cbe5475977d151f953d1235733e6d9688e0296f1` and carry the abbreviated commit in each filename. There are no retained pre-G842 tables; the guard has no consumer for them.
 - **Scrub rule** (from 2026-09-17). A live capture is scrubbed before it is copied here.
   - Every occurrence of the operator email is replaced with `<operator-email>`.
   - Every occurrence of `/Users/tomohisa` is replaced with `<home>`.

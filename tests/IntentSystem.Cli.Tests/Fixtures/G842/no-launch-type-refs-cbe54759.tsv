@@ -707,7 +707,7 @@ src/IntentSystem.Cli/Commands/IssuePublishCommand.cs	IssuePublishCommand	1
 src/IntentSystem.Cli/Commands/IssuePublishCommand.cs	IssuePublishCommandResult	3
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimOwnershipVerifier	1
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimVerificationCommand	1
-src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	CrossRuntimeDesignReviewField	16
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	CrossRuntimeDesignReviewField	19
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GhCliExistingIssueChecker	2
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GhCliIssueCreator	3
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GhIssueListEntry	7
@@ -773,6 +773,7 @@ src/IntentSystem.Cli/Commands/NotifyCommand.cs	AgmsgNotifyTransport	1
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	AutomationStalledWorkCommand	3
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	HerdrNotifyTransport	1
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	INotifyProcessRunner	1
+src/IntentSystem.Cli/Commands/NotifyCommand.cs	INotifyRoleCollectWaitClock	4
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	INotifyTransport	1
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	NotifyCommand	5
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	NotifyConsumptionReceiptOutcome	5
@@ -801,6 +802,7 @@ src/IntentSystem.Cli/Commands/NotifyCommand.cs	NotifySupervisionStore	1
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	NotifySupervisor	4
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	NotifySupervisorPass	2
 src/IntentSystem.Cli/Commands/NotifyCommand.cs	NotifyTransportPaths	9
+src/IntentSystem.Cli/Commands/NotifyCommand.cs	StopwatchNotifyRoleCollectWaitClock	2
 src/IntentSystem.Cli/Commands/NotifyCompletionChannelHealth.cs	NotifyCostAwareSettlementEvidence	1
 src/IntentSystem.Cli/Commands/NotifyCompletionChannelHealth.cs	NotifyCostAwareSettlementInspector	1
 src/IntentSystem.Cli/Commands/NotifyCompletionChannelHealth.cs	NotifySupervisionStore	1
@@ -1021,7 +1023,6 @@ src/IntentSystem.Cli/Commands/OrcaRunSoloStore.cs	Options	2
 src/IntentSystem.Cli/Commands/PacketDraftCommand.cs	ClaimOwnershipVerifier	1
 src/IntentSystem.Cli/Commands/PacketDraftCommand.cs	ClaimVerificationCommand	1
 src/IntentSystem.Cli/Commands/PrClosingReferenceAnalyzer.cs	Classifications	1
-src/IntentSystem.Cli/Commands/PreparedPacketCommitReadyAnalyzer.cs	MetadataValidateAnalyzer	2
 src/IntentSystem.Cli/Commands/PromptAdjudication.cs	NotifyPromptAudit	1
 src/IntentSystem.Cli/Commands/PublishDurableArtifactAnalyzer.cs	IssuePublishFlowCommand	4
 src/IntentSystem.Cli/Commands/PublishLifecycleAnalyzer.cs	Labels	2

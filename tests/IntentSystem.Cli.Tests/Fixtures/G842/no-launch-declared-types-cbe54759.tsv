@@ -232,6 +232,7 @@ IGitRemoteCommandRunner	src/IntentSystem.Cli/IGitCommandRunner.cs
 IGitRunner	src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs
 IIssueCreator	src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs
 INotifyProcessRunner	src/IntentSystem.Cli/Commands/NotifyTransport.cs
+INotifyRoleCollectWaitClock	src/IntentSystem.Cli/Commands/NotifyCommand.cs
 INotifyTransport	src/IntentSystem.Cli/Commands/NotifyTransport.cs
 IReviewCommandRunner	src/IntentSystem.Review/IReviewCommandRunner.cs
 IStandaloneBinaryReplacer	src/IntentSystem.Cli/Commands/UpdateCommand.cs
@@ -510,6 +511,7 @@ StandaloneIssuePacketContract	src/IntentSystem.Cli/Commands/BugImplementationIss
 StandaloneUpdateException	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 StandaloneUpdateInstaller	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 StandaloneUpdateOutcome	src/IntentSystem.Cli/Commands/UpdateCommand.cs
+StopwatchNotifyRoleCollectWaitClock	src/IntentSystem.Cli/Commands/NotifyCommand.cs
 SupervisionGuideText	src/IntentSystem.Cli/Commands/SupervisionGuideText.cs
 TailObservation	src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs
 Targets	src/IntentSystem.Cli/Commands/WorkerSignalContract.cs

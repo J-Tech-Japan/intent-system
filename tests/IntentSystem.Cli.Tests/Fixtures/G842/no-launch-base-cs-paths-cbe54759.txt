@@ -292,6 +292,7 @@ src/IntentSystem.Cli/Commands/InterviewResumeResult.cs
 src/IntentSystem.Cli/Commands/InterviewSessionStore.cs
 src/IntentSystem.Cli/Commands/InterviewStartCommand.cs
 src/IntentSystem.Cli/Commands/InterviewStartRenderer.cs
+src/IntentSystem.Cli/Commands/IssueBodySizeLimits.cs
 src/IntentSystem.Cli/Commands/IssueContractAmbiguityAnalyzer.cs
 src/IntentSystem.Cli/Commands/IssueCreateCommand.cs
 src/IntentSystem.Cli/Commands/IssueDraftCommand.cs
@@ -377,9 +378,12 @@ src/IntentSystem.Cli/Commands/OrcaRunTeamShape.cs
 src/IntentSystem.Cli/Commands/PacketContractGapAnalyzer.cs
 src/IntentSystem.Cli/Commands/PacketDomainResolution.cs
 src/IntentSystem.Cli/Commands/PacketDraftCommand.cs
+src/IntentSystem.Cli/Commands/PacketFileReader.cs
 src/IntentSystem.Cli/Commands/PacketLifecycle.cs
 src/IntentSystem.Cli/Commands/PacketRetireCommand.cs
 src/IntentSystem.Cli/Commands/PacketYamlDocument.cs
+src/IntentSystem.Cli/Commands/PacketYamlParseError.cs
+src/IntentSystem.Cli/Commands/PacketYamlParseMessages.cs
 src/IntentSystem.Cli/Commands/ParentRepairTargetRepoResolver.cs
 src/IntentSystem.Cli/Commands/PrBodyClosingReferenceFallbackAnalyzer.cs
 src/IntentSystem.Cli/Commands/PrClosingReferenceAnalyzer.cs
@@ -467,6 +471,7 @@ src/IntentSystem.Cli/Commands/StatusBriefCommand.cs
 src/IntentSystem.Cli/Commands/StatusBriefRecommendation.cs
 src/IntentSystem.Cli/Commands/StatusBriefRenderer.cs
 src/IntentSystem.Cli/Commands/StatusBriefSummary.cs
+src/IntentSystem.Cli/Commands/StrictUtf8FileReader.cs
 src/IntentSystem.Cli/Commands/StructuredClarification.cs
 src/IntentSystem.Cli/Commands/StructuredClarificationToml.cs
 src/IntentSystem.Cli/Commands/StructuredClarificationsDirectory.cs

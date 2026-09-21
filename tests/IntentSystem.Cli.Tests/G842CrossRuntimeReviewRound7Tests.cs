@@ -788,25 +788,64 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         }
     }
 
-    [Fact]
-    public void Request_PreservesStricterExistingMode_AndNarrowsBroadExistingMode()
+    [Theory]
+    [InlineData("022")]
+    [InlineData("000")]
+    public void Request_CreatesAtMost0600_AndPreservesOnlyStricterExistingMode_UnderUmask(string umaskText)
     {
         if (OperatingSystem.IsWindows())
         {
             return;
         }
 
-        var outDir = Path.Combine(root, "existing-modes");
-        Directory.CreateDirectory(outDir);
-        var prompt = Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt);
-        File.WriteAllText(prompt, "old");
-        File.SetUnixFileMode(prompt, (UnixFileMode)0x100);
-        Assert.Equal(0, Request("opencode", outDir).ExitCode);
-        Assert.Equal((UnixFileMode)0x100, File.GetUnixFileMode(prompt) & (UnixFileMode)0x1ff);
+        var old = umask(Convert.ToInt32(umaskText, 8));
+        try
+        {
+            var outDir = Path.Combine(root, $"existing-modes-{umaskText}");
+            Directory.CreateDirectory(outDir);
+            var prompt = Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt);
+            File.WriteAllText(prompt, "old");
+            File.SetUnixFileMode(prompt, (UnixFileMode)0x100);
+            UnixFileMode? modeAtCreation = null;
+            using (CrossRuntimeReviewRequestSupport.RegisterBeforeMoveHook(
+                       prompt,
+                       temp => modeAtCreation = ReadUnixMode(temp)))
+            {
+                Assert.Equal(0, Request("opencode", outDir).ExitCode);
+            }
 
-        File.SetUnixFileMode(prompt, (UnixFileMode)0x1a4);
-        Assert.Equal(0, Request("opencode", outDir).ExitCode);
-        Assert.Equal((UnixFileMode)0x180, File.GetUnixFileMode(prompt) & (UnixFileMode)0x1ff);
+            Assert.Equal((UnixFileMode)0x100, modeAtCreation);
+            Assert.Equal((UnixFileMode)0x100, File.GetUnixFileMode(prompt) & (UnixFileMode)0x1ff);
+
+            File.SetUnixFileMode(prompt, (UnixFileMode)0x1a4);
+            modeAtCreation = null;
+            using (CrossRuntimeReviewRequestSupport.RegisterBeforeMoveHook(
+                       prompt,
+                       temp => modeAtCreation = ReadUnixMode(temp)))
+            {
+                Assert.Equal(0, Request("opencode", outDir).ExitCode);
+            }
+
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, modeAtCreation);
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(prompt) & (UnixFileMode)0x1ff);
+
+            var newOutDir = Path.Combine(root, $"new-mode-{umaskText}");
+            var newPrompt = Path.Combine(newOutDir, CrossRuntimeReviewFiles.Prompt);
+            modeAtCreation = null;
+            using (CrossRuntimeReviewRequestSupport.RegisterBeforeMoveHook(
+                       newPrompt,
+                       temp => modeAtCreation = ReadUnixMode(temp)))
+            {
+                Assert.Equal(0, Request("opencode", newOutDir).ExitCode);
+            }
+
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, modeAtCreation);
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(newPrompt) & (UnixFileMode)0x1ff);
+        }
+        finally
+        {
+            umask(old);
+        }
     }
 
     [Theory]
@@ -1342,6 +1381,16 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
 
     private static string[] RequestArgs(string runtime, string clone, string outDir, string model) =>
         ["request", "--repo", Repo, "--pr", Pr.ToString(), "--head-sha", H1, "--execution-unit", Unit, "--runtime", runtime, "--clone", clone, "--out-dir", outDir, "--model", model];
+
+    private static UnixFileMode ReadUnixMode(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return UnixFileMode.None;
+        }
+
+        return File.GetUnixFileMode(path) & (UnixFileMode)0x1ff;
+    }
 
     private static string[] DesignRequestArgs(string runtime, string outDir, string model, string? clone = null)
     {

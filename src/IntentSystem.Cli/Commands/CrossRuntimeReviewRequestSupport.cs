@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text;
@@ -6,6 +7,23 @@ namespace IntentSystem.Cli.Commands;
 
 internal static class CrossRuntimeReviewRequestSupport
 {
+    private static readonly ConcurrentDictionary<string, Action<string>> BeforeMoveHooks =
+        new(StringComparer.Ordinal);
+
+    internal static IDisposable RegisterBeforeMoveHook(string targetPath, Action<string> hook)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
+        ArgumentNullException.ThrowIfNull(hook);
+
+        var key = Path.GetFullPath(targetPath);
+        if (!BeforeMoveHooks.TryAdd(key, hook))
+        {
+            throw new InvalidOperationException($"a before-move hook is already registered for '{key}'.");
+        }
+
+        return new BeforeMoveHookRegistration(key);
+    }
+
     internal static bool TryValidateOutDir(
         string outDir,
         string runtime,
@@ -193,9 +211,10 @@ internal static class CrossRuntimeReviewRequestSupport
 
     private static void ReplaceWrite(string path, byte[] content)
     {
-        var directory = Path.GetDirectoryName(path)!;
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath)!;
         var temp = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-        var mode = ExistingStrictMode(path);
+        var mode = ExistingStrictMode(fullPath);
         try
         {
             var options = new FileStreamOptions
@@ -206,7 +225,7 @@ internal static class CrossRuntimeReviewRequestSupport
             };
             if (!OperatingSystem.IsWindows())
             {
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                options.UnixCreateMode = mode ?? (UnixFileMode.UserRead | UnixFileMode.UserWrite);
             }
 
             using (var stream = new FileStream(temp, options))
@@ -215,12 +234,8 @@ internal static class CrossRuntimeReviewRequestSupport
                 stream.Flush(flushToDisk: true);
             }
 
-            if (!OperatingSystem.IsWindows() && mode is not null)
-            {
-                File.SetUnixFileMode(temp, mode.Value);
-            }
-
-            File.Move(temp, path, overwrite: true);
+            InvokeBeforeMoveHook(fullPath, temp);
+            File.Move(temp, fullPath, overwrite: true);
         }
         finally
         {
@@ -270,6 +285,23 @@ internal static class CrossRuntimeReviewRequestSupport
         // Directory.CreateDirectory(path, mode) preserves an existing directory's
         // mode. An accepted empty isolation directory must still be private.
         File.SetUnixFileMode(path, privateDirectoryMode);
+    }
+
+    private static void InvokeBeforeMoveHook(string targetPath, string tempPath)
+    {
+        if (!BeforeMoveHooks.IsEmpty && BeforeMoveHooks.TryGetValue(targetPath, out var hook))
+        {
+            hook(tempPath);
+        }
+    }
+
+    private sealed class BeforeMoveHookRegistration : IDisposable
+    {
+        private readonly string key;
+
+        public BeforeMoveHookRegistration(string key) => this.key = key;
+
+        public void Dispose() => BeforeMoveHooks.TryRemove(key, out _);
     }
 
     private static bool PathIsPresent(string path) => CrossRuntimeReviewHomeAccessGuard.PathIsPresent(path);

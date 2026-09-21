@@ -7,7 +7,12 @@ namespace IntentSystem.Cli.Tests;
 /// <summary>
 /// G842: textual no-launch source guard using pinned allow-list, declared-type,
 /// surface-reference, and repository-wide type-reference fixtures.
-/// Drift from ba496314: +2 G840 NotifyCommand wait-clock rows; declared-type count 556→558.
+/// The current merge-base is cbe54759: the allow-list is byte-equivalent to
+/// the ba496314 table, the declared-type fixture grows from 556 to 558 names
+/// (558 fixture rows), and the type-reference table drops the stale
+/// CrossRuntimeReviewFileMode branch row. The base .cs path table grows from
+/// 695 to 700 paths. The new wait-clock rows are INotifyRoleCollectWaitClock
+/// and StopwatchNotifyRoleCollectWaitClock.
 /// Drift from c66f4936 fixture to 3da9e7a1 (G841):
 ///   IssuePublishFlowCommand CrossRuntimeDesignReviewField 16→19;
 ///   PreparedPacketCommitReadyAnalyzer MetadataValidateAnalyzer 2→0;
@@ -192,23 +197,10 @@ public sealed class G842NoLaunchSourceGuardTests
 
             var relative = Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
             var content = File.ReadAllText(path);
-            foreach (var typeName in declaredTypes)
+            var violation = FindRepositoryWideTypeReferenceViolation(relative, content, pinned, declaredTypes);
+            if (violation is not null)
             {
-                var actual = CountWholeIdentifiers(content, typeName);
-                if (actual == 0)
-                {
-                    continue;
-                }
-
-                if (pinned.TryGetValue((relative, typeName), out var allowed))
-                {
-                    Assert.True(
-                        actual <= allowed,
-                        $"{relative} {typeName} count {actual} exceeds pinned {allowed}");
-                    continue;
-                }
-
-                Assert.Fail($"unlisted type reference '{typeName}' in {relative} ({actual})");
+                Assert.Fail(violation);
             }
         }
 
@@ -221,6 +213,27 @@ public sealed class G842NoLaunchSourceGuardTests
                 actual <= count,
                 $"{relative} {identifier} count {actual} exceeds pinned {count}");
         }
+    }
+
+    [Theory]
+    [InlineData("INotifyRoleCollectWaitClock")]
+    [InlineData("StopwatchNotifyRoleCollectWaitClock")]
+    public void RepositoryWide_TypeReferenceMutation_IsRejectedByTypeName(string typeName)
+    {
+        const string relative = "src/IntentSystem.Cli/Commands/IssueStatusCommand.cs";
+        var repoRoot = RepoVersionPolicySource.RepoRoot();
+        Assert.False(IsSurfaceFile(relative));
+
+        var pinned = ReadTypeRefFixture().ToDictionary(entry => (entry.Path, entry.Identifier), entry => entry.Count);
+        var declaredTypes = ReadDeclaredTypeFixture().Select(entry => entry.Identifier).ToHashSet(StringComparer.Ordinal);
+        Assert.Contains(typeName, declaredTypes);
+        Assert.DoesNotContain((relative, typeName), pinned.Keys);
+
+        var mutated = File.ReadAllText(Path.Combine(repoRoot, relative.Replace('/', Path.DirectorySeparatorChar)))
+            + $"\n// G842 mutation: {typeName}\n";
+        var violation = FindRepositoryWideTypeReferenceViolation(relative, mutated, pinned, declaredTypes);
+
+        Assert.Equal($"unlisted type reference '{typeName}' in {relative} (1)", violation);
     }
 
     [Fact]
@@ -241,13 +254,13 @@ public sealed class G842NoLaunchSourceGuardTests
         || !ReadBaseCsPaths().Contains(relativePath);
 
     private static HashSet<string> ReadBaseCsPaths() =>
-        File.ReadAllLines(FixturePath("no-launch-base-cs-paths-ba496314.txt"))
+        File.ReadAllLines(FixturePath("no-launch-base-cs-paths-cbe54759.txt"))
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToHashSet(StringComparer.Ordinal);
 
     private static IEnumerable<(string Path, string Token, int Count)> ReadAllowListFixture() =>
-        File.ReadAllLines(FixturePath("no-launch-allowlist-ba496314.tsv"))
+        File.ReadAllLines(FixturePath("no-launch-allowlist-cbe54759.tsv"))
             .Skip(1)
             .Select(line => line.Split('\t'))
             .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));
@@ -256,19 +269,19 @@ public sealed class G842NoLaunchSourceGuardTests
         ReadAllowListFixture().ToDictionary(entry => (entry.Path, entry.Token), entry => entry.Count);
 
     private static IEnumerable<(string Path, string Identifier, int Count)> ReadTypeRefFixture() =>
-        File.ReadAllLines(FixturePath("no-launch-type-refs-3da9e7a1.tsv"))
+        File.ReadAllLines(FixturePath("no-launch-type-refs-cbe54759.tsv"))
             .Skip(1)
             .Select(line => line.Split('\t'))
             .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));
 
     private static IEnumerable<(string Identifier, string Path)> ReadDeclaredTypeFixture() =>
-        File.ReadAllLines(FixturePath("no-launch-declared-types-ba496314.tsv"))
+        File.ReadAllLines(FixturePath("no-launch-declared-types-cbe54759.tsv"))
             .Where(line => line.Length > 0)
             .Select(line => line.Split('\t'))
             .Select(parts => (parts[0], parts[1]));
 
     private static IEnumerable<(string Path, string Identifier, int Count)> ReadSurfaceRefFixture() =>
-        File.ReadAllLines(FixturePath("no-launch-surface-refs-ba496314.tsv"))
+        File.ReadAllLines(FixturePath("no-launch-surface-refs-cbe54759.tsv"))
             .Skip(1)
             .Select(line => line.Split('\t'))
             .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));
@@ -292,6 +305,36 @@ public sealed class G842NoLaunchSourceGuardTests
         }
 
         return declared;
+    }
+
+    private static string? FindRepositoryWideTypeReferenceViolation(
+        string relative,
+        string content,
+        IReadOnlyDictionary<(string Path, string Identifier), int> pinned,
+        IReadOnlySet<string> declaredTypes)
+    {
+        foreach (var typeName in declaredTypes)
+        {
+            var actual = CountWholeIdentifiers(content, typeName);
+            if (actual == 0)
+            {
+                continue;
+            }
+
+            if (pinned.TryGetValue((relative, typeName), out var allowed))
+            {
+                if (actual > allowed)
+                {
+                    return $"{relative} {typeName} count {actual} exceeds pinned {allowed}";
+                }
+
+                continue;
+            }
+
+            return $"unlisted type reference '{typeName}' in {relative} ({actual})";
+        }
+
+        return null;
     }
 
     private static IEnumerable<string> EnumerateScannedSourceFiles(string repoRoot)
