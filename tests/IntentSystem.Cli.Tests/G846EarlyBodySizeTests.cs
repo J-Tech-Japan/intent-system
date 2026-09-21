@@ -72,6 +72,33 @@ public sealed class G846IssueValidateBodyTests
     }
 
     [Fact]
+    public void BomWarningFixture_ReportsTheByteWarningAt58002()
+    {
+        using var workspace = new BodyWorkspace("g846-validate-warning-bom-");
+        var bytes = G846BodyFixtures.BodyBytes(58002, bom: true);
+        Assert.Equal([0xEF, 0xBB, 0xBF], bytes[..3]);
+        Assert.Equal(57999, bytes.Length - 3);
+        var path = workspace.WriteBody("body-warning-bom.md", bytes);
+
+        using var writer = new StringWriter();
+        var exitCode = IssueValidateBodyCommand.Execute(
+            workspace.Context,
+            ["--from-file", path, "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal(0, exitCode);
+        Assert.True(root.GetProperty("is_valid").GetBoolean());
+        Assert.Equal(58002, root.GetProperty("body_bytes").GetInt32());
+        Assert.False(root.GetProperty("body_too_large").GetBoolean());
+        Assert.True(root.GetProperty("body_size_warning").GetBoolean());
+        Assert.Equal(
+            "issue-body-size-warning: body is 58002 bytes; warning threshold is 58000 bytes and limit is 65536 bytes.",
+            root.GetProperty("body_size_reason").GetString());
+    }
+
+    [Fact]
     public void OversizedBody_PreservesHeadingRefusalAndAddsNamedSizeRefusal()
     {
         using var workspace = new BodyWorkspace("g846-validate-both-");
@@ -127,6 +154,50 @@ public sealed class G846IssueValidateBodyTests
 
 public sealed class G846PacketDraftTests
 {
+    [Theory]
+    [InlineData(57999, false, false, false)]
+    [InlineData(58000, false, true, false)]
+    [InlineData(58001, false, true, false)]
+    [InlineData(65535, false, true, false)]
+    [InlineData(65536, false, true, false)]
+    [InlineData(65537, true, false, false)]
+    [InlineData(57999, false, false, true)]
+    [InlineData(58000, false, true, true)]
+    [InlineData(58001, false, true, true)]
+    [InlineData(65535, false, true, true)]
+    [InlineData(65536, false, true, true)]
+    [InlineData(65537, true, false, true)]
+    public void BoundaryCases_AreConsistentOnPacketDraft(
+        int bytes,
+        bool expectedTooLarge,
+        bool expectedWarning,
+        bool dryRun)
+    {
+        using var workspace = new PacketWorkspace("g846-draft-boundary-");
+        workspace.WritePacket("G846", G846BodyFixtures.BodyBytes(bytes));
+
+        var result = PacketDraftCommand.Draft(
+            workspace.Context,
+            "G846",
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            dryRun);
+
+        Assert.Equal(dryRun ? "dry-run" : "write", result.Mode);
+        Assert.Equal(
+            expectedWarning ? ["issue-body-size-warning"] : [],
+            result.Warnings);
+        Assert.Equal(
+            expectedTooLarge,
+            result.RefusalReasons.Contains("issue-body-too-large", StringComparer.Ordinal));
+        if (expectedTooLarge)
+        {
+            Assert.Contains(result.RecommendedActions, action =>
+                action.Contains(bytes.ToString(), StringComparison.Ordinal)
+                && action.Contains("65536", StringComparison.Ordinal));
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -188,6 +259,12 @@ public sealed class G846PacketDraftTests
             ["implementation.md"] = Snapshot.For(implementation),
             ["github-body.md"] = Snapshot.For(body),
         };
+        Assert.Equal(
+            ["github-body.md", "implementation.md", "packet.yaml"],
+            Directory.EnumerateFiles(packetDirectory)
+                .Select(path => Path.GetFileName(path)!)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray());
 
         var result = PacketDraftCommand.Draft(
             workspace.Context,
@@ -203,6 +280,12 @@ public sealed class G846PacketDraftTests
         {
             Assert.Equal(expected, Snapshot.For(File.ReadAllBytes(Path.Combine(packetDirectory, name))));
         }
+        Assert.Equal(
+            ["github-body.md", "implementation.md", "packet.yaml", "review-context.md"],
+            Directory.EnumerateFiles(packetDirectory)
+                .Select(path => Path.GetFileName(path)!)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray());
     }
 
     [Fact]
@@ -224,6 +307,47 @@ public sealed class G846PacketDraftTests
     private readonly record struct Snapshot(int Length, string Sha256)
     {
         public static Snapshot For(byte[] bytes) => new(bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)));
+    }
+}
+
+public sealed class G846PreparedPacketCommitReadyAnalyzerTests
+{
+    [Fact]
+    public void OversizedPacket_LeavesAnalyzerRefusalsAtTheMergeBase()
+    {
+        using var workspace = new PacketWorkspace("g846-analyzer-size-");
+        workspace.WritePacket("G846", G846BodyFixtures.BodyBytes(65537));
+
+        var readiness = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
+        {
+            ExecutionUnit = "G846",
+            PacketYaml = "source_execution_unit: G846\n",
+            ImplementationMarkdown = "implementation\n",
+            ReviewContextMarkdown = "review\n",
+            GithubBodyMarkdown = G846BodyFixtures.Decode(G846BodyFixtures.BodyBytes(65537)),
+            ExecutionUnitRegex = null,
+            RequestedTargetRepo = "J-Tech-Japan/intent-system",
+            RequireDomainBinding = true,
+        });
+
+        Assert.Equal("unsafe-prepared-packet", readiness.Classification);
+        Assert.Equal("missing-domain-binding-regex", readiness.Reason);
+        Assert.Equal(
+            ["missing-domain-binding-regex", "wrong-target-repo"],
+            readiness.RefusalReasons);
+        Assert.DoesNotContain("issue-body-too-large", readiness.RefusalReasons);
+
+        var draft = PacketDraftCommand.Draft(
+            workspace.Context,
+            "G846",
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            dryRun: false);
+
+        Assert.Equal(
+            ["missing-domain-binding-regex", "wrong-target-repo", "issue-body-too-large"],
+            draft.RefusalReasons);
+        Assert.False(draft.ContractPublishable);
     }
 }
 
@@ -305,7 +429,78 @@ public sealed class G846PublishFlowTests : IDisposable
         var (exitCode, root) = workspace.Run(write: false);
 
         Assert.Equal(0, exitCode);
+        Assert.Equal("G846", root.GetProperty("execution_unit").GetString());
+        Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
+        Assert.Equal("J-Tech-Japan/intent-system", root.GetProperty("repo").GetString());
+        Assert.EndsWith(
+            Path.Combine(".intent-cli", "issues", "G846"),
+            root.GetProperty("packet_directory").GetString(),
+            StringComparison.Ordinal);
+        Assert.EndsWith(
+            Path.Combine(".intent-cli", "issues", "G846", "github-body.md"),
+            root.GetProperty("github_body_path").GetString(),
+            StringComparison.Ordinal);
+        Assert.EndsWith(
+            Path.Combine(".intent-cli", "issues", "G846", "publish.yaml"),
+            root.GetProperty("publish_yaml_path").GetString(),
+            StringComparison.Ordinal);
+        Assert.True(root.GetProperty("packet_exists").GetBoolean());
+        Assert.True(root.GetProperty("github_body_present").GetBoolean());
+        Assert.Empty(root.GetProperty("missing_contract_sections").EnumerateArray());
+        Assert.Equal("dry-run", root.GetProperty("mode").GetString());
+        Assert.Equal("G846 test", root.GetProperty("title").GetString());
+        Assert.Equal("G846 test", root.GetProperty("issue_title").GetString());
+        Assert.Equal("packet-yaml", root.GetProperty("title_source").GetString());
+        Assert.False(root.GetProperty("created").GetBoolean());
         Assert.True(root.GetProperty("idempotent").GetBoolean());
+        Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/1900", root.GetProperty("issue_url").GetString());
+        Assert.Equal(1900, root.GetProperty("issue_number").GetInt32());
+        Assert.False(root.GetProperty("queue_state_patched").GetBoolean());
+        Assert.False(root.GetProperty("publish_yaml_patched").GetBoolean());
+        Assert.False(root.GetProperty("runs_appended").GetBoolean());
+        Assert.False(root.GetProperty("intent_target_applied").GetBoolean());
+        Assert.Equal(
+            ["queue_linked_issue_missing", "runs_event_missing"],
+            root.GetProperty("would_restore").EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.Equal(
+            [
+                "Issue already created; durable state is already in sync. No GitHub call was made.",
+                "Apply the publish boundary if needed with: intent-cli automation issue-publish --repo J-Tech-Japan/intent-system --issue 1900 --write --format json",
+                "G717 claim handoff: publish-flow does not release the drafting claim; after the final publish boundary, the drafter must release `execution-unit:G846` with the attributed `intent-cli claim release --actor <design-actor> --team <team> --reason \"hand off after publish\" --write` command."
+            ],
+            root.GetProperty("next_steps").EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.False(root.TryGetProperty("error", out _));
+        Assert.False(root.TryGetProperty("cause", out _));
+        Assert.Equal(
+            [
+                "created",
+                "domain",
+                "durable_state_synced",
+                "execution_unit",
+                "github_body_path",
+                "github_body_present",
+                "idempotent",
+                "intent_target_applied",
+                "issue_number",
+                "issue_title",
+                "issue_url",
+                "missing_contract_sections",
+                "mode",
+                "next_steps",
+                "packet_directory",
+                "packet_exists",
+                "publish_yaml_patched",
+                "publish_yaml_path",
+                "queue_state_patched",
+                "repo",
+                "runs_appended",
+                "title",
+                "title_source",
+                "warnings",
+                "would_restore"
+            ],
+            root.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
         Assert.Contains("issue-body-too-large", root.GetProperty("warnings").EnumerateArray().Select(item => item.GetString()));
         Assert.Equal(0, creator.CallCount);
     }
@@ -403,6 +598,21 @@ public sealed class G846PublishFlowTests : IDisposable
         Assert.Contains("65539", oversizedRoot.GetProperty("error").GetString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SizeWarning_IsLastAfterAnExistingPublishWarning()
+    {
+        using var workspace = new PublishWorkspace();
+        workspace.WriteBody(G846BodyFixtures.BodyBytes(58002, bom: true, includeH1: false));
+        workspace.WritePacketYamlWithoutTitle();
+
+        var (exitCode, root) = workspace.Run(write: false);
+
+        Assert.Equal(0, exitCode);
+        var warnings = root.GetProperty("warnings").EnumerateArray().Select(item => item.GetString()!).ToArray();
+        Assert.Equal(["title-fallback", "issue-body-size-warning"], warnings);
+        Assert.Equal("issue-body-size-warning", warnings[^1]);
+    }
+
     private sealed class PublishWorkspace : IDisposable
     {
         private readonly string root = Directory.CreateTempSubdirectory("g846-publish-").FullName;
@@ -444,6 +654,14 @@ public sealed class G846PublishFlowTests : IDisposable
             File.WriteAllText(
                 Path.Combine(PacketDirectory, "packet.yaml"),
                 "implementation_issue_packet:\n  source_execution_unit: G846\n  issue_title: G846 test\n  domain: intent-cli\n  target_repo: J-Tech-Japan/intent-system\n");
+        }
+
+        public void WritePacketYamlWithoutTitle()
+        {
+            Directory.CreateDirectory(PacketDirectory);
+            File.WriteAllText(
+                Path.Combine(PacketDirectory, "packet.yaml"),
+                "implementation_issue_packet:\n  source_execution_unit: G846\n  domain: intent-cli\n  target_repo: J-Tech-Japan/intent-system\n");
         }
 
         public void WritePublishYaml(int issueNumber)
@@ -766,9 +984,9 @@ public sealed class G846DocumentationTests
 
 internal static class G846BodyFixtures
 {
-    public static byte[] BodyBytes(int totalBytes, bool bom = false)
+    public static byte[] BodyBytes(int totalBytes, bool bom = false, bool includeH1 = true)
     {
-        var content = Encoding.UTF8.GetBytes(ValidBody());
+        var content = Encoding.UTF8.GetBytes(ValidBody(includeH1));
         var prefix = bom ? new byte[] { 0xEF, 0xBB, 0xBF } : [];
         var contentLength = totalBytes - prefix.Length;
         Assert.True(contentLength >= content.Length, $"fixture size {totalBytes} is smaller than the deterministic contract body");
@@ -787,9 +1005,14 @@ internal static class G846BodyFixtures
         return text.Length > 0 && text[0] == '\uFEFF' ? text[1..] : text;
     }
 
-    private static string ValidBody()
+    private static string ValidBody(bool includeH1)
     {
-        var builder = new StringBuilder("# G846 deterministic fixture\n\n");
+        var builder = new StringBuilder();
+        if (includeH1)
+        {
+            builder.Append("# G846 deterministic fixture\n\n");
+        }
+
         foreach (var heading in IssueValidateBodyValidator.RequiredHeadings)
         {
             builder.Append("## ").Append(heading).Append("\n\n");
