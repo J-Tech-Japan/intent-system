@@ -322,7 +322,7 @@ public sealed class G846PacketDraftUnreadableYamlTests : IDisposable
 
     public G846PacketDraftUnreadableYamlTests()
     {
-        PacketFileReader.ReadAllText = File.ReadAllText;
+        G841PacketDraftTests.ResetPacketReader();
         Context = new CliContext
         {
             RepoRoot = root,
@@ -354,7 +354,7 @@ public sealed class G846PacketDraftUnreadableYamlTests : IDisposable
 
     public void Dispose()
     {
-        PacketFileReader.ReadAllText = File.ReadAllText;
+        G841PacketDraftTests.ResetPacketReader();
         if (Directory.Exists(root))
         {
             Directory.Delete(root, recursive: true);
@@ -367,10 +367,14 @@ public sealed class G846PacketDraftUnreadableYamlTests : IDisposable
     public void UnreadablePacketYaml_WithOversizedBody_ReportsBothRefusalsInBothModes(bool dryRun)
     {
         var packetPath = Path.Combine(root, ".intent-cli", "issues", Unit, "packet.yaml");
-        PacketFileReader.ReadAllText = path =>
-            string.Equals(path, packetPath, StringComparison.Ordinal)
-                ? throw new UnauthorizedAccessException("Access to the path is denied.")
-                : File.ReadAllText(path);
+        using var unreadable = G841TestHelpers.UnreadablePacket(
+            packetPath,
+            () => G841PacketDraftTests.SetPacketReader(path =>
+                string.Equals(path, packetPath, StringComparison.Ordinal)
+                    ? throw new UnauthorizedAccessException("Access to the path is denied.")
+                    : File.ReadAllText(path)),
+            G841PacketDraftTests.ResetPacketReader,
+            out _);
 
         using var writer = new StringWriter();
         var exitCode = PacketDraftCommand.Execute(
