@@ -734,7 +734,7 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
     [Theory]
     [InlineData("022")]
     [InlineData("000")]
-    public void Request_RendersPrivateFilesAndIsolationDirectories_UnderUmask(string umaskText)
+    public void Request_RendersPrivateFilesAndDirectoriesAtCreation_UnderUmask(string umaskText)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -744,22 +744,43 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         var old = umask(Convert.ToInt32(umaskText, 8));
         try
         {
-            var outDir = Path.Combine(root, "modes-" + umaskText);
-            var result = Request("opencode", outDir);
-            Assert.Equal(0, result.ExitCode);
-            foreach (var file in new[]
+            foreach (var (runtime, kind) in new[]
                      {
-                         CrossRuntimeReviewFiles.Prompt,
-                         CrossRuntimeReviewFiles.Schema,
-                         CrossRuntimeReviewFiles.Invocation,
-                         CrossRuntimeReviewFiles.OpencodeReviewerConfig,
+                         ("copilot", CrossRuntimeReviewRecord.KindImplementation),
+                         ("copilot", CrossRuntimeReviewRecord.KindDesign),
+                         ("opencode", CrossRuntimeReviewRecord.KindImplementation),
+                         ("opencode", CrossRuntimeReviewRecord.KindDesign),
                      })
             {
-                Assert.Equal((UnixFileMode)0x180, File.GetUnixFileMode(Path.Combine(outDir, file)) & (UnixFileMode)0x1ff);
-            }
+                var outDir = Path.Combine(root, $"modes-{runtime}-{kind}-{umaskText}");
+                var result = RequestAt(
+                    runtime,
+                    kind,
+                    Path.Combine(root, $"clone-{runtime}-{kind}-{umaskText}"),
+                    outDir,
+                    hasClone: kind == CrossRuntimeReviewRecord.KindImplementation);
+                Assert.Equal(0, result.ExitCode);
 
-            Assert.Equal((UnixFileMode)0x1c0, File.GetUnixFileMode(Path.Combine(outDir, CrossRuntimeReviewFiles.OpencodeXdg)) & (UnixFileMode)0x1ff);
-            Assert.Equal((UnixFileMode)0x1c0, File.GetUnixFileMode(Path.Combine(outDir, CrossRuntimeReviewFiles.OpencodeConfigDir)) & (UnixFileMode)0x1ff);
+                foreach (var file in Directory.EnumerateFiles(outDir, "*", SearchOption.TopDirectoryOnly))
+                {
+                    Assert.Equal(
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                        File.GetUnixFileMode(file) & (UnixFileMode)0x1ff);
+                }
+
+                foreach (var directory in Directory.EnumerateDirectories(outDir, "*", SearchOption.TopDirectoryOnly))
+                {
+                    Assert.Equal(
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                        File.GetUnixFileMode(directory) & (UnixFileMode)0x1ff);
+                }
+
+                if (kind == CrossRuntimeReviewRecord.KindDesign)
+                {
+                    var workspace = Path.Combine(outDir, CrossRuntimeReviewFiles.Workspace);
+                    Assert.Empty(Directory.EnumerateFileSystemEntries(workspace));
+                }
+            }
         }
         finally
         {
