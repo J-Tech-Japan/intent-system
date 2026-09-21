@@ -117,10 +117,6 @@ internal static class IssueSyncBodyCommand
         }
 
         var localBody = Encoding.UTF8.GetString(localBytes);
-        if (localBody.Length > 0 && localBody[0] == '\uFEFF')
-        {
-            localBody = localBody[1..];
-        }
         var validation = IssueValidateBodyValidator.Validate(bodyPath, localBody, requireTargetPathsDeclaration: true);
         if (!validation.IsValid)
         {

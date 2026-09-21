@@ -868,6 +868,29 @@ public sealed class G846SyncBodyTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false, 0, "differs", false)]
+    [InlineData(true, 1, "verification-failed", false)]
+    public void BomPrefixedLocalBody_MatchesBaseComparisonSemantics(
+        bool write,
+        int expectedExitCode,
+        string expectedOutcome,
+        bool expectedTrailingNewlineNormalized)
+    {
+        var localBytes = G846BodyFixtures.BodyBytes(50000, bom: true);
+        var client = new CountingBodyClient(G846BodyFixtures.Decode(localBytes));
+        IssueSyncBodyCommand.BodyClientFactory = () => client;
+        WritePublishedBody(localBytes);
+
+        var result = Run(write);
+
+        Assert.Equal(expectedExitCode, result.ExitCode);
+        Assert.Equal(expectedOutcome, result.Root.GetProperty("outcome").GetString());
+        Assert.Equal(
+            expectedTrailingNewlineNormalized,
+            result.Root.GetProperty("trailing_newline_normalized").GetBoolean());
+    }
+
+    [Theory]
     [InlineData(57999, 0, false)]
     [InlineData(58000, 0, true)]
     [InlineData(58001, 0, true)]
