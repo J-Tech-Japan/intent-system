@@ -310,8 +310,9 @@ resolves outside the workspace; the refusal names the workspace-relative link,
 not its target. A link resolving inside is accepted.
 
 `cross-runtime-review-out-dir-not-empty` refuses an existing `opencode-exit.txt`
-or `verdict.raw.json`. intent-cli never enumerates or reads contents under an
-operator-protected root, and reads no isolation directory. An optional
+or `verdict.raw.json`. intent-cli never enumerates an operator-protected root and never reads a
+file inside one; it may resolve path metadata. It does enumerate an existing
+isolation directory to verify that it is empty, and reads no file inside one. An optional
 `--opencode-provider-config` must resolve outside both the workspace and every
 protected root; it is UTF-8 JSON with exactly one object-valued `provider` key,
 inserted after `$schema`. Its provider secrets are copied only to

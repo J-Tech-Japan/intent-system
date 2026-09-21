@@ -283,7 +283,8 @@ symlink は workspace 相対の entry 名だけを示して拒否し、workspace
 
 `cross-runtime-review-out-dir-not-empty` は既存の `opencode-exit.txt` または
 `verdict.raw.json` を拒否します。intent-cli は protected root を列挙せず、その中の
-file content も読みません（metadata の lstat と path resolution だけを許可します）。
+file content も読みません（metadata の lstat と path resolution だけを許可します）。既存の isolation directory は
+空であることを確かめるために列挙しますが、その中の file は読みません。
 `--opencode-provider-config` は workspace と全 protected root の外でなければならず、
 UTF-8 JSON の唯一の object-valued `provider` key を `$schema` の直後へ挿入します。
 provider secret は `opencode-reviewer.json` だけにコピーされ、prompt、invocation、
