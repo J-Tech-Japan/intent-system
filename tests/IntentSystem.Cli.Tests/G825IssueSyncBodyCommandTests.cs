@@ -131,6 +131,22 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
         Assert.Equal(0, client.Updates);
     }
 
+    [Fact]
+    public void G845_Point7_DryRunKeepsExistingMalformedBodyBehavior()
+    {
+        PublishBytes(G845BodyFixtures.InvalidOrdinaryTextBytes(50003));
+        var client = Install(new FakeBodyClient(ValidBody("remote")));
+        var runsBefore = RunsBytes();
+
+        var result = Run(write: false);
+
+        Assert.Equal(0, result.Exit);
+        Assert.Equal(IssueSyncBodyCommand.OutcomeDiffers, result.Json.GetProperty("outcome").GetString());
+        Assert.Equal(1, client.Reads);
+        Assert.Equal(0, client.Updates);
+        Assert.Equal(runsBefore, RunsBytes());
+    }
+
     // ── write ──────────────────────────────────────────────────────────────
 
     [Fact]
@@ -181,12 +197,22 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
         Publish(ValidBody("v2"));
         var client = Install(new FakeBodyClient(ValidBody("v2")));
 
-        var result = Run(write: true);
+        var stagingAttempts = 0;
+        try
+        {
+            IssueBodyFileStager.DirectoryCreateOverride = _ => stagingAttempts++;
+            var result = Run(write: true);
 
-        Assert.Equal(0, result.Exit);
-        Assert.Equal(IssueSyncBodyCommand.OutcomeNoOp, result.Json.GetProperty("outcome").GetString());
-        Assert.Equal(0, client.Updates);
-        Assert.Contains($"\"event\":\"{IssueSyncBodyCommand.EventNoOp}\"", Assert.Single(RunsLines()), StringComparison.Ordinal);
+            Assert.Equal(0, result.Exit);
+            Assert.Equal(IssueSyncBodyCommand.OutcomeNoOp, result.Json.GetProperty("outcome").GetString());
+            Assert.Equal(0, client.Updates);
+            Assert.Equal(0, stagingAttempts);
+            Assert.Contains($"\"event\":\"{IssueSyncBodyCommand.EventNoOp}\"", Assert.Single(RunsLines()), StringComparison.Ordinal);
+        }
+        finally
+        {
+            IssueBodyFileStager.DirectoryCreateOverride = null;
+        }
     }
 
     [Fact]
@@ -236,6 +262,141 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
         Assert.Equal(ValidBody("v2"), client.Body);
         Assert.NotEqual(BodyPath, client.UploadedPath);
         Assert.False(File.Exists(client.UploadedPath), "the temporary upload file must be removed");
+    }
+
+    [Theory]
+    [InlineData(65537)]
+    [InlineData(70000)]
+    public void G845_Point7_MatchingOversizedBodyIsRefusedAndNeverBecomesNoOp(int bodyBytes)
+    {
+        var bytes = G845BodyFixtures.ValidBytes(bodyBytes);
+        PublishBytes(bytes);
+        var client = Install(new FakeBodyClient(Encoding.UTF8.GetString(bytes)));
+        var runsBefore = RunsBytes();
+
+        var result = Run(write: true);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal(IssueSyncBodyCommand.OutcomeRefused, result.Json.GetProperty("outcome").GetString());
+        Assert.Equal("body-too-large", result.Json.GetProperty("reason_code").GetString());
+        Assert.Equal(0, client.Updates);
+        Assert.Equal(runsBefore, RunsBytes());
+    }
+
+    [Fact]
+    public void G845_Point7_MatchingMalformedBodyIsRefusedAfterReadAndNeverBecomesNoOp()
+    {
+        var bytes = G845BodyFixtures.InvalidOrdinaryTextBytes(50003);
+        PublishBytes(bytes);
+        var client = Install(new FakeBodyClient(Encoding.UTF8.GetString(bytes)));
+        var runsBefore = RunsBytes();
+
+        var result = Run(write: true);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal(IssueSyncBodyCommand.OutcomeRefused, result.Json.GetProperty("outcome").GetString());
+        Assert.Equal("body-invalid-utf8", result.Json.GetProperty("reason_code").GetString());
+        Assert.Equal(1, client.Reads);
+        Assert.Equal(0, client.Updates);
+        Assert.Equal(runsBefore, RunsBytes());
+        Assert.Equal(
+            "refused (body-invalid-utf8): Issue body is not valid UTF-8 at byte offset 1000. The issue body was read, but no update was sent.",
+            result.Json.GetProperty("summary").GetString());
+    }
+
+    [Fact]
+    public void G845_Point7_NonUtf8BomBodiesNeverReachUpdate()
+    {
+        foreach (var bytes in new[]
+        {
+            G845BodyFixtures.Utf16Bytes(),
+            G845BodyFixtures.Utf32Bytes(),
+        })
+        {
+            PublishBytes(bytes);
+            var client = Install(new FakeBodyClient("remote"));
+
+            var result = Run(write: true);
+
+            Assert.Equal(1, result.Exit);
+            Assert.Equal(0, client.Updates);
+        }
+    }
+
+    [Theory]
+    [InlineData(65535)]
+    [InlineData(65536)]
+    public void G845_Point7_InclusiveBoundaryStagesExactBytes(int bodyBytes)
+    {
+        var expected = G845BodyFixtures.ValidBytes(bodyBytes);
+        PublishBytes(expected);
+        var client = Install(new FakeBodyClient("remote"));
+
+        var result = Run(write: true);
+
+        Assert.Equal(0, result.Exit);
+        Assert.Equal(1, client.Updates);
+        Assert.Equal(expected, client.UploadedBytes);
+        Assert.NotEqual(BodyPath, client.UploadedPath);
+        Assert.StartsWith(Path.GetTempPath(), client.UploadedPath!, StringComparison.Ordinal);
+        Assert.False(File.Exists(client.UploadedPath));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(client.UploadedPath!)!));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, client.UploadedFileMode);
+        }
+    }
+
+    [Fact]
+    public void G845_Point7_BomCountsTowardTheRawFileLimit()
+    {
+        var bytes = G845BodyFixtures.BomBytes(65539);
+        PublishBytes(bytes);
+        var client = Install(new FakeBodyClient("remote"));
+
+        var result = Run(write: true);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal("body-too-large", result.Json.GetProperty("reason_code").GetString());
+        Assert.Equal(0, client.Updates);
+        Assert.Contains("github-body.md is 65539 bytes, which exceeds the 65536-byte limit.", result.Json.GetProperty("summary").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void G845_Point7_ExistingMalformedHeadingValidationStillWins()
+    {
+        PublishBytes(G845BodyFixtures.InvalidHeadingBytes(50003));
+        var client = Install(new FakeBodyClient("remote"));
+
+        var result = Run(write: true);
+
+        Assert.Equal(1, result.Exit);
+        Assert.Equal("body-invalid", result.Json.GetProperty("reason_code").GetString());
+        Assert.Equal(0, client.Reads);
+        Assert.Equal(0, client.Updates);
+    }
+
+    [Fact]
+    public void G845_Point7_StagingFailureUsesUploadStagingFailedSummary()
+    {
+        Publish(ValidBody("v2"));
+        var client = Install(new FakeBodyClient(ValidBody("v1")));
+
+        try
+        {
+            IssueBodyFileStager.FileWriteOverride = (_, _) => throw new IOException("write failure");
+            var result = Run(write: true);
+            Assert.Equal(1, result.Exit);
+            Assert.Equal("upload-staging-failed", result.Json.GetProperty("reason_code").GetString());
+            Assert.Equal(
+                "refused (upload-staging-failed): could not stage the validated body for upload (write failure). The issue body was read, but no update was sent.",
+                result.Json.GetProperty("summary").GetString());
+            Assert.Equal(0, client.Updates);
+        }
+        finally
+        {
+            IssueBodyFileStager.FileWriteOverride = null;
+        }
     }
 
     [Theory]
@@ -341,6 +502,17 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
         File.WriteAllText(Path.Combine(root, ".intent-cli", "claims", "g900.json"), "{\"scope\":\"execution-unit:G900\"}\n");
     }
 
+    private void PublishBytes(byte[] bytes)
+    {
+        Directory.CreateDirectory(PacketDir);
+        File.WriteAllBytes(BodyPath, bytes);
+        File.WriteAllText(Path.Combine(PacketDir, "packet.yaml"), "implementation_issue_packet:\n  source_execution_unit: G900\n");
+        WritePublish($"https://github.com/{Repo}/issues/{IssueNumber}");
+        File.WriteAllText(Path.Combine(root, ".intent-cli", "queue-state.json"), "{\"items\":[]}\n");
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli", "claims"));
+        File.WriteAllText(Path.Combine(root, ".intent-cli", "claims", "g900.json"), "{\"scope\":\"execution-unit:G900\"}\n");
+    }
+
     private static FakeBodyClient Install(FakeBodyClient client)
     {
         IssueSyncBodyCommand.BodyClientFactory = () => client;
@@ -423,6 +595,10 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
 
         public string? UploadedPath { get; private set; }
 
+        public byte[]? UploadedBytes { get; private set; }
+
+        public UnixFileMode? UploadedFileMode { get; private set; }
+
         public int Reads { get; private set; }
 
         public int Updates { get; private set; }
@@ -451,6 +627,8 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
             Assert.Equal(IssueNumber, issueNumber);
             Updates++;
             UploadedPath = bodyFilePath;
+            UploadedBytes = File.ReadAllBytes(bodyFilePath);
+            UploadedFileMode = OperatingSystem.IsWindows() ? null : File.GetUnixFileMode(bodyFilePath);
             if (ThrowOnUpdate)
             {
                 throw new InvalidOperationException("simulated network failure after send");

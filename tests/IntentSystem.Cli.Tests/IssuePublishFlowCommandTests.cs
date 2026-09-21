@@ -226,7 +226,169 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
 
         Assert.Equal("J-Tech-Japan/intent-system", stub.LastRepo);
         Assert.Equal("G245 Add intent-cli issue publish-flow command", stub.LastTitle);
-        Assert.EndsWith("github-body.md", stub.LastBodyFile!, StringComparison.Ordinal);
+        Assert.Equal(File.ReadAllBytes(workspace.GithubBodyPath("G245")), stub.LastBodyBytes);
+        Assert.NotEqual(workspace.GithubBodyPath("G245"), stub.LastBodyFile);
+        Assert.False(File.Exists(stub.LastBodyFile));
+    }
+
+    [Theory]
+    [InlineData(65535, true, "")]
+    [InlineData(65536, true, "")]
+    [InlineData(65537, false, "issue-body-too-large: github-body.md is 65537 bytes, which exceeds the 65536-byte limit.")]
+    [InlineData(70000, false, "issue-body-too-large: github-body.md is 70000 bytes, which exceeds the 65536-byte limit.")]
+    public void G845_Point1_BoundaryIsInclusiveAndCountsRawBytes(int bodyBytes, bool accepted, string expectedError)
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G845 point one body-file gate";
+        workspace.WriteGithubBodyBytes("G845", G845BodyFixtures.ValidBytes(bodyBytes, title));
+        workspace.SeedQueueState("G845", title);
+        var creator = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/845");
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        var exitCode = IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G845", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer);
+
+        Assert.Equal(accepted ? 0 : 1, exitCode);
+        Assert.Equal(accepted ? 1 : 0, creator.CallCount);
+        if (!accepted)
+        {
+            using var document = JsonDocument.Parse(writer.ToString());
+            Assert.Equal("issue-body-too-large", document.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(expectedError, document.RootElement.GetProperty("error").GetString());
+        }
+    }
+
+    [Fact]
+    public void G845_Point1_StagesTheCountedSnapshotAndCleansItsPrivateDirectory()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G845 point one staged snapshot";
+        var expected = G845BodyFixtures.ValidBytes(50003, title);
+        workspace.WriteGithubBodyBytes("G845", expected);
+        workspace.SeedQueueState("G845", title);
+        var creator = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/845");
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G845", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer));
+
+        Assert.Equal(expected, creator.LastBodyBytes);
+        Assert.NotEqual(workspace.GithubBodyPath("G845"), creator.LastBodyFile);
+        Assert.NotNull(creator.LastBodyFile);
+        Assert.StartsWith(Path.GetTempPath(), creator.LastBodyFile!, StringComparison.Ordinal);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, creator.LastBodyFileMode);
+        }
+
+        Assert.False(File.Exists(creator.LastBodyFile));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(creator.LastBodyFile!)!));
+    }
+
+    [Fact]
+    public void G845_Point1_CreatorFactoryMutationCannotChangeTheStagedSnapshot()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G845 point one creator mutation";
+        var expected = G845BodyFixtures.ValidBytes(50003, title);
+        workspace.WriteGithubBodyBytes("G845", expected);
+        workspace.SeedQueueState("G845", title);
+        var bodyPath = workspace.GithubBodyPath("G845");
+        var creator = new StubIssueCreator("https://github.com/J-Tech-Japan/intent-system/issues/845");
+        IssuePublishFlowCommand.CreatorFactory = () =>
+        {
+            File.WriteAllBytes(bodyPath, G845BodyFixtures.ValidBytes(50004, title));
+            return creator;
+        };
+
+        using var writer = new StringWriter();
+        Assert.Equal(0, IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G845", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer));
+
+        Assert.Equal(expected, creator.LastBodyBytes);
+        Assert.NotEqual(expected, File.ReadAllBytes(bodyPath));
+    }
+
+    [Fact]
+    public void G845_Point1_BomCountsAsRawBytesAndIsRefusedForSize()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G845 point one BOM";
+        workspace.WriteGithubBodyBytes("G845", G845BodyFixtures.BomBytes(65539, title));
+        workspace.SeedQueueState("G845", title);
+        var creator = new StubIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        Assert.Equal(1, IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G845", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer));
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("issue-body-too-large", document.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(
+            "issue-body-too-large: github-body.md is 65539 bytes, which exceeds the 65536-byte limit.",
+            document.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, creator.CallCount);
+    }
+
+    [Fact]
+    public void G845_Point1_InvalidUtf8IsRefusedBeforeCreate()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G845 point one invalid UTF-8";
+        workspace.WriteGithubBodyBytes("G845", G845BodyFixtures.InvalidOrdinaryTextBytes(50003, title));
+        workspace.SeedQueueState("G845", title);
+        var creator = new StubIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        Assert.Equal(1, IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G845", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer));
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("issue-body-invalid-utf8", document.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(
+            "issue-body-invalid-utf8: github-body.md is not valid UTF-8 at byte offset 1000.",
+            document.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, creator.CallCount);
+    }
+
+    [Fact]
+    public void G845_Point1_NonUtf8BomBodiesNeverReachCreate()
+    {
+        foreach (var bytes in new[]
+        {
+            G845BodyFixtures.Utf16Bytes("G845 point one UTF-16"),
+            G845BodyFixtures.Utf32Bytes("G845 point one UTF-32"),
+        })
+        {
+            using var workspace = new IssuePublishFlowWorkspace();
+            var title = "G845 point one non-UTF-8 BOM";
+            workspace.WriteGithubBodyBytes("G845", bytes);
+            workspace.SeedQueueState("G845", title);
+            var creator = new StubIssueCreator("unused");
+            IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+            using var writer = new StringWriter();
+            Assert.Equal(1, IssuePublishFlowCommand.Execute(
+                workspace.Context,
+                ["G845", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+                writer));
+
+            Assert.Equal(0, creator.CallCount);
+        }
     }
 
     [Fact]
@@ -1983,6 +2145,10 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
 
         public string? LastBodyFile { get; private set; }
 
+        public byte[]? LastBodyBytes { get; private set; }
+
+        public UnixFileMode? LastBodyFileMode { get; private set; }
+
         public int CallCount { get; private set; }
 
         public IssueCreateOutcome CreateIssue(string repo, string title, string bodyFilePath)
@@ -1990,6 +2156,8 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
             LastRepo = repo;
             LastTitle = title;
             LastBodyFile = bodyFilePath;
+            LastBodyBytes = File.ReadAllBytes(bodyFilePath);
+            LastBodyFileMode = OperatingSystem.IsWindows() ? null : File.GetUnixFileMode(bodyFilePath);
             CallCount++;
             return new IssueCreateOutcome(url);
         }
@@ -2081,6 +2249,16 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
             var directory = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "github-body.md"), content);
+        }
+
+        public string GithubBodyPath(string executionUnit) =>
+            Path.Combine(rootPath, ".intent-cli", "issues", executionUnit, "github-body.md");
+
+        public void WriteGithubBodyBytes(string executionUnit, byte[] content)
+        {
+            var directory = Path.Combine(rootPath, ".intent-cli", "issues", executionUnit);
+            Directory.CreateDirectory(directory);
+            File.WriteAllBytes(GithubBodyPath(executionUnit), content);
         }
 
         public void WritePacketYaml(string executionUnit, string title)

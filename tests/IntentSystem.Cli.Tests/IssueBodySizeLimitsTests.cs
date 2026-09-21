@@ -15,9 +15,10 @@ public sealed class IssueBodySizeLimitsTests
     }
 
     [Theory]
-    [InlineData(0, "Normal")]
     [InlineData(57999, "Normal")]
     [InlineData(58000, "Warning")]
+    [InlineData(58001, "Warning")]
+    [InlineData(65535, "Warning")]
     [InlineData(65536, "Warning")]
     [InlineData(65537, "OverLimit")]
     public void GetBand_IsPureAndInclusive(int bodyBytes, string expected)

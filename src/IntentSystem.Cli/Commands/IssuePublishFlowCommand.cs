@@ -870,10 +870,63 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
+        var transmissionResult = IssueBodyTransmissionGate.Evaluate(githubBodyBytes!, githubBodyPath);
+        if (transmissionResult is IssueBodyTransmissionRefusal transmissionRefusal)
+        {
+            var mappedRefusal = BuildTransmissionRefusal(transmissionRefusal);
+            var refusal = NewResult(
+                executionUnit!,
+                domain,
+                repo!,
+                packetDirectory,
+                githubBodyPath,
+                publishYamlPath,
+                write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: mappedRefusal.Error,
+                titleSource: titleSource,
+                cause: mappedRefusal.Cause);
+            EmitResult(writer, refusal, format);
+            return 1;
+        }
+
+        var acceptedBody = (IssueBodyTransmissionAccepted)transmissionResult;
         IssueCreateOutcome outcome;
         try
         {
-            outcome = creator.CreateIssue(repo!, title!, githubBodyPath);
+            using var staged = acceptedBody.Stage();
+            outcome = creator.CreateIssue(repo!, title!, staged.Path);
+        }
+        catch (IssueBodyStagingException exception)
+        {
+            var stagingErrorResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: ComposeStagingFailureDetail(exception.Message),
+                titleSource: titleSource);
+            EmitResult(writer, stagingErrorResult, format);
+            return 1;
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
@@ -1518,6 +1571,22 @@ internal static class IssuePublishFlowCommand
     private static string ComposeBodyTooLargeDetail(int bodyBytes) =>
         $"issue-body-too-large: github-body.md is {bodyBytes} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit.";
 
+    internal static (string Cause, string Error) BuildTransmissionRefusal(
+        IssueBodyTransmissionRefusal refusal) =>
+        refusal.Kind switch
+        {
+            IssueBodyTransmissionFailure.TooLarge =>
+                ("issue-body-too-large",
+                    $"issue-body-too-large: github-body.md is {refusal.ByteCount} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit."),
+            IssueBodyTransmissionFailure.InvalidUtf8 =>
+                ("issue-body-invalid-utf8",
+                    $"issue-body-invalid-utf8: github-body.md is not valid UTF-8 at byte offset {refusal.InvalidByteOffset}."),
+            _ => throw new InvalidOperationException("A transmission refusal requires a gate failure."),
+        };
+
+    private static string ComposeStagingFailureDetail(string message) =>
+        $"could not stage the validated body for upload ({message}). No issue was created.";
+
     private static IReadOnlyList<string> BodySizeWarnings(string githubBodyPath, bool idempotent)
     {
         if (!File.Exists(githubBodyPath))
@@ -2142,64 +2211,109 @@ internal static class IssuePublishFlowCommand
             return 1;
         }
 
-        var tempBodyPath = Path.Combine(Path.GetTempPath(), $"intent-cli-publish-{executionUnit}-{Guid.NewGuid():N}.md");
-        try
+        var transmissionResult = IssueBodyTransmissionGate.Evaluate(githubBody, githubBodyPath);
+        if (transmissionResult is IssueBodyTransmissionRefusal transmissionRefusal)
         {
-            File.WriteAllBytes(tempBodyPath, githubBody);
-            IssueCreateOutcome outcome;
-            try
-            {
-                outcome = creator.CreateIssue(repo, createTitle, tempBodyPath);
-            }
-            catch (Exception exception) when (exception is InvalidOperationException or IOException)
-            {
-                var createErrorResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
-                    packetExists: true,
-                    githubBodyPresent: true,
-                    missingSections: Array.Empty<string>(),
-                    title: createTitle,
-                    created: false,
-                    idempotent: false,
-                    durableStateSynced: false,
-                    issueUrl: null,
-                    issueNumber: null,
-                    queueStatePatched: false,
-                    publishYamlPatched: false,
-                    runsAppended: false,
-                    error: $"gh issue create failed: {exception.Message}",
-                    titleSource: titleSource,
-                    authorization: authorization,
-                    crossRuntimeDesignReview: designReview);
-                EmitResult(writer, createErrorResult, format);
-                return 1;
-            }
-
-            return FinalizeSuccessfulCreate(
-                writer,
-                format,
-                context,
+            var mappedRefusal = BuildTransmissionRefusal(transmissionRefusal);
+            var refusal = NewResult(
                 executionUnit,
                 domain,
                 repo,
                 packetDirectory,
                 githubBodyPath,
                 publishYamlPath,
-                queueStatePath,
-                runLogPath,
-                createTitle,
-                titleSource,
-                analysis,
-                authorization,
-                outcome,
-                designReview);
+                write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: createTitle,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: mappedRefusal.Error,
+                titleSource: titleSource,
+                authorization: authorization,
+                cause: mappedRefusal.Cause,
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, refusal, format);
+            return 1;
         }
-        finally
+
+        var acceptedBody = (IssueBodyTransmissionAccepted)transmissionResult;
+        IssueCreateOutcome outcome;
+        try
         {
-            if (File.Exists(tempBodyPath))
-            {
-                File.Delete(tempBodyPath);
-            }
+            using var staged = acceptedBody.Stage();
+            outcome = creator.CreateIssue(repo, createTitle, staged.Path);
         }
+        catch (IssueBodyStagingException exception)
+        {
+            var stagingErrorResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: createTitle,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: ComposeStagingFailureDetail(exception.Message),
+                titleSource: titleSource,
+                authorization: authorization,
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, stagingErrorResult, format);
+            return 1;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            var createErrorResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: createTitle,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: $"gh issue create failed: {exception.Message}",
+                titleSource: titleSource,
+                authorization: authorization,
+                crossRuntimeDesignReview: designReview);
+            EmitResult(writer, createErrorResult, format);
+            return 1;
+        }
+
+        return FinalizeSuccessfulCreate(
+            writer,
+            format,
+            context,
+            executionUnit,
+            domain,
+            repo,
+            packetDirectory,
+            githubBodyPath,
+            publishYamlPath,
+            queueStatePath,
+            runLogPath,
+            createTitle,
+            titleSource,
+            analysis,
+            authorization,
+            outcome,
+            designReview);
     }
 
     private static int EmitPacketMissingRefusal(
