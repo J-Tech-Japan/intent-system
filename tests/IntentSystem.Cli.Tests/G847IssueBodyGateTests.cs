@@ -79,8 +79,9 @@ public sealed class G847IssueBodyGateTests
         }
         else
         {
-            Assert.Contains("Issue body is ", writer.ToString(), StringComparison.Ordinal);
-            Assert.Contains("which exceeds the 65536-byte limit.", writer.ToString(), StringComparison.Ordinal);
+            Assert.Equal(
+                $"Issue body is {bodyBytes} bytes, which exceeds the 65536-byte limit.{Environment.NewLine}",
+                writer.ToString());
         }
     }
 

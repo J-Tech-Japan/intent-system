@@ -94,6 +94,7 @@ internal static class IssueCreateCommand
 
         var targetRepo = GitHubRepositoryTargetResolver.Resolve(context.RepoRoot, packet.TargetRepo, GitCommandRunnerFactory());
         var submittedBodyBytes = Encoding.UTF8.GetByteCount(body);
+        // This measures submitted UTF-8 body content, not bytes on the wire; see IssueBodySizeLimits.
         if (submittedBodyBytes > IssueBodySizeLimits.HardLimitBytes)
         {
             throw new InvalidOperationException(
