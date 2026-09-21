@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
@@ -35,7 +33,7 @@ internal static class IssueValidateBodyCommand
         }
 
         var bodyBytes = File.ReadAllBytes(fromFile);
-        var content = DecodeBody(bodyBytes);
+        var content = IssueBodyTextDecoder.Decode(bodyBytes);
         var result = IssueValidateBodyValidator.Validate(
             fromFile,
             content,
@@ -69,14 +67,6 @@ internal static class IssueValidateBodyCommand
         }
 
         return result.IsValid ? 0 : 1;
-    }
-
-    private static string DecodeBody(byte[] bodyBytes)
-    {
-        var content = Encoding.UTF8.GetString(bodyBytes);
-        return content.Length > 0 && content[0] == '\uFEFF'
-            ? content[1..]
-            : content;
     }
 
     private static bool TryParseArguments(

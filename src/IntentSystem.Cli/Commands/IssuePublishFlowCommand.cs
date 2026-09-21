@@ -208,7 +208,7 @@ internal static class IssuePublishFlowCommand
 
         var githubBodyPresent = File.Exists(githubBodyPath);
         var githubBodyBytes = githubBodyPresent ? File.ReadAllBytes(githubBodyPath) : null;
-        var githubBody = githubBodyBytes is null ? null : DecodePacketText(githubBodyBytes);
+        var githubBody = githubBodyBytes is null ? null : IssueBodyTextDecoder.Decode(githubBodyBytes);
         var githubBodySize = githubBodyBytes?.Length;
         // G670: this is the exact publish-gate readiness judgment consumed by
         // next-slice and stalled-work. Keep the validator and its named cause
@@ -565,7 +565,7 @@ internal static class IssuePublishFlowCommand
 
                 lookupSnapshotPacketYaml = packetBytes;
                 lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
-                lookupBody = DecodePacketText(lookupSnapshotGithubBody);
+                lookupBody = IssueBodyTextDecoder.Decode(lookupSnapshotGithubBody);
                 try
                 {
                     lookupTitle = ResolveLookupTitle(
@@ -2623,7 +2623,7 @@ internal static class IssuePublishFlowCommand
             }
         }
 
-        var lines = DecodePacketText(githubBodyBytes).Split('\n');
+        var lines = IssueBodyTextDecoder.Decode(githubBodyBytes).Split('\n');
         foreach (var raw in lines)
         {
             var line = raw.Trim();

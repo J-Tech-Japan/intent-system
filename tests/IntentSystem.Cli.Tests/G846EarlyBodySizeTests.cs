@@ -98,6 +98,38 @@ public sealed class G846IssueValidateBodyTests
             root.GetProperty("body_size_reason").GetString());
     }
 
+    [Theory]
+    [InlineData("utf-16-le", 2002)]
+    [InlineData("utf-16-be", 2002)]
+    [InlineData("utf-32-le", 4004)]
+    [InlineData("utf-8", 1003)]
+    public void BomEncodedValidBodies_MatchBaseOutcomeAndReportRawBytes(string encodingName, int expectedBodyBytes)
+    {
+        using var workspace = new BodyWorkspace("g846-validate-encoding-");
+        var body = G846BodyFixtures.Decode(G846BodyFixtures.BodyBytes(1000));
+        var bytes = G846BodyFixtures.EncodeWithBom(body, encodingName);
+        Assert.Equal(expectedBodyBytes, bytes.Length);
+        var path = workspace.WriteBody("body.md", bytes);
+
+        using var writer = new StringWriter();
+        var exitCode = IssueValidateBodyCommand.Execute(
+            workspace.Context,
+            ["--from-file", path, "--format", "json"],
+            writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal(0, exitCode);
+        Assert.True(root.GetProperty("is_valid").GetBoolean());
+        Assert.Equal(expectedBodyBytes, root.GetProperty("body_bytes").GetInt32());
+        Assert.False(root.GetProperty("body_too_large").GetBoolean());
+        Assert.False(root.GetProperty("body_size_warning").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("body_size_reason").ValueKind);
+        Assert.Empty(root.GetProperty("missing_headings").EnumerateArray());
+        Assert.False(root.GetProperty("related_links_invalid").GetBoolean());
+        Assert.False(root.GetProperty("target_paths_invalid").GetBoolean());
+    }
+
     [Fact]
     public void OversizedBody_PreservesHeadingRefusalAndAddsNamedSizeRefusal()
     {
@@ -772,6 +804,36 @@ public sealed class G846PublishFlowTests : IDisposable
         Assert.Contains("65539", oversizedRoot.GetProperty("error").GetString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("utf-16-le", 2002)]
+    [InlineData("utf-16-be", 2002)]
+    [InlineData("utf-32-le", 4004)]
+    [InlineData("utf-8", 1003)]
+    public void BomEncodedValidBodies_MatchBaseDryRunOutcome(string encodingName, int expectedBodyBytes)
+    {
+        using var workspace = new PublishWorkspace();
+        var body = G846BodyFixtures.Decode(G846BodyFixtures.BodyBytes(1000));
+        var bytes = G846BodyFixtures.EncodeWithBom(body, encodingName);
+        Assert.Equal(expectedBodyBytes, bytes.Length);
+        workspace.WriteBody(bytes);
+        workspace.WritePacketYaml();
+
+        var (exitCode, root) = workspace.Run(write: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("dry-run", root.GetProperty("mode").GetString());
+        Assert.Empty(root.GetProperty("missing_contract_sections").EnumerateArray());
+        Assert.Equal("G846 test", root.GetProperty("title").GetString());
+        Assert.Equal("G846 test", root.GetProperty("issue_title").GetString());
+        Assert.Equal("packet-yaml", root.GetProperty("title_source").GetString());
+        Assert.False(root.GetProperty("created").GetBoolean());
+        Assert.False(root.GetProperty("idempotent").GetBoolean());
+        Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
+        Assert.Empty(root.GetProperty("warnings").EnumerateArray());
+        Assert.False(root.TryGetProperty("error", out _));
+        Assert.False(root.TryGetProperty("cause", out _));
+    }
+
     [Fact]
     public void SizeWarning_IsLastAfterAnExistingPublishWarning()
     {
@@ -1225,6 +1287,20 @@ internal static class G846BodyFixtures
     {
         var text = Encoding.UTF8.GetString(bytes);
         return text.Length > 0 && text[0] == '\uFEFF' ? text[1..] : text;
+    }
+
+    public static byte[] EncodeWithBom(string text, string encodingName)
+    {
+        Encoding encoding = encodingName switch
+        {
+            "utf-16-le" => new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
+            "utf-16-be" => new UnicodeEncoding(bigEndian: true, byteOrderMark: true),
+            "utf-32-le" => new UTF32Encoding(bigEndian: false, byteOrderMark: true),
+            "utf-8" => new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+            _ => throw new ArgumentOutOfRangeException(nameof(encodingName), encodingName, "Unknown test encoding.")
+        };
+
+        return [.. encoding.GetPreamble(), .. encoding.GetBytes(text)];
     }
 
     private static string ValidBody(bool includeH1, string? omitHeading)
