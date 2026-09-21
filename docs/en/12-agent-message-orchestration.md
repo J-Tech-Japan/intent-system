@@ -428,6 +428,11 @@ the builder needs because project config and `AGENTS.md` are not loaded.
 start a local-model builder or reviewer while another local-model seat runs;
 intent-cli does not check this.
 
+**Local-model context-window guidance (measured).** The initial prompt can fit,
+but accumulated conversation and tool output can later overflow the context
+window. Identical prompts can behave differently from run to run. Tool-heavy
+reviews may need a smaller packet, a larger context window, or retries.
+
 **Forward compatibility.** An intent-cli without G842 refuses
 `cross-runtime-review-runtime-invalid` for the two new runtimes and cannot read
 a stored record with `runtime: copilot` or `runtime: opencode` (`record-unreadable`,

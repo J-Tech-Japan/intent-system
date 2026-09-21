@@ -389,6 +389,11 @@ copilot と opencode の builder 行では `--model` が必須で、`enforcement
 動いている間に local-model builder や reviewer を起動しないでください。intent-cli は
 これを検査しません。
 
+**local-model の context window guidance（実測）。** 初期 prompt は収まっても、蓄積した会話と
+tool output が後から context window を超えることがあります。同じ prompt でも run ごとに挙動が
+異なることがあります。tool-heavy な review では、より小さい packet、より大きい context window、
+または retry が必要になることがあります。
+
 **前方互換性。** G842 を含まない intent-cli は 2 つの新 runtime で
 `cross-runtime-review-runtime-invalid` を返し、`runtime: copilot` または
 `runtime: opencode` の stored record を読めません（`record-unreadable`、gate は fail

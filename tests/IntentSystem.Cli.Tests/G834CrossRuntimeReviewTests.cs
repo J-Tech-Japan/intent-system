@@ -1182,6 +1182,14 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
             Assert.Contains("cursor `--mode ask` refuses every non-read-only tool", text, StringComparison.Ordinal);
         }
 
+        var reviewRules = string.Join("\n", GuideReviewCommand.CrossRuntimeReviewRules);
+        Assert.Contains("--runtime codex|claude|cursor|copilot|opencode", reviewRules, StringComparison.Ordinal);
+        Assert.Contains("--available-tools view rg glob leaves only those three tools", reviewRules, StringComparison.Ordinal);
+        Assert.Contains("COPILOT_HOME and XDG_CONFIG_HOME point at empty directories created under the out-dir", reviewRules, StringComparison.Ordinal);
+        Assert.Contains("--no-custom-instructions stops the reviewed workspace from instructing the reviewer", reviewRules, StringComparison.Ordinal);
+        Assert.Contains("The rendered config denies every tool (`*`) and allows only read, glob, grep and list", reviewRules, StringComparison.Ordinal);
+        Assert.Contains("OPENCODE_DISABLE_PROJECT_CONFIG=1 and --pure stop", reviewRules, StringComparison.Ordinal);
+
         Assert.Contains("not sandbox-enforced", CrossRuntimeReviewRuntimes.ReadOnlyEnforcement["claude"], StringComparison.Ordinal);
         Assert.Contains("sandbox-enforced", CrossRuntimeReviewRuntimes.ReadOnlyEnforcement["codex"], StringComparison.Ordinal);
         Assert.Contains("operator's responsibility", review.ToString(), StringComparison.Ordinal);

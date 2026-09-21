@@ -81,3 +81,5 @@
   handling of a symlink planted inside the workspace. The design layout therefore stands.
 - **Scrub:** the scratch path replaced with `<scratch>` and `/Users/tomohisa` with
   `<home>`; nothing else. The canary token is kept: it is the evidence, not a secret.
+
+- `copilot-implementation-live-4cc85cb5.jsonl`: the AC14 copilot implementation review of PR #1839 at head `4cc85cb5192a3e10d95990d6408e93f59871c360` (gpt-5.6-sol, effort high, recorded). It is committed in the next commit, so it is one commit behind the tip by design. Scrubbed under the rule above: scratch paths to `<scratch>`.

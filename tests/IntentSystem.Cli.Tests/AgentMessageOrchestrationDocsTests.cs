@@ -156,6 +156,21 @@ public sealed class AgentMessageOrchestrationDocsTests
     }
 
     [Fact]
+    public void BothDocs_DescribeMeasuredLocalModelContextWindowBehavior_G842()
+    {
+        var en = ReadDoc("en");
+        var ja = ReadDoc("ja");
+
+        Assert.Contains("The initial prompt can fit, but accumulated conversation and tool output can later overflow the context window.", en, StringComparison.Ordinal);
+        Assert.Contains("Identical prompts can behave differently from run to run.", en, StringComparison.Ordinal);
+        Assert.Contains("Tool-heavy reviews may need a smaller packet, a larger context window, or retries.", en, StringComparison.Ordinal);
+
+        Assert.Contains("初期 prompt は収まっても、蓄積した会話と tool output が後から context window を超えることがあります。", ja, StringComparison.Ordinal);
+        Assert.Contains("同じ prompt でも run ごとに挙動が 異なることがあります。", ja, StringComparison.Ordinal);
+        Assert.Contains("tool-heavy な review では、より小さい packet、より大きい context window、 または retry が必要になることがあります。", ja, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BothDocs_CarryCorrectedGitEnvelopeRuleAndRoutingDecision_G716()
     {
         var en = ReadDoc("en");

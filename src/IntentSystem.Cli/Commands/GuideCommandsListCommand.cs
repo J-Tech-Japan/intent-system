@@ -212,7 +212,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationSupport,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerHostLoop,
-            Purpose = "Review-side surfaces: closeout-plan (read-only), collect-signals / signal-handled (G374 worker-signal convergence), and `review cross-runtime request|record|status` (G834 implementation review and G835 `--kind design` packet-digest design review for teams declared in `[[cross_runtime_review.teams]]`: render a reviewer request the seat runs, record a verdict, and read the approval gate; optional `--model` on request and record; intent-cli never runs a reviewer)."
+            Purpose = "Review-side surfaces: closeout-plan (read-only), collect-signals / signal-handled (G374 worker-signal convergence), and `review cross-runtime request|record|status` (G834 implementation review and G835 `--kind design` packet-digest design review for teams declared in `[[cross_runtime_review.teams]]`: render a reviewer request the seat runs, record a verdict, and read the approval gate; `--model` is required for `copilot` and `opencode` on request and record (both kinds) and remains optional for `codex`, `claude`, and `cursor`; optional `--effort` is supported by `copilot` and `opencode`, and request-only optional `--opencode-provider-config` is supported by `opencode`; intent-cli never runs a reviewer)."
         },
         new CommandGroupEntry
         {
