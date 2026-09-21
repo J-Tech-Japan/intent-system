@@ -1,143 +1,198 @@
-using System.Runtime.InteropServices;
-
 namespace IntentSystem.Cli.Commands;
 
+internal enum CrossRuntimeReviewFileReadFailure
+{
+    Missing,
+    Symlink,
+    Directory,
+    Empty,
+    NotRegular,
+    TooLarge,
+    ReadError,
+}
+
 /// <summary>
-/// G842: Unix file-mode probes for cross-runtime path and exit-file validation.
+/// Managed file metadata and bounded-read helpers for cross-runtime review.
+/// The metadata checks happen before any file is opened, so a zero-length
+/// entry such as a FIFO is refused without a potentially blocking read.
 /// </summary>
 internal static class CrossRuntimeReviewFileMode
 {
-    private const int UnixO_RDONLY = 0x0000;
-    private const int UnixDarwinO_NONBLOCK = 0x0004;
-    private const int UnixLinuxO_NONBLOCK = 0x0800;
+    internal static bool IsSymlink(string path) =>
+        TryGetFileSystemInfo(path, out var info) && IsSymlink(info);
 
-    internal static bool TryGetUnixFileMode(string path, out ushort mode)
-    {
-        var buffer = new byte[144];
-        if (UnixLstat(path, buffer) != 0)
-        {
-            mode = 0;
-            return false;
-        }
+    internal static bool IsDirectory(string path) =>
+        TryGetFileSystemInfo(path, out var info) && IsDirectory(info);
 
-        mode = OperatingSystem.IsMacOS()
-            ? BitConverter.ToUInt16(buffer, 4)
-            : BitConverter.ToUInt16(buffer, 12);
-        return true;
-    }
+    internal static bool IsRegularFile(string path) =>
+        TryGetFileSystemInfo(path, out var info)
+        && info.Exists
+        && info is FileInfo
+        && !IsSymlink(info)
+        && !IsDirectory(info);
 
-    internal static bool IsUnixFifo(string path) =>
-        TryGetUnixFileMode(path, out var mode) && (mode & 0xF000) == 0x1000;
+    internal static bool TryReadRegularFileBytes(
+        string path,
+        out byte[] bytes,
+        out CrossRuntimeReviewFileReadFailure failure,
+        out string error) =>
+        TryReadRegularFileBytes(path, maxBytes: null, out bytes, out failure, out error);
 
-    internal static bool IsUnixRegularFile(string path) =>
-        TryGetUnixFileMode(path, out var mode) && (mode & 0xF000) == 0x8000;
-
-    internal static bool TryReadRegularFileBytes(string path, out byte[] bytes, out string error)
+    internal static bool TryReadRegularFileBytes(
+        string path,
+        int? maxBytes,
+        out byte[] bytes,
+        out CrossRuntimeReviewFileReadFailure failure,
+        out string error)
     {
         bytes = [];
+        failure = CrossRuntimeReviewFileReadFailure.ReadError;
         error = string.Empty;
 
-        if (OperatingSystem.IsWindows())
+        if (!TryGetFileSystemInfo(path, out var info))
         {
-            try
-            {
-                bytes = File.ReadAllBytes(path);
-                return true;
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                error = exception.Message;
-                return false;
-            }
-        }
-
-        if (IsUnixFifo(path))
-        {
-            error = "named pipe";
+            failure = CrossRuntimeReviewFileReadFailure.Missing;
+            error = "file does not exist";
             return false;
         }
 
-        if (!IsUnixRegularFile(path))
+        if (IsSymlink(info))
         {
+            failure = CrossRuntimeReviewFileReadFailure.Symlink;
+            error = "symlink";
+            return false;
+        }
+
+        if (!info.Exists)
+        {
+            failure = CrossRuntimeReviewFileReadFailure.Missing;
+            error = "file does not exist";
+            return false;
+        }
+
+        if (IsDirectory(info))
+        {
+            failure = CrossRuntimeReviewFileReadFailure.Directory;
+            error = "directory";
+            return false;
+        }
+
+        if (info is not FileInfo fileInfo)
+        {
+            failure = CrossRuntimeReviewFileReadFailure.NotRegular;
             error = "not a regular file";
             return false;
         }
 
-        var nonblock = OperatingSystem.IsMacOS() ? UnixDarwinO_NONBLOCK : UnixLinuxO_NONBLOCK;
-        var descriptor = UnixOpen(path, UnixO_RDONLY | nonblock);
-        if (descriptor < 0)
+        long length;
+        try
         {
-            error = $"open failed (native error {Marshal.GetLastPInvokeError()})";
+            length = fileInfo.Length;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            failure = CrossRuntimeReviewFileReadFailure.ReadError;
+            error = exception.Message;
+            return false;
+        }
+
+        // Do this before opening the file. On macOS a FIFO is reported with
+        // Normal attributes and length zero, so this also covers FIFOs.
+        if (length <= 0)
+        {
+            failure = CrossRuntimeReviewFileReadFailure.Empty;
+            error = "empty file";
+            return false;
+        }
+
+        if (maxBytes is not null && length > maxBytes.Value)
+        {
+            failure = CrossRuntimeReviewFileReadFailure.TooLarge;
+            error = $"file exceeds the {maxBytes.Value}-byte read limit";
+            return false;
+        }
+
+        if (length > int.MaxValue)
+        {
+            failure = CrossRuntimeReviewFileReadFailure.TooLarge;
+            error = "file is too large to read";
             return false;
         }
 
         try
         {
-            var buffer = new byte[64];
-            var read = UnixRead(descriptor, buffer, (nuint)buffer.Length);
-            if (read < 0)
+            using var stream = new FileStream(fileInfo.FullName, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var buffer = new byte[(int)length];
+            var offset = 0;
+            while (offset < buffer.Length)
             {
-                var errno = Marshal.GetLastPInvokeError();
-                if (errno == 35 || errno == 11)
-                {
-                    error = "non-blocking read would block";
-                    return false;
-                }
-
-                error = $"read failed (native error {errno})";
-                return false;
-            }
-
-            if (read == 0)
-            {
-                bytes = [];
-                return true;
-            }
-
-            using var stream = new MemoryStream();
-            stream.Write(buffer, 0, (int)read);
-            while (true)
-            {
-                read = UnixRead(descriptor, buffer, (nuint)buffer.Length);
-                if (read < 0)
-                {
-                    var errno = Marshal.GetLastPInvokeError();
-                    if (errno == 35 || errno == 11)
-                    {
-                        error = "non-blocking read would block";
-                        return false;
-                    }
-
-                    error = $"read failed (native error {errno})";
-                    return false;
-                }
-
+                var read = stream.Read(buffer, offset, buffer.Length - offset);
                 if (read == 0)
                 {
                     break;
                 }
 
-                stream.Write(buffer, 0, (int)read);
+                offset += read;
             }
 
-            bytes = stream.ToArray();
+            bytes = offset == buffer.Length ? buffer : buffer[..offset];
             return true;
         }
-        finally
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            UnixClose(descriptor);
+            failure = CrossRuntimeReviewFileReadFailure.ReadError;
+            error = exception.Message;
+            return false;
         }
     }
 
-    [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
-    private static extern int UnixLstat(string pathname, byte[] buf);
+    private static bool TryGetFileSystemInfo(string path, out FileSystemInfo info)
+    {
+        foreach (FileSystemInfo candidate in new FileSystemInfo[] { new FileInfo(path), new DirectoryInfo(path) })
+        {
+            try
+            {
+                // LinkTarget is intentionally checked before Exists so a
+                // dangling symlink is still rejected as a symlink.
+                if (candidate.LinkTarget is not null || candidate.Exists)
+                {
+                    info = candidate;
+                    return true;
+                }
+            }
+            catch (Exception) when (candidate is FileInfo or DirectoryInfo)
+            {
+                // Treat an inaccessible entry as unreadable/missing below;
+                // callers must not open it speculatively.
+            }
+        }
 
-    [DllImport("libc", EntryPoint = "open", SetLastError = true, CharSet = CharSet.Ansi)]
-    private static extern int UnixOpen(string path, int flags);
+        info = null!;
+        return false;
+    }
 
-    [DllImport("libc", EntryPoint = "read", SetLastError = true)]
-    private static extern nint UnixRead(int descriptor, byte[] buffer, nuint count);
+    private static bool IsSymlink(FileSystemInfo info)
+    {
+        try
+        {
+            return info.LinkTarget is not null
+                || info.Attributes.HasFlag(FileAttributes.ReparsePoint);
+        }
+        catch (Exception) when (info is FileInfo or DirectoryInfo)
+        {
+            return false;
+        }
+    }
 
-    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
-    private static extern int UnixClose(int descriptor);
+    private static bool IsDirectory(FileSystemInfo info)
+    {
+        try
+        {
+            return info.Attributes.HasFlag(FileAttributes.Directory);
+        }
+        catch (Exception) when (info is FileInfo or DirectoryInfo)
+        {
+            return false;
+        }
+    }
 }

@@ -40,20 +40,7 @@ public sealed class G842NoLaunchSourceGuardTests
         @"(?<![A-Za-z0-9_])([A-Z][A-Za-z0-9_]*)(?![A-Za-z0-9_])",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    private const string CrossRuntimeReviewFileModeRelativePath =
-        "src/IntentSystem.Cli/Commands/CrossRuntimeReviewFileMode.cs";
-
     private static readonly string[] InteropTokens = ["DllImport", "LibraryImport", "NativeLibrary"];
-
-    private static readonly string[] PinnedFileModeInteropEntryPoints = ["close", "lstat", "open", "read"];
-
-    private static readonly string[] ForbiddenLaunchEntryPointNames = ["fork", "popen", "system", "vfork"];
-
-    private static readonly string[] ForbiddenLaunchEntryPointPrefixes = ["exec", "posix_spawn"];
-
-    private static readonly Regex InteropEntryPointRegex = new(
-        @"EntryPoint\s*=\s*""([^""]+)""",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     [Fact]
     public void AllowList_MatchesPinnedFixture_AndHasNoCrossRuntimeEntries()
@@ -97,12 +84,6 @@ public sealed class G842NoLaunchSourceGuardTests
                     continue;
                 }
 
-                if (relative == CrossRuntimeReviewFileModeRelativePath
-                    && token is "DllImport" or "LibraryImport" or "NativeLibrary")
-                {
-                    continue;
-                }
-
                 Assert.True(
                     allowList.TryGetValue((relative, token), out var allowed),
                     $"unlisted launch token '{token}' in {relative}");
@@ -114,50 +95,26 @@ public sealed class G842NoLaunchSourceGuardTests
     }
 
     [Fact]
-    public void CrossRuntimeReviewFileMode_InteropBindingsArePinned()
+    public void CrossRuntimeReviewFileMode_HasNoInteropBindings()
     {
-        var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), CrossRuntimeReviewFileModeRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var path = Path.Combine(
+            RepoVersionPolicySource.RepoRoot(),
+            "src",
+            "IntentSystem.Cli",
+            "Commands",
+            "CrossRuntimeReviewFileMode.cs");
         var content = File.ReadAllText(path);
-        foreach (var token in InteropTokens)
-        {
-            var count = CountWholeIdentifiers(content, token);
-            if (token == "DllImport")
-            {
-                Assert.Equal(4, count);
-                continue;
-            }
-
-            Assert.Equal(0, count);
-        }
-
-        var entryPoints = InteropEntryPointRegex.Matches(content)
-            .Select(match => match.Groups[1].Value)
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToArray();
-        Assert.Equal(PinnedFileModeInteropEntryPoints, entryPoints);
-
-        foreach (var entryPoint in entryPoints)
-        {
-            Assert.DoesNotContain(entryPoint, ForbiddenLaunchEntryPointNames, StringComparer.Ordinal);
-            Assert.False(
-                ForbiddenLaunchEntryPointPrefixes.Any(prefix => entryPoint.StartsWith(prefix, StringComparison.Ordinal)),
-                $"forbidden launch entry point prefix in {CrossRuntimeReviewFileModeRelativePath}: {entryPoint}");
-        }
+        Assert.All(InteropTokens, token => Assert.Equal(0, CountWholeIdentifiers(content, token)));
     }
 
     [Fact]
-    public void CrossRuntimeSurfaceFiles_CarryNoInteropBeyondFileMode()
+    public void CrossRuntimeSurfaceFiles_CarryNoInterop()
     {
         var repoRoot = RepoVersionPolicySource.RepoRoot();
         var commandsRoot = Path.Combine(repoRoot, "src", "IntentSystem.Cli", "Commands");
         foreach (var path in Directory.EnumerateFiles(commandsRoot, "CrossRuntime*.cs", SearchOption.TopDirectoryOnly))
         {
             var relative = Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
-            if (string.Equals(relative, CrossRuntimeReviewFileModeRelativePath, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
             var content = File.ReadAllText(path);
             foreach (var token in InteropTokens)
             {

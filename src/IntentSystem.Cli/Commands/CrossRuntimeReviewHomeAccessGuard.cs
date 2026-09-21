@@ -251,17 +251,7 @@ internal static class CrossRuntimeReviewHomeAccessGuard
 
     internal static bool IsRegularFile(string path)
     {
-        if (IsSymlink(path) || Directory.Exists(path))
-        {
-            return false;
-        }
-
-        if (OperatingSystem.IsWindows())
-        {
-            return File.Exists(path);
-        }
-
-        return CrossRuntimeReviewFileMode.IsUnixRegularFile(path);
+        return CrossRuntimeReviewFileMode.IsRegularFile(path);
     }
 
     internal static string ResolvePath(string path)

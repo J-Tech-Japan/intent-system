@@ -420,33 +420,27 @@ internal static class CrossRuntimeReviewJsonlVerdict
         }
 
         var exitPath = Path.Combine(directory, CrossRuntimeReviewFiles.OpencodeExit);
-        if (!Path.Exists(exitPath))
+        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(
+                exitPath,
+                maxBytes: 64,
+                out var bytes,
+                out var readFailure,
+                out var readError))
         {
-            cause = CrossRuntimeReviewCauses.ExitStatusMissing;
-            detail = "opencode-exit.txt is missing next to the verdict file.";
-            return false;
-        }
+            if (readFailure is CrossRuntimeReviewFileReadFailure.Empty
+                or CrossRuntimeReviewFileReadFailure.TooLarge)
+            {
+                cause = CrossRuntimeReviewCauses.ExitStatusNonzero;
+                detail = readFailure == CrossRuntimeReviewFileReadFailure.Empty
+                    ? "opencode-exit.txt bytes are (empty); exactly 0\\n is required."
+                    : "opencode-exit.txt is too large; exactly 0\\n is required.";
+                return false;
+            }
 
-        if (!OperatingSystem.IsWindows() && CrossRuntimeReviewFileMode.IsUnixFifo(exitPath))
-        {
             cause = CrossRuntimeReviewCauses.ExitStatusMissing;
-            detail = "opencode-exit.txt must be a regular file next to the verdict file.";
-            return false;
-        }
-
-        if (!CrossRuntimeReviewHomeAccessGuard.IsRegularFile(exitPath))
-        {
-            cause = CrossRuntimeReviewCauses.ExitStatusMissing;
-            detail = IsSymlink(exitPath)
+            detail = readFailure == CrossRuntimeReviewFileReadFailure.Symlink
                 ? "opencode-exit.txt must be a regular file, not a symlink."
                 : "opencode-exit.txt must be a regular file next to the verdict file.";
-            return false;
-        }
-
-        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(exitPath, out var bytes, out var readError))
-        {
-            cause = CrossRuntimeReviewCauses.ExitStatusMissing;
-            detail = $"opencode-exit.txt could not be read: {readError}";
             return false;
         }
 
@@ -513,17 +507,6 @@ internal static class CrossRuntimeReviewJsonlVerdict
         }
 
         return part.TryGetProperty("synthetic", out var synthetic) && synthetic.ValueKind == JsonValueKind.True;
-    }
-
-    private static bool IsSymlink(string path)
-    {
-        if (!File.Exists(path) && !Directory.Exists(path))
-        {
-            return false;
-        }
-
-        var info = File.Exists(path) ? (FileSystemInfo)new FileInfo(path) : new DirectoryInfo(path);
-        return info.Attributes.HasFlag(FileAttributes.ReparsePoint);
     }
 
     private static string PrefixCopilotVerdictError(string error) =>

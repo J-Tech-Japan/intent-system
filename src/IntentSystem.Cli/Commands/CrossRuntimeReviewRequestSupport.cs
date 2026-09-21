@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text;
 
 namespace IntentSystem.Cli.Commands;
@@ -144,14 +146,18 @@ internal static class CrossRuntimeReviewRequestSupport
         }
 
         var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var privateWrites = runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode;
         Directory.CreateDirectory(outDir);
-        WriteUtf8File(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt), prompt, utf8);
-        WriteUtf8File(Path.Combine(outDir, CrossRuntimeReviewFiles.Schema), schema, utf8);
-        WriteUtf8File(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation), invocation, utf8);
+        WriteTextFile(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt), prompt, utf8, privateWrites);
+        WriteTextFile(Path.Combine(outDir, CrossRuntimeReviewFiles.Schema), schema, utf8, privateWrites);
+        WriteTextFile(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation), invocation, utf8, privateWrites);
 
-        foreach (var directoryName in CrossRuntimeReviewRuntimes.IsolationDirectories(runtime))
+        if (privateWrites)
         {
-            CreatePrivateDirectory(Path.Combine(outDir, directoryName));
+            foreach (var directoryName in CrossRuntimeReviewRuntimes.IsolationDirectories(runtime))
+            {
+                CreatePrivateDirectory(Path.Combine(outDir, directoryName));
+            }
         }
 
         if (runtime == CrossRuntimeReviewRuntimes.Opencode)
@@ -171,8 +177,17 @@ internal static class CrossRuntimeReviewRequestSupport
             .ToArray();
     }
 
-    private static void WriteUtf8File(string path, string content, UTF8Encoding encoding) =>
-        ReplaceWrite(path, encoding.GetBytes(content));
+    private static void WriteTextFile(string path, string content, UTF8Encoding encoding, bool privateWrite)
+    {
+        if (privateWrite)
+        {
+            ReplaceWrite(path, encoding.GetBytes(content));
+            return;
+        }
+
+        // Preserve the merge-base behavior for codex, claude and cursor.
+        File.WriteAllText(path, content, encoding);
+    }
 
     private static void WriteBytesFile(string path, byte[] content) => ReplaceWrite(path, content);
 
@@ -255,19 +270,23 @@ internal static class CrossRuntimeReviewRequestSupport
     {
         if (format == "json")
         {
-            writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(new CrossRuntimeReviewRefusal
+            writer.WriteLine(JsonSerializer.Serialize(new CrossRuntimeReviewRefusal
             {
                 Command = $"{ReviewCrossRuntimeCommand.CommandName} request",
                 Outcome = "refused",
                 Cause = cause,
                 Detail = detail,
                 Fix = fix,
+            }, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
             }));
             return;
         }
 
-        writer.WriteLine($"Refused: {cause}");
-        writer.WriteLine(detail);
-        writer.WriteLine(fix);
+        writer.WriteLine($"{ReviewCrossRuntimeCommand.CommandName} request: refused ({cause})");
+        writer.WriteLine($"- detail: {detail}");
+        writer.WriteLine($"- fix: {fix}");
     }
 }

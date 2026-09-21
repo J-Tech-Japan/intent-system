@@ -176,6 +176,9 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal(
             "--runtime 'gemini' is not supported (codex, claude, cursor, copilot, or opencode).",
             refusal.RootElement.GetProperty("detail").GetString());
+        Assert.Equal(
+            "pass --runtime codex, claude, cursor, copilot, or opencode.",
+            refusal.RootElement.GetProperty("fix").GetString());
     }
 
     [Fact]
@@ -630,6 +633,38 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal(CrossRuntimeReviewFiles.RenderedFor(runtime).OrderBy(name => name, StringComparer.Ordinal), Directory.EnumerateFileSystemEntries(outDir).Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal));
     }
 
+    [Theory]
+    [InlineData("codex")]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    [InlineData("copilot")]
+    [InlineData("opencode")]
+    public void Request_RenderedModes_ArePrivateOnlyForNewRuntimes(string runtime)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var outDir = Path.Combine(root, "modes-" + runtime);
+        var model = runtime == "copilot" ? CopilotModel : runtime == "opencode" ? OpencodeModel : null;
+        Assert.Equal(0, Route(["review", "cross-runtime", .. RequestArgs(runtime, Path.Combine(root, "clone-" + runtime), outDir, model), "--format", "json"]).ExitCode);
+
+        var expectedFileMode = runtime is "copilot" or "opencode" ? UnixFileMode.UserRead | UnixFileMode.UserWrite : (UnixFileMode)0x1A4;
+        foreach (var file in Directory.EnumerateFiles(outDir))
+        {
+            Assert.Equal(expectedFileMode, File.GetUnixFileMode(file) & (UnixFileMode)0x1FF);
+        }
+
+        if (runtime is "copilot" or "opencode")
+        {
+            foreach (var directory in Directory.EnumerateDirectories(outDir))
+            {
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(directory) & (UnixFileMode)0x1FF);
+            }
+        }
+    }
+
     [Fact]
     public void Request_RefusesOutDirWithForeignEntry_AndNonEmptyIsolationDirectory()
     {
@@ -647,6 +682,39 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         var (isolatedExit, isolatedOutput) = Route(["review", "cross-runtime", .. RequestArgs("copilot", Path.Combine(root, "clone"), isolated, CopilotModel), "--format", "json"]);
         Assert.Equal(1, isolatedExit);
         Assert.Equal(CrossRuntimeReviewCauses.OutDirNotEmpty, JsonDocument.Parse(isolatedOutput).RootElement.GetProperty("cause").GetString());
+    }
+
+    [Theory]
+    [InlineData("codex")]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Request_LegacyOutDirRefusal_IsByteIdenticalToMergeBase(string runtime)
+    {
+        var outDir = Path.Combine(root, "legacy-foreign-" + runtime);
+        Directory.CreateDirectory(outDir);
+        Directory.CreateDirectory(Path.Combine(outDir, CrossRuntimeReviewFiles.Workspace));
+        var args = RequestArgs(runtime, Path.Combine(root, "clone-" + runtime), outDir);
+
+        var (jsonExit, jsonOutput) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+        Assert.Equal(1, jsonExit);
+        var expectedJson = $$"""
+        {
+          "command": "review cross-runtime request",
+          "outcome": "refused",
+          "cause": "{{CrossRuntimeReviewCauses.OutDirNotEmpty}}",
+          "detail": "--out-dir \u0027{{outDir}}\u0027 contains other entries: workspace.",
+          "fix": "pass a new or empty directory so a stale verdict can never be mixed with this request."
+        }
+        """ + Environment.NewLine;
+        Assert.Equal(expectedJson, jsonOutput);
+
+        var (markdownExit, markdownOutput) = Route(["review", "cross-runtime", .. args, "--format", "markdown"]);
+        Assert.Equal(1, markdownExit);
+        var expectedMarkdown =
+            $"review cross-runtime request: refused ({CrossRuntimeReviewCauses.OutDirNotEmpty})\n"
+            + $"- detail: --out-dir '{outDir}' contains other entries: workspace.\n"
+            + "- fix: pass a new or empty directory so a stale verdict can never be mixed with this request.\n";
+        Assert.Equal(expectedMarkdown, markdownOutput);
     }
 
     [Fact]
@@ -673,6 +741,31 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal(
             $"cross-runtime review must not read operator path '{Path.Combine(root, ".intent-cli", "issues", Unit, "github-body.md")}'.",
             refusal.RootElement.GetProperty("detail").GetString());
+    }
+
+    [Theory]
+    [InlineData("codex")]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Request_LegacyRuntimes_KeepMergeBasePacketReadBehavior(string runtime)
+    {
+        CrossRuntimeReviewHomeAccessGuard.ShouldRefusePath = path =>
+            path.EndsWith("github-body.md", StringComparison.Ordinal);
+        try
+        {
+            var (exit, output) = Route([
+                "review", "cross-runtime",
+                .. RequestArgs(runtime, Path.Combine(root, "clone-" + runtime), Path.Combine(root, "legacy-" + runtime)),
+                "--format", "json",
+            ]);
+
+            Assert.True(exit == 0, output);
+            Assert.Contains("\"outcome\": \"rendered\"", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            CrossRuntimeReviewHomeAccessGuard.ShouldRefusePath = null;
+        }
     }
 
     [Fact]
@@ -1143,6 +1236,21 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         var (exit, output) = Route(["review", "cross-runtime", .. RecordArgs("opencode", file, H1, write: false), "--format", "json"]);
         Assert.Equal(1, exit);
         Assert.Equal(CrossRuntimeReviewCauses.ExitStatusMissing, JsonDocument.Parse(output).RootElement.GetProperty("cause").GetString());
+    }
+
+    [Fact]
+    public void Record_OpencodeExitStatus_IsCheckedBeforeInvalidUtf8Verdict()
+    {
+        var file = WriteVerdictFile("opencode", OpencodeImplementationEnvelope("approve", H1));
+        File.WriteAllBytes(file, [0xff]);
+        File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(file)!, CrossRuntimeReviewFiles.OpencodeExit), "1\n"u8.ToArray());
+
+        var (exit, output) = Route(["review", "cross-runtime", .. RecordArgs("opencode", file, H1, write: false), "--format", "json"]);
+
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.ExitStatusNonzero, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("exactly 0\\n is required", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
     }
 
     // ── record ─────────────────────────────────────────────────────────

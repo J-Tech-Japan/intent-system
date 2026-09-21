@@ -214,9 +214,13 @@ internal static class ReviewCrossRuntimeCommand
         byte[] implementationBytes;
         try
         {
-            CrossRuntimeReviewHomeAccessGuard.GuardPath(body);
-            CrossRuntimeReviewHomeAccessGuard.GuardPath(reviewContext);
-            CrossRuntimeReviewHomeAccessGuard.GuardPath(implementation);
+            if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+            {
+                CrossRuntimeReviewHomeAccessGuard.GuardPath(body);
+                CrossRuntimeReviewHomeAccessGuard.GuardPath(reviewContext);
+                CrossRuntimeReviewHomeAccessGuard.GuardPath(implementation);
+            }
+
             bodyBytes = File.ReadAllBytes(body);
             reviewContextBytes = File.ReadAllBytes(reviewContext);
             implementationBytes = File.ReadAllBytes(implementation);
@@ -359,7 +363,8 @@ internal static class ReviewCrossRuntimeCommand
                 ? Path.Combine(outDir, CrossRuntimeReviewFiles.Workspace)
                 : outDir;
         var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
-        if (TryRefuseProtectedPacketDirectory(writer, format, "request", packetDirectory, out var packetRefusal))
+        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode
+            && TryRefuseProtectedPacketDirectory(writer, format, "request", packetDirectory, out var packetRefusal))
         {
             return packetRefusal;
         }
@@ -754,15 +759,25 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         var verdictFile = ResolvePath(context, verdictFileArgument);
-        byte[] raw;
-        try
+        if (runtime == CrossRuntimeReviewRuntimes.Opencode
+            && !CrossRuntimeReviewJsonlVerdict.TryValidateOpencodeExitStatus(verdictFile, out var exitCause, out var exitDetail))
         {
-            raw = File.ReadAllBytes(verdictFile);
+            return Refuse(writer, format, "record", exitCause, exitDetail,
+                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.");
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+
+        byte[] raw;
+        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(
+                verdictFile,
+                out raw,
+                out var verdictReadFailure,
+                out var verdictReadError))
         {
+            var verdictDetail = verdictReadFailure == CrossRuntimeReviewFileReadFailure.Empty
+                ? $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': verdict-invalid: file is empty."
+                : $"verdict file '{verdictFile}' could not be read: {verdictReadError}";
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
-                $"verdict file '{verdictFile}' could not be read: {exception.Message}",
+                verdictDetail,
                 "pass the file the rendered invocation wrote (verdict.raw.json).");
         }
 
@@ -775,13 +790,6 @@ internal static class ReviewCrossRuntimeCommand
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                 $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.");
-        }
-
-        if (runtime == CrossRuntimeReviewRuntimes.Opencode
-            && !CrossRuntimeReviewJsonlVerdict.TryValidateOpencodeExitStatus(verdictFile, out var exitCause, out var exitDetail))
-        {
-            return Refuse(writer, format, "record", exitCause, exitDetail,
-                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.");
         }
 
         if (!CrossRuntimeReviewVerdict.TryParse(runtime, content, out var verdict, out var observedModel, out var verdictError))
@@ -974,7 +982,8 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
-        if (TryRefuseProtectedPacketDirectory(writer, format, "record", packetDirectory, out var packetRefusal))
+        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode
+            && TryRefuseProtectedPacketDirectory(writer, format, "record", packetDirectory, out var packetRefusal))
         {
             return packetRefusal;
         }
@@ -995,15 +1004,25 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         var verdictFile = ResolvePath(context, verdictFileArgument);
-        byte[] raw;
-        try
+        if (runtime == CrossRuntimeReviewRuntimes.Opencode
+            && !CrossRuntimeReviewJsonlVerdict.TryValidateOpencodeExitStatus(verdictFile, out var exitCause, out var exitDetail))
         {
-            raw = File.ReadAllBytes(verdictFile);
+            return Refuse(writer, format, "record", exitCause, exitDetail,
+                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.");
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+
+        byte[] raw;
+        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(
+                verdictFile,
+                out raw,
+                out var verdictReadFailure,
+                out var verdictReadError))
         {
+            var verdictDetail = verdictReadFailure == CrossRuntimeReviewFileReadFailure.Empty
+                ? $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': verdict-invalid: file is empty."
+                : $"verdict file '{verdictFile}' could not be read: {verdictReadError}";
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
-                $"verdict file '{verdictFile}' could not be read: {exception.Message}",
+                verdictDetail,
                 "pass the file the rendered invocation wrote (verdict.raw.json).");
         }
 
@@ -1016,13 +1035,6 @@ internal static class ReviewCrossRuntimeCommand
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                 $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.");
-        }
-
-        if (runtime == CrossRuntimeReviewRuntimes.Opencode
-            && !CrossRuntimeReviewJsonlVerdict.TryValidateOpencodeExitStatus(verdictFile, out var exitCause, out var exitDetail))
-        {
-            return Refuse(writer, format, "record", exitCause, exitDetail,
-                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.");
         }
 
         if (!CrossRuntimeReviewVerdict.TryParseDesign(runtime, content, out var verdict, out var verdictError))
@@ -1741,7 +1753,7 @@ internal static class ReviewCrossRuntimeCommand
         {
             Refuse(writer, format, subcommand, CrossRuntimeReviewCauses.RuntimeInvalid,
                 $"--runtime '{runtime}' is not supported ({CrossRuntimeReviewRuntimes.Describe()}).",
-                "pass --runtime codex, claude, or cursor.");
+                "pass --runtime codex, claude, cursor, copilot, or opencode.");
             return false;
         }
 

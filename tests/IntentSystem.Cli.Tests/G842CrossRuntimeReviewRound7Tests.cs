@@ -341,7 +341,7 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
     }
 
     [Fact]
-    public async Task Request_RefusesFifoNamedPromptMd_WithoutHanging()
+    public async Task Request_ReplacesFifoNamedPromptMd_WithoutHanging()
     {
         if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
         {
@@ -356,9 +356,8 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         var completed = await Task.WhenAny(routeTask, Task.Delay(RouteTimeout));
         Assert.Same(routeTask, completed);
         var (exit, output) = await routeTask;
-        Assert.Equal(1, exit);
-        Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, JsonDocument.Parse(output).RootElement.GetProperty("cause").GetString());
-        Assert.Contains("not a regular file", output, StringComparison.Ordinal);
+        Assert.Equal(0, exit);
+        Assert.Contains("\"outcome\": \"rendered\"", output, StringComparison.Ordinal);
     }
 
     // ── compaction (R4-2) ───────────────────────────────────────────────
@@ -534,7 +533,7 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
     }
 
     [Fact]
-    public async Task Record_OpencodeExitFifo_RefusesMissingWithoutHanging()
+    public async Task Record_OpencodeExitFifo_RefusesNonzeroWithoutHanging()
     {
         if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
         {
@@ -545,11 +544,11 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         var exitPath = Path.Combine(Path.GetDirectoryName(file)!, CrossRuntimeReviewFiles.OpencodeExit);
         File.Delete(exitPath);
         Assert.Equal(0, mkfifo(exitPath, 384));
-        await AssertExitMissingBoundedAsync(RecordArgs("opencode", file, H1, write: false));
+        await AssertExitNonzeroBoundedAsync(RecordArgs("opencode", file, H1, write: false));
     }
 
     [Fact]
-    public async Task Record_VerdictFifo_BlocksWithinBoundedTime_OutOfScopeOnMergeBase()
+    public async Task Record_VerdictFifo_RefusesInvalidWithinBoundedTime()
     {
         if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
         {
@@ -558,10 +557,14 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
 
         var fifo = Path.Combine(root, "verdict.fifo");
         Assert.Equal(0, mkfifo(fifo, 384));
+        File.WriteAllBytes(Path.Combine(root, CrossRuntimeReviewFiles.OpencodeExit), "0\n"u8.ToArray());
         var routeTask = Task.Run(() => Route([
             "review", "cross-runtime", .. RecordArgs("opencode", fifo, H1, write: false), "--format", "json"]));
         var completed = await Task.WhenAny(routeTask, Task.Delay(RouteTimeout));
-        Assert.NotSame(routeTask, completed);
+        Assert.Same(routeTask, completed);
+        var (exit, output) = await routeTask;
+        Assert.Equal(1, exit);
+        Assert.Equal(CrossRuntimeReviewCauses.VerdictInvalid, JsonDocument.Parse(output).RootElement.GetProperty("cause").GetString());
     }
 
     [Fact]
@@ -1060,6 +1063,16 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         var (exit, output) = await routeTask;
         Assert.Equal(1, exit);
         Assert.Equal(CrossRuntimeReviewCauses.ExitStatusMissing, JsonDocument.Parse(output).RootElement.GetProperty("cause").GetString());
+    }
+
+    private async Task AssertExitNonzeroBoundedAsync(string[] args)
+    {
+        var routeTask = Task.Run(() => Route(["review", "cross-runtime", .. args, "--format", "json"]));
+        var completed = await Task.WhenAny(routeTask, Task.Delay(RouteTimeout));
+        Assert.Same(routeTask, completed);
+        var (exit, output) = await routeTask;
+        Assert.Equal(1, exit);
+        Assert.Equal(CrossRuntimeReviewCauses.ExitStatusNonzero, JsonDocument.Parse(output).RootElement.GetProperty("cause").GetString());
     }
 
     private ScratchHomeScope ScratchHome() => new(this);

@@ -359,12 +359,24 @@ public sealed class G833SoloConductorTests : IDisposable
         Assert.Equal(G842PinnedContractTexts.OpencodeBuilderEnforcement, opencode.Enforcement);
         Assert.Equal(G842PinnedContractTexts.OpencodeBuilderCommand, opencode.Command);
 
+        Assert.Equal(
+            "The task prompt is a file the conductor writes and passes on stdin, except cursor, which takes it as an argument. Any OpenCode command shown without a prompt file carries `< /dev/null`, because with stdin open `opencode run` waits silently (measured), including in the background.",
+            guide.Builder.Contract[1]);
+
         var step3 = guide.Loop.Single(step => step.Number == 3);
         var step7 = guide.Loop.Single(step => step.Number == 7);
         Assert.Contains(step3.Commands, command => command.Command.Contains("<codex|claude|cursor|copilot|opencode>", StringComparison.Ordinal));
         Assert.Contains(step7.Commands, command => command.Command.Contains("<codex|claude|cursor|copilot|opencode>", StringComparison.Ordinal));
         var step6 = guide.Loop.Single(step => step.Number == 6);
         Assert.Contains("Builder invocations", step6.Instruction, StringComparison.Ordinal);
+        Assert.Contains(
+            "`--opencode-provider-config` must name a source outside the workspace and outside every operator-protected root.",
+            step7.Instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "After `record --write` has stored the verdict, the seat deletes the out-dir, or keeps it under a directory only that user can read; intent-cli does not delete it.",
+            step7.Instruction,
+            StringComparison.Ordinal);
     }
 
     [Fact]
