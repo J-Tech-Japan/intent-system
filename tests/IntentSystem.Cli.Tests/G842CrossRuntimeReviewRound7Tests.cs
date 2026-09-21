@@ -341,7 +341,7 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
     }
 
     [Fact]
-    public async Task Request_ReplacesFifoNamedPromptMd_WithoutHanging()
+    public async Task Request_RefusesFifoNamedPromptMd_WithoutHanging()
     {
         if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
         {
@@ -356,8 +356,10 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         var completed = await Task.WhenAny(routeTask, Task.Delay(RouteTimeout));
         Assert.Same(routeTask, completed);
         var (exit, output) = await routeTask;
-        Assert.Equal(0, exit);
-        Assert.Contains("\"outcome\": \"rendered\"", output, StringComparison.Ordinal);
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("not a regular file", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
     }
 
     // ── compaction (R4-2) ───────────────────────────────────────────────

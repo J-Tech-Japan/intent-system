@@ -24,12 +24,29 @@ internal static class CrossRuntimeReviewFileMode
     internal static bool IsDirectory(string path) =>
         TryGetFileSystemInfo(path, out var info) && IsDirectory(info);
 
-    internal static bool IsRegularFile(string path) =>
-        TryGetFileSystemInfo(path, out var info)
-        && info.Exists
-        && info is FileInfo
-        && !IsSymlink(info)
-        && !IsDirectory(info);
+    internal static bool IsRegularFile(string path)
+    {
+        if (!TryGetFileSystemInfo(path, out var info)
+            || !info.Exists
+            || info is not FileInfo fileInfo
+            || IsSymlink(info)
+            || IsDirectory(info))
+        {
+            return false;
+        }
+
+        // Managed metadata reports a FIFO like an empty regular file on the
+        // supported Unix hosts. Treat both as unsafe for a pre-existing
+        // rendered entry without opening the path.
+        try
+        {
+            return fileInfo.Length > 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     internal static bool TryReadRegularFileBytes(
         string path,

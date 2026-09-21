@@ -717,6 +717,32 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal(expectedMarkdown, markdownOutput);
     }
 
+    [Theory]
+    [InlineData("codex")]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void Request_LegacyRuntimes_FollowMergeBaseThroughRenderedSymlink(string runtime)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var outDir = Path.Combine(root, "legacy-symlink-" + runtime);
+        Directory.CreateDirectory(outDir);
+        var target = Path.Combine(root, "legacy-symlink-target-" + runtime + ".md");
+        File.WriteAllText(target, "merge-base-target");
+        var rendered = Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt);
+        File.CreateSymbolicLink(rendered, target);
+
+        var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs(runtime, Path.Combine(root, "clone-" + runtime), outDir), "--format", "json"]);
+
+        Assert.True(exit == 0, output);
+        Assert.Contains("\"outcome\": \"rendered\"", output, StringComparison.Ordinal);
+        Assert.Equal(target, new FileInfo(rendered).LinkTarget);
+        Assert.NotEqual("merge-base-target", File.ReadAllText(target));
+    }
+
     [Fact]
     public void Request_ReRenderToSameOutDir_IsRefusedWhenForeignEntryPresent()
     {

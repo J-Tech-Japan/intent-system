@@ -28,7 +28,9 @@ internal static class CrossRuntimeReviewHomeAccessGuard
         }
 
         var normalized = ResolvePath(path);
-        return EnumerateProtectedHomes().Any(root => PathsOverlap(normalized, ResolvePath(root)));
+        return EnumerateProtectedHomes().Any(root =>
+            PathsOverlap(normalized, ResolvePath(root))
+            || LexicalPathsOverlap(path, root));
     }
 
     public static void GuardPath(string path)
@@ -83,6 +85,12 @@ internal static class CrossRuntimeReviewHomeAccessGuard
                     detail = $"planned path '{resolvedPath}' overlaps protected home '{resolvedRoot}'.";
                     return true;
                 }
+
+                if (LexicalPathsOverlap(path, root))
+                {
+                    detail = $"planned path '{resolvedPath}' overlaps protected home '{resolvedRoot}'.";
+                    return true;
+                }
             }
 
             if (PathsOverlap(resolvedWorkspace, resolvedRoot))
@@ -90,9 +98,21 @@ internal static class CrossRuntimeReviewHomeAccessGuard
                 detail = $"review workspace '{resolvedWorkspace}' overlaps protected home '{resolvedRoot}'.";
                 return true;
             }
+
+            if (LexicalPathsOverlap(workspace, root))
+            {
+                detail = $"review workspace '{resolvedWorkspace}' overlaps protected home '{resolvedRoot}'.";
+                return true;
+            }
         }
 
         if (hasClone && PathsOverlap(resolvedWorkspace, resolvedOutDir))
+        {
+            detail = $"review workspace '{resolvedWorkspace}' overlaps out-dir '{resolvedOutDir}'.";
+            return true;
+        }
+
+        if (hasClone && LexicalPathsOverlap(workspace, outDir))
         {
             detail = $"review workspace '{resolvedWorkspace}' overlaps out-dir '{resolvedOutDir}'.";
             return true;
@@ -109,6 +129,12 @@ internal static class CrossRuntimeReviewHomeAccessGuard
             }
 
             if (PathsOverlap(resolvedPath, resolvedWorkspace))
+            {
+                detail = $"planned path '{resolvedPath}' overlaps review workspace '{resolvedWorkspace}'.";
+                return true;
+            }
+
+            if (LexicalPathsOverlap(path, workspace))
             {
                 detail = $"planned path '{resolvedPath}' overlaps review workspace '{resolvedWorkspace}'.";
                 return true;
@@ -164,24 +190,24 @@ internal static class CrossRuntimeReviewHomeAccessGuard
             return true;
         }
 
+        if (LexicalPathsOverlap(path, workspace))
+        {
+            detail = $"opencode provider config source '{path}' resolves inside the review workspace.";
+            return true;
+        }
+
         return false;
     }
 
-    // Kept for the existing request-writer seam. The protected-root and
-    // workspace checks are intentionally limited to the two new runtimes;
-    // the older runtimes retain their generic planned-path safety checks.
+    // Kept for the existing request-writer seam. The planned-path checks are
+    // the section 3a protections for the two new runtimes only; legacy
+    // runtimes must retain their merge-base behavior.
     public static bool TryRefusePlannedPaths(string outDir, string runtime, out string detail)
     {
-        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+        if (runtime is not (CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode))
         {
-            return TryRefuseRequestPaths(
-                outDir,
-                runtime,
-                CrossRuntimeReviewRecord.KindImplementation,
-                true,
-                outDir,
-                null,
-                out detail);
+            detail = string.Empty;
+            return false;
         }
 
         detail = string.Empty;
@@ -458,6 +484,9 @@ internal static class CrossRuntimeReviewHomeAccessGuard
 
     private static bool PathsOverlap(string left, string right) =>
         PathEquals(left, right) || IsInside(left, right) || IsInside(right, left);
+
+    private static bool LexicalPathsOverlap(string left, string right) =>
+        PathsOverlap(Path.GetFullPath(left), Path.GetFullPath(right));
 
     private static bool IsInsideOrEqual(string path, string root) =>
         PathEquals(path, root) || IsInside(path, root);
