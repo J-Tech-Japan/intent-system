@@ -240,6 +240,30 @@ The contract hedge is: **65,536 is intent-cli's own conservative limit on the
 submitted body content; GitHub's boundary, inclusivity, unit and treatment of
 a JSON payload were not verified.**
 
+## Early issue-body size reporting and refusal (G846)
+
+The issue-body workflow counts the raw bytes in `github-body.md`, including a
+UTF-8 BOM when one is present; it does not count decoded characters. The shared
+`IssueBodySizeLimits` values are `HardLimitBytes = 65536` and
+`WarningThresholdBytes = 58000`. The warning band is inclusive from 58,000
+through 65,536 bytes. A body over 65,536 bytes is refused by the local
+create-path gates.
+
+**58,000 is a budget choice: the self-imposed drafting budget held by hand since 2026-09-16, not a GitHub limit.**
+
+`issue validate-body` reports `body_bytes`, `body_too_large`,
+`body_size_warning`, and `body_size_reason`. `packet draft` always reports a
+top-level `warnings` array, refuses an oversized body in both default and
+`--dry-run` modes with `issue-body-too-large`, and preserves its scaffolding.
+`issue publish-flow` refuses an oversized unpublished create before creator or
+durable writes, but an already-published body remains idempotent and reports
+`issue-body-too-large` as its size warning. `issue sync-body` reports
+`warnings` and refuses locally before any remote read with `reason_code:
+body-too-large`. The warning literal `issue-body-size-warning` is retained in
+all four command surfaces.
+
+**65,536 is intent-cli's own conservative limit. GitHub's boundary, inclusivity and unit were not verified. The only remote datum is the roughly 96,000-character failure reported on 2026-09-16.**
+
 ## Alternative: timer-loop setup
 
 Use [Implementation loop setup](05-implementation-loop.md) and then

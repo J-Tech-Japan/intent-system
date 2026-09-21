@@ -1,0 +1,9 @@
+exit_code=0
+{
+  "classification": "clean",
+  "summary": "No dirty durable-state paths are present; durable-state preflight is clean (G312).",
+  "verified_paths": [],
+  "review_paths": [],
+  "unsafe_paths": [],
+  "recommended_commit_message": null
+}

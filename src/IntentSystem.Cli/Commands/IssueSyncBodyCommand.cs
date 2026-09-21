@@ -98,6 +98,24 @@ internal static class IssueSyncBodyCommand
         }
 
         var localBytes = File.ReadAllBytes(bodyPath);
+        var localSizeBand = IssueBodySizeLimits.GetBand(localBytes.Length);
+        var localWarnings = localSizeBand == IssueBodySizeBand.Warning
+            ? new[] { "issue-body-size-warning" }
+            : Array.Empty<string>();
+        result = result with { Warnings = localWarnings };
+        if (localSizeBand == IssueBodySizeBand.OverLimit)
+        {
+            var oversizedLocalSha = IssuePrepareCommand.ComputeSha256Hex(localBytes);
+            return Emit(writer, format, Refuse(
+                result with
+                {
+                    LocalSha256 = oversizedLocalSha,
+                    LocalBytes = localBytes.Length,
+                },
+                "body-too-large",
+                $"github-body.md is {localBytes.Length} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit."));
+        }
+
         var localBody = Encoding.UTF8.GetString(localBytes);
         var validation = IssueValidateBodyValidator.Validate(bodyPath, localBody, requireTargetPathsDeclaration: true);
         if (!validation.IsValid)
@@ -402,6 +420,11 @@ internal static class IssueSyncBodyCommand
                 writer.WriteLine($"- read before retrying: `{result.RecoveryCommand}`");
             }
             writer.WriteLine($"- guarantee: {result.ConcurrencyGuarantee} — a concurrent edit between the read and the write cannot be excluded.");
+            writer.WriteLine("- warnings:");
+            foreach (var warning in result.Warnings)
+            {
+                writer.WriteLine($"  - {warning}");
+            }
             writer.WriteLine();
             writer.WriteLine(result.Summary);
         }
@@ -525,6 +548,7 @@ internal sealed record IssueSyncBodyResult
     [JsonPropertyName("concurrency_guarantee")] public required string ConcurrencyGuarantee { get; init; }
     [JsonPropertyName("runs_event")] public string? RunsEvent { get; init; }
     [JsonPropertyName("summary")] public string Summary { get; init; } = string.Empty;
+    [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
     [JsonIgnore] public int ExitCode { get; init; }
 }
 

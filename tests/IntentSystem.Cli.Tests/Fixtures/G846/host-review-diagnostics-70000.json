@@ -1,0 +1,20 @@
+exit_code=0
+{
+  "repo": "J-Tech-Japan/intent-system",
+  "classification": "true-idle",
+  "summary": "No host review PR, no in-flight intent-target item, and no next-slice candidate. The host loop is correctly idle.",
+  "read_only": true,
+  "readOnly": true,
+  "recommended_next_command": null,
+  "recommendedNextCommand": null,
+  "structured_clarification": null,
+  "structuredClarification": null,
+  "details": [],
+  "warnings": [],
+  "safe_repair_available": false,
+  "safeRepairAvailable": false,
+  "safe_repair_category": null,
+  "safeRepairCategory": null,
+  "missing_contract_sections": [],
+  "missingContractSections": []
+}

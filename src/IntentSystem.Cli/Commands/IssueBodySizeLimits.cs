@@ -15,6 +15,11 @@ internal enum IssueBodySizeBand
 internal static class IssueBodySizeLimits
 {
     internal const int HardLimitBytes = 65_536;
+
+    /// <summary>
+    /// 58,000 is a budget choice: the self-imposed drafting budget held by hand
+    /// since 2026-09-16, not a GitHub limit.
+    /// </summary>
     internal const int WarningThresholdBytes = 58_000;
 
     internal static IssueBodySizeBand GetBand(int bodyBytes)

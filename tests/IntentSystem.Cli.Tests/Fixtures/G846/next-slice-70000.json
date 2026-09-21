@@ -1,0 +1,32 @@
+exit_code=0
+{
+  "domain": "intent-cli",
+  "target_repo": "J-Tech-Japan/intent-system",
+  "dry_run": true,
+  "queue_state_path": "{{G846_ROOT}}/.intent-cli/runtime/intent-cli/J-Tech-Japan__intent-system/queue-state.json",
+  "queue_state_present": false,
+  "wip": [],
+  "clarification_path": "{{G846_ROOT}}/intents/intent-cli/clarifications/open.md",
+  "clarification_file_present": false,
+  "clarification_open": false,
+  "stale_clarification_metadata": false,
+  "packet_root": "{{G846_ROOT}}/.intent-cli/issues",
+  "candidate": {
+    "execution_unit": "G846",
+    "packet_directory": "{{G846_ROOT}}/.intent-cli/issues/G846",
+    "github_body_present": true,
+    "missing_contract_sections": [],
+    "publish_gate_ready": true,
+    "provenance": {
+      "created_by_role": "design",
+      "provenance_source": "default-design"
+    }
+  },
+  "recommended_outcome": "issue-cut-ready",
+  "runtime_creation_allowed": false,
+  "state_layout": "scoped",
+  "warnings": [],
+  "notes": [
+    "no queue-state file at {{G846_ROOT}}/.intent-cli/runtime/intent-cli/J-Tech-Japan__intent-system/queue-state.json"
+  ]
+}
