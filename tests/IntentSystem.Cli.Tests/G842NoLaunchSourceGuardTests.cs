@@ -7,12 +7,11 @@ namespace IntentSystem.Cli.Tests;
 /// <summary>
 /// G842: textual no-launch source guard using pinned allow-list, declared-type,
 /// surface-reference, and repository-wide type-reference fixtures.
-/// The current merge-base is cbe54759: the allow-list is byte-equivalent to
-/// the ba496314 table, the declared-type fixture grows from 556 to 558 names
-/// (558 fixture rows), and the type-reference table drops the stale
-/// CrossRuntimeReviewFileMode branch row. The base .cs path table grows from
-/// 695 to 700 paths. The new wait-clock rows are INotifyRoleCollectWaitClock
-/// and StopwatchNotifyRoleCollectWaitClock.
+/// The current merge-base is a24cf8ab: the allow-list, declared-type, and
+/// surface-reference tables are unchanged from cbe54759. The base .cs path
+/// table grows from 700 to 703 paths with the G846/G845 issue-body files, and
+/// the type-reference table adds IssueBodyFileStager Options plus two
+/// IssueSyncBodyResult references from G845.
 /// Drift from c66f4936 fixture to 3da9e7a1 (G841):
 ///   IssuePublishFlowCommand CrossRuntimeDesignReviewField 16→19;
 ///   PreparedPacketCommitReadyAnalyzer MetadataValidateAnalyzer 2→0;
@@ -254,13 +253,13 @@ public sealed class G842NoLaunchSourceGuardTests
         || !ReadBaseCsPaths().Contains(relativePath);
 
     private static HashSet<string> ReadBaseCsPaths() =>
-        File.ReadAllLines(FixturePath("no-launch-base-cs-paths-cbe54759.txt"))
+        File.ReadAllLines(FixturePath("no-launch-base-cs-paths-a24cf8ab.txt"))
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToHashSet(StringComparer.Ordinal);
 
     private static IEnumerable<(string Path, string Token, int Count)> ReadAllowListFixture() =>
-        File.ReadAllLines(FixturePath("no-launch-allowlist-cbe54759.tsv"))
+        File.ReadAllLines(FixturePath("no-launch-allowlist-a24cf8ab.tsv"))
             .Skip(1)
             .Select(line => line.Split('\t'))
             .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));
@@ -269,19 +268,19 @@ public sealed class G842NoLaunchSourceGuardTests
         ReadAllowListFixture().ToDictionary(entry => (entry.Path, entry.Token), entry => entry.Count);
 
     private static IEnumerable<(string Path, string Identifier, int Count)> ReadTypeRefFixture() =>
-        File.ReadAllLines(FixturePath("no-launch-type-refs-cbe54759.tsv"))
+        File.ReadAllLines(FixturePath("no-launch-type-refs-a24cf8ab.tsv"))
             .Skip(1)
             .Select(line => line.Split('\t'))
             .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));
 
     private static IEnumerable<(string Identifier, string Path)> ReadDeclaredTypeFixture() =>
-        File.ReadAllLines(FixturePath("no-launch-declared-types-cbe54759.tsv"))
+        File.ReadAllLines(FixturePath("no-launch-declared-types-a24cf8ab.tsv"))
             .Where(line => line.Length > 0)
             .Select(line => line.Split('\t'))
             .Select(parts => (parts[0], parts[1]));
 
     private static IEnumerable<(string Path, string Identifier, int Count)> ReadSurfaceRefFixture() =>
-        File.ReadAllLines(FixturePath("no-launch-surface-refs-cbe54759.tsv"))
+        File.ReadAllLines(FixturePath("no-launch-surface-refs-a24cf8ab.tsv"))
             .Skip(1)
             .Select(line => line.Split('\t'))
             .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));

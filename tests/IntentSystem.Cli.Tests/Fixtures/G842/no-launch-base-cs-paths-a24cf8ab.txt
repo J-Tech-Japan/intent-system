@@ -292,7 +292,10 @@ src/IntentSystem.Cli/Commands/InterviewResumeResult.cs
 src/IntentSystem.Cli/Commands/InterviewSessionStore.cs
 src/IntentSystem.Cli/Commands/InterviewStartCommand.cs
 src/IntentSystem.Cli/Commands/InterviewStartRenderer.cs
+src/IntentSystem.Cli/Commands/IssueBodyFileStager.cs
 src/IntentSystem.Cli/Commands/IssueBodySizeLimits.cs
+src/IntentSystem.Cli/Commands/IssueBodyTextDecoder.cs
+src/IntentSystem.Cli/Commands/IssueBodyTransmissionGate.cs
 src/IntentSystem.Cli/Commands/IssueContractAmbiguityAnalyzer.cs
 src/IntentSystem.Cli/Commands/IssueCreateCommand.cs
 src/IntentSystem.Cli/Commands/IssueDraftCommand.cs

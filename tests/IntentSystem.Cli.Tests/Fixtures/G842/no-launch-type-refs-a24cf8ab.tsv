@@ -692,6 +692,7 @@ src/IntentSystem.Cli/Commands/IntentNextSliceCommand.cs	ClaimOwnershipVerificati
 src/IntentSystem.Cli/Commands/IntentNextSliceCommand.cs	ClaimOwnershipVerifier	2
 src/IntentSystem.Cli/Commands/IntentTargetGapAnalyzer.cs	Labels	3
 src/IntentSystem.Cli/Commands/InterviewReadinessAnalyzer.cs	Classifications	8
+src/IntentSystem.Cli/Commands/IssueBodyFileStager.cs	Options	1
 src/IntentSystem.Cli/Commands/IssueCreateCommand.cs	GhQueueDispatchPublisher	1
 src/IntentSystem.Cli/Commands/IssueCreateCommand.cs	GitHubRepositoryTargetResolver	1
 src/IntentSystem.Cli/Commands/IssueCreateCommand.cs	GitRemoteCommandRunner	1
@@ -736,7 +737,7 @@ src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	AutomationPublishLifecycle
 src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	GhCliGitHubIssueBodyClient	2
 src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	IGitHubIssueBodyClient	3
 src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	IssueSyncBodyCommand	2
-src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	IssueSyncBodyResult	7
+src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	IssueSyncBodyResult	9
 src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	ProcessOutputEncoding	2
 src/IntentSystem.Cli/Commands/KnowledgeWriteBackRecord.cs	Targets	3
 src/IntentSystem.Cli/Commands/MetadataUpdateCommand.cs	MetadataUpdateCommand	1
