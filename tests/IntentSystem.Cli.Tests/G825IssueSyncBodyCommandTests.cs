@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
@@ -146,6 +147,51 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
         Assert.Equal(0, client.Updates);
         Assert.Equal(runsBefore, RunsBytes());
     }
+
+    [Theory]
+    [MemberData(nameof(G845DryRunPublishedFixtureCases))]
+    public void G845_Point7_DryRunPublishedFixturesMatchMergeBaseGoldens(
+        string fixtureName,
+        bool malformed,
+        bool matchingRemote,
+        string expectedOutcome,
+        int expectedExit)
+    {
+        var localBytes = malformed
+            ? G845BodyFixtures.InvalidOrdinaryTextBytes(50_003)
+            : G845BodyFixtures.ValidBytes(70_000);
+        var remote = matchingRemote ? Encoding.UTF8.GetString(localBytes) : "remote";
+        PublishBytes(localBytes);
+        Install(new FakeBodyClient(remote));
+
+        var result = Run(write: false);
+
+        Assert.Equal(expectedExit, result.Exit);
+        Assert.Equal(expectedOutcome, result.Json.GetProperty("outcome").GetString());
+
+        var goldenPath = Path.Combine(
+            RepoVersionPolicySource.RepoRoot(),
+            "tests",
+            "IntentSystem.Cli.Tests",
+            "Fixtures",
+            "G845",
+            $"sync-body-dry-run-{fixtureName}.json");
+        Assert.True(File.Exists(goldenPath), $"Missing G845 golden: {goldenPath}");
+
+        var actual = $"exit_code={result.Exit}\n{result.Text}";
+        var expected = File.ReadAllText(goldenPath);
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(NormalizeMergeBaseOutput(expected, root)),
+            Encoding.UTF8.GetBytes(NormalizeMergeBaseOutput(actual, root)));
+    }
+
+    public static IEnumerable<object[]> G845DryRunPublishedFixtureCases() =>
+    [
+        ["malformed-differing", true, false, "differs", 0],
+        ["malformed-matching", true, true, "no-op", 0],
+        ["70000-differing", false, false, "refused", 1],
+        ["70000-matching", false, true, "refused", 1],
+    ];
 
     // ── write ──────────────────────────────────────────────────────────────
 
@@ -578,6 +624,21 @@ public sealed class G825IssueSyncBodyCommandTests : IDisposable
     }
 
     private static string Sha(string text) => IssuePrepareCommand.ComputeSha256Hex(Encoding.UTF8.GetBytes(text));
+
+    private static string NormalizeMergeBaseOutput(string output, string workspaceRoot)
+    {
+        var normalized = output.Replace(workspaceRoot, "{{G845_TEMP_ROOT}}", StringComparison.Ordinal);
+        var forwardSlashRoot = workspaceRoot.Replace('\\', '/');
+        if (!string.Equals(workspaceRoot, forwardSlashRoot, StringComparison.Ordinal))
+        {
+            normalized = normalized.Replace(forwardSlashRoot, "{{G845_TEMP_ROOT}}", StringComparison.Ordinal);
+        }
+
+        return Regex.Replace(
+            normalized,
+            "(?<prefix>\\\"(?:ts|timestamp)\\\"\\s*:\\s*\\\")[^\\\"]*(?<suffix>\\\")",
+            "${prefix}{{G845_TIMESTAMP}}${suffix}");
+    }
 
     private readonly record struct RunResult(int Exit, JsonElement Json, string Text);
 
