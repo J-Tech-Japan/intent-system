@@ -418,34 +418,83 @@ public sealed class G845TransmissionPrimitiveTests
     {
         var bytes = G845BodyFixtures.ValidBytes(50_003);
         var calls = 0;
+        var stagedDirectories = new List<string>();
+        string? failedDirectoryPath = null;
         string? failedWritePath = null;
+        string? failedModeDirectoryPath = null;
+        string? failedModePath = null;
+        var modeFileExistedBeforeFailure = false;
         try
         {
-            IssueBodyFileStager.DirectoryCreateOverride = _ => throw new IOException("directory failure");
+            IssueBodyFileStager.DirectoryCreateOverride = path =>
+            {
+                failedDirectoryPath = path;
+                stagedDirectories.Add(path);
+                throw new IOException("directory failure");
+            };
             var directoryError = Assert.Throws<IssueBodyStagingException>(() => IssueBodyFileStager.Stage(bytes));
             Assert.Equal("directory failure", directoryError.Message);
+            Assert.NotNull(failedDirectoryPath);
+            Assert.False(File.Exists(Path.Combine(failedDirectoryPath!, "body.md")));
+            Assert.False(Directory.Exists(failedDirectoryPath!));
 
             IssueBodyFileStager.DirectoryCreateOverride = null;
             IssueBodyFileStager.FileWriteOverride = (path, _) =>
             {
                 failedWritePath = path;
+                stagedDirectories.Add(Path.GetDirectoryName(path)!);
                 throw new IOException("write failure");
             };
             var writeError = Assert.Throws<IssueBodyStagingException>(() => IssueBodyFileStager.Stage(bytes));
             Assert.Equal("write failure", writeError.Message);
             Assert.NotNull(failedWritePath);
+            Assert.False(File.Exists(failedWritePath!));
             Assert.False(Directory.Exists(Path.GetDirectoryName(failedWritePath!)!));
 
             IssueBodyFileStager.FileWriteOverride = null;
+            IssueBodyFileStager.DirectoryCreatedObserver = path =>
+            {
+                failedModeDirectoryPath = path;
+                stagedDirectories.Add(path);
+            };
+            IssueBodyFileStager.FileCreatedObserver = path =>
+            {
+                failedModePath = path;
+                modeFileExistedBeforeFailure = File.Exists(path);
+            };
+            IssueBodyFileStager.DirectoryDeleteOverride = path =>
+            {
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+
+                throw new IOException("cleanup failure");
+            };
             IssueBodyFileStager.FileModeOverride = _ => throw new IOException("mode failure");
             var modeError = Assert.Throws<IssueBodyStagingException>(() => IssueBodyFileStager.Stage(bytes));
             Assert.Equal("mode failure", modeError.Message);
+            Assert.Equal("mode failure", modeError.InnerException?.Message);
+            Assert.IsType<IOException>(modeError.InnerException);
+            Assert.True(modeFileExistedBeforeFailure);
+            Assert.NotNull(failedModeDirectoryPath);
+            Assert.NotNull(failedModePath);
+            Assert.Equal(failedModeDirectoryPath, Path.GetDirectoryName(failedModePath!));
+            Assert.False(File.Exists(failedModePath!));
+            Assert.False(Directory.Exists(failedModeDirectoryPath!));
         }
         finally
         {
             IssueBodyFileStager.DirectoryCreateOverride = null;
+            IssueBodyFileStager.DirectoryCreatedObserver = null;
             IssueBodyFileStager.FileWriteOverride = null;
+            IssueBodyFileStager.FileCreatedObserver = null;
             IssueBodyFileStager.FileModeOverride = null;
+            IssueBodyFileStager.DirectoryDeleteOverride = null;
+            foreach (var directory in stagedDirectories)
+            {
+                IssueBodyFileStager.TryDeleteOwnedDirectory(directory);
+            }
         }
 
         Assert.Equal(0, calls);
