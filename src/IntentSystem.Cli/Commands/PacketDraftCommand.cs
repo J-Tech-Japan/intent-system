@@ -206,6 +206,7 @@ internal static class PacketDraftCommand
                 MissingContractSections = Array.Empty<string>(),
                 RefusalReasons = [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
                 RecommendedActions = Array.Empty<string>(),
+                Warnings = Array.Empty<string>(),
                 ContractPublishable = false,
             };
         }
@@ -312,10 +313,12 @@ internal static class PacketDraftCommand
                 MissingContractSections = Array.Empty<string>(),
                 RefusalReasons = [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
                 RecommendedActions = Array.Empty<string>(),
+                Warnings = Array.Empty<string>(),
                 ContractPublishable = false,
             };
         }
 
+        var refusalReasons = readiness.RefusalReasons.ToList();
         IReadOnlyList<string> recommendedActions = readiness.RecommendedActions;
         if (readiness.Classification != PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady)
         {
@@ -323,6 +326,26 @@ internal static class PacketDraftCommand
                 + (string.IsNullOrWhiteSpace(targetRepo) ? string.Empty : $" --target-repo {targetRepo}")
                 + " --dry-run --format json";
             recommendedActions = [.. recommendedActions, $"After repairing every reported item, re-run `{rerun}` and proceed only when `contract_publishable` is true."];
+        }
+
+        var warnings = new List<string>();
+        var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
+        var githubBodyBytes = File.Exists(githubBodyPath)
+            ? File.ReadAllBytes(githubBodyPath).Length
+            : 0;
+        var sizeBand = IssueBodySizeLimits.GetBand(githubBodyBytes);
+        if (sizeBand == IssueBodySizeBand.OverLimit)
+        {
+            refusalReasons.Add("issue-body-too-large");
+            recommendedActions =
+            [
+                .. recommendedActions,
+                $"Resolve issue-body-too-large: github-body.md is {githubBodyBytes} bytes; the limit is {IssueBodySizeLimits.HardLimitBytes} bytes."
+            ];
+        }
+        else if (sizeBand == IssueBodySizeBand.Warning)
+        {
+            warnings.Add("issue-body-size-warning");
         }
 
         return new PacketDraftResult
@@ -335,9 +358,11 @@ internal static class PacketDraftCommand
             Files = files,
             MissingCanonicalFiles = readiness.MissingFiles,
             MissingContractSections = readiness.MissingContractSections,
-            RefusalReasons = readiness.RefusalReasons,
+            RefusalReasons = refusalReasons,
             RecommendedActions = recommendedActions,
-            ContractPublishable = readiness.Classification == PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady,
+            Warnings = warnings,
+            ContractPublishable = readiness.Classification == PreparedPacketCommitReadyAnalyzer.ClassificationCommitReady
+                && sizeBand != IssueBodySizeBand.OverLimit,
             BranchLane = laneSelection?.Snapshot.LaneId,
             BranchLaneSource = laneSelection?.Source,
             RoutingSnapshot = laneSelection?.Snapshot,
@@ -945,6 +970,12 @@ internal static class PacketDraftCommand
                 writer.WriteLine($"- {action}");
             }
         }
+        writer.WriteLine();
+        writer.WriteLine("- warnings:");
+        foreach (var warning in result.Warnings)
+        {
+            writer.WriteLine($"  - {warning}");
+        }
     }
 
     private static bool TryParseArguments(
@@ -1111,6 +1142,9 @@ internal sealed record PacketDraftResult
 
     [JsonPropertyName("recommended_actions")]
     public required IReadOnlyList<string> RecommendedActions { get; init; }
+
+    [JsonPropertyName("warnings")]
+    public required IReadOnlyList<string> Warnings { get; init; }
 
     /// <summary>
     /// G587: true only when the same complete packet readiness analyzer used by

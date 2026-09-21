@@ -228,6 +228,28 @@ contract の hedge は次のとおりです: **65,536 is intent-cli's own
 conservative limit on the submitted body content; GitHub's boundary,
 inclusivity, unit and treatment of a JSON payload were not verified.**
 
+## early issue-body size の reporting と refusal (G846)
+
+issue-body workflow は `github-body.md` 自体の raw bytes を数えます。UTF-8
+BOM も bytes に含め、decoded characters は数えません。共有する
+`IssueBodySizeLimits` は `HardLimitBytes = 65536` と
+`WarningThresholdBytes = 58000` です。warning band は 58,000 から 65,536
+bytes まで inclusive で、65,536 bytes を超える body は local create-path
+gate が拒否します。
+
+`issue validate-body` は `body_bytes`、`body_too_large`、
+`body_size_warning`、`body_size_reason` を返します。`packet draft` は常に
+top-level `warnings` array を返し、default と `--dry-run` の両方で
+`issue-body-too-large` を理由に拒否しますが scaffolding は保持します。
+`issue publish-flow` は unpublished create の oversized body を creator または
+durable write の前に拒否します。already-published body は idempotent に扱い、
+size warning として `issue-body-too-large` を返します。`issue sync-body` は
+`warnings` を返し remote read の前に `reason_code: body-too-large` で拒否します。
+4 つすべての command surface で warning literal `issue-body-size-warning` を
+保持します。
+
+**65,536 is intent-cli's own conservative limit. GitHub's boundary, inclusivity and unit were not verified. The only remote datum is the roughly 96,000-character failure reported on 2026-09-16.**
+
 ## 代替: timer-loop のセットアップ
 
 timer-loop の alternative を選ぶときだけ、[実装ループの設定](05-implementation-loop.md)、続けて

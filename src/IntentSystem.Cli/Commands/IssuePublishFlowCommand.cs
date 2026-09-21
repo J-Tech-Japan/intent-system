@@ -207,7 +207,9 @@ internal static class IssuePublishFlowCommand
         }
 
         var githubBodyPresent = File.Exists(githubBodyPath);
-        var githubBody = githubBodyPresent ? File.ReadAllText(githubBodyPath) : null;
+        var githubBodyBytes = githubBodyPresent ? File.ReadAllBytes(githubBodyPath) : null;
+        var githubBody = githubBodyBytes is null ? null : DecodePacketText(githubBodyBytes);
+        var githubBodySize = githubBodyBytes?.Length;
         // G670: this is the exact publish-gate readiness judgment consumed by
         // next-slice and stalled-work. Keep the validator and its named cause
         // in one shared result so no consumer can drift into a parallel
@@ -429,6 +431,31 @@ internal static class IssuePublishFlowCommand
 
         if (!write)
         {
+            if (!analysis.HasExistingIssue && githubBodySize is { } dryRunBodyBytes
+                && IssueBodySizeLimits.GetBand(dryRunBodyBytes) == IssueBodySizeBand.OverLimit)
+            {
+                var sizeRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                    packetExists: true,
+                    githubBodyPresent: true,
+                    missingSections: Array.Empty<string>(),
+                    title: title,
+                    created: false,
+                    idempotent: false,
+                    durableStateSynced: false,
+                    issueUrl: null,
+                    issueNumber: null,
+                    queueStatePatched: false,
+                    publishYamlPatched: false,
+                    runsAppended: false,
+                    error: ComposeBodyTooLargeDetail(dryRunBodyBytes),
+                    titleSource: titleSource,
+                    cause: "issue-body-too-large",
+                    authorization: authorization,
+                    crossRuntimeDesignReview: dryRunDesignReview);
+                EmitResult(writer, sizeRefusal, format);
+                return 1;
+            }
+
             // Dry-run: PLAN only, never write. When the analyzer finds an
             // existing issue, report the idempotent-rerun plan (canonical
             // identity plus any artifacts that would be restored) purely
@@ -721,6 +748,30 @@ internal static class IssuePublishFlowCommand
                 githubSourcedAnalysis,
                 context,
                 authorization);
+        }
+
+        if (githubBodySize is { } writeBodyBytes
+            && IssueBodySizeLimits.GetBand(writeBodyBytes) == IssueBodySizeBand.OverLimit)
+        {
+            var sizeRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                packetExists: true,
+                githubBodyPresent: true,
+                missingSections: Array.Empty<string>(),
+                title: title,
+                created: false,
+                idempotent: false,
+                durableStateSynced: false,
+                issueUrl: null,
+                issueNumber: null,
+                queueStatePatched: false,
+                publishYamlPatched: false,
+                runsAppended: false,
+                error: ComposeBodyTooLargeDetail(writeBodyBytes),
+                titleSource: titleSource,
+                cause: "issue-body-too-large",
+                authorization: authorization);
+            EmitResult(writer, sizeRefusal, format);
+            return 1;
         }
 
         if (isGatedRepo)
@@ -1464,6 +1515,34 @@ internal static class IssuePublishFlowCommand
         return true;
     }
 
+    private static string ComposeBodyTooLargeDetail(int bodyBytes) =>
+        $"issue-body-too-large: github-body.md is {bodyBytes} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit.";
+
+    private static IReadOnlyList<string> BodySizeWarnings(string githubBodyPath, bool idempotent)
+    {
+        if (!File.Exists(githubBodyPath))
+        {
+            return Array.Empty<string>();
+        }
+
+        int bodyBytes;
+        try
+        {
+            bodyBytes = File.ReadAllBytes(githubBodyPath).Length;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+
+        return IssueBodySizeLimits.GetBand(bodyBytes) switch
+        {
+            IssueBodySizeBand.Warning => ["issue-body-size-warning"],
+            IssueBodySizeBand.OverLimit when idempotent => ["issue-body-too-large"],
+            _ => Array.Empty<string>(),
+        };
+    }
+
     private static IssuePublishFlowResult NewResult(
         string executionUnit,
         string domain,
@@ -1554,6 +1633,7 @@ internal static class IssuePublishFlowCommand
                     ? new[] { "title-fallback" }
                     : Array.Empty<string>())
                 .Concat(extraWarnings ?? Array.Empty<string>())
+                .Concat(BodySizeWarnings(githubBodyPath, idempotent))
                 .ToArray(),
             WouldRestore = wouldRestore,
             Error = error,

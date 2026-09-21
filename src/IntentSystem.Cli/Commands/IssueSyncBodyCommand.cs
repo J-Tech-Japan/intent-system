@@ -99,6 +99,15 @@ internal static class IssueSyncBodyCommand
 
         var localBytes = File.ReadAllBytes(bodyPath);
         var localBody = Encoding.UTF8.GetString(localBytes);
+        if (localBody.Length > 0 && localBody[0] == '\uFEFF')
+        {
+            localBody = localBody[1..];
+        }
+        var localSizeBand = IssueBodySizeLimits.GetBand(localBytes.Length);
+        var localWarnings = localSizeBand == IssueBodySizeBand.Warning
+            ? new[] { "issue-body-size-warning" }
+            : Array.Empty<string>();
+        result = result with { Warnings = localWarnings };
         var validation = IssueValidateBodyValidator.Validate(bodyPath, localBody, requireTargetPathsDeclaration: true);
         if (!validation.IsValid)
         {
@@ -106,6 +115,19 @@ internal static class IssueSyncBodyCommand
                 ? $"missing headings: {string.Join(", ", validation.MissingHeadings)}"
                 : "body does not pass issue validate-body";
             return Emit(writer, format, Refuse(result, "body-invalid", $"github-body.md fails issue validate-body ({detail})."));
+        }
+
+        if (localSizeBand == IssueBodySizeBand.OverLimit)
+        {
+            var oversizedLocalSha = IssuePrepareCommand.ComputeSha256Hex(localBytes);
+            return Emit(writer, format, Refuse(
+                result with
+                {
+                    LocalSha256 = oversizedLocalSha,
+                    LocalBytes = localBytes.Length,
+                },
+                "body-too-large",
+                $"github-body.md is {localBytes.Length} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit."));
         }
 
         if (!File.Exists(artifactPath))
@@ -402,6 +424,11 @@ internal static class IssueSyncBodyCommand
                 writer.WriteLine($"- read before retrying: `{result.RecoveryCommand}`");
             }
             writer.WriteLine($"- guarantee: {result.ConcurrencyGuarantee} — a concurrent edit between the read and the write cannot be excluded.");
+            writer.WriteLine("- warnings:");
+            foreach (var warning in result.Warnings)
+            {
+                writer.WriteLine($"  - {warning}");
+            }
             writer.WriteLine();
             writer.WriteLine(result.Summary);
         }
@@ -525,6 +552,7 @@ internal sealed record IssueSyncBodyResult
     [JsonPropertyName("concurrency_guarantee")] public required string ConcurrencyGuarantee { get; init; }
     [JsonPropertyName("runs_event")] public string? RunsEvent { get; init; }
     [JsonPropertyName("summary")] public string Summary { get; init; } = string.Empty;
+    [JsonPropertyName("warnings")] public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
     [JsonIgnore] public int ExitCode { get; init; }
 }
 

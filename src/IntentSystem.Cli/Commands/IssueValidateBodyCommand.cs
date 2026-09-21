@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace IntentSystem.Cli.Commands;
 
 /// <summary>
@@ -32,11 +34,30 @@ internal static class IssueValidateBodyCommand
             return 1;
         }
 
-        var content = File.ReadAllText(fromFile);
+        var bodyBytes = File.ReadAllBytes(fromFile);
+        var content = DecodeBody(bodyBytes);
         var result = IssueValidateBodyValidator.Validate(
             fromFile,
             content,
             requireTargetPathsDeclaration: true);
+        var sizeBand = IssueBodySizeLimits.GetBand(bodyBytes.Length);
+        var bodyTooLarge = sizeBand == IssueBodySizeBand.OverLimit;
+        var bodySizeWarning = sizeBand == IssueBodySizeBand.Warning;
+        result = result with
+        {
+            IsValid = result.IsValid && !bodyTooLarge,
+            BodyBytes = bodyBytes.Length,
+            BodyTooLarge = bodyTooLarge,
+            BodySizeWarning = bodySizeWarning,
+            BodySizeReason = sizeBand switch
+            {
+                IssueBodySizeBand.OverLimit =>
+                    $"issue-body-too-large: body is {bodyBytes.Length} bytes; limit is {IssueBodySizeLimits.HardLimitBytes} bytes.",
+                IssueBodySizeBand.Warning =>
+                    $"issue-body-size-warning: body is {bodyBytes.Length} bytes; warning threshold is {IssueBodySizeLimits.WarningThresholdBytes} bytes and limit is {IssueBodySizeLimits.HardLimitBytes} bytes.",
+                _ => null,
+            }
+        };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
@@ -48,6 +69,14 @@ internal static class IssueValidateBodyCommand
         }
 
         return result.IsValid ? 0 : 1;
+    }
+
+    private static string DecodeBody(byte[] bodyBytes)
+    {
+        var content = Encoding.UTF8.GetString(bodyBytes);
+        return content.Length > 0 && content[0] == '\uFEFF'
+            ? content[1..]
+            : content;
     }
 
     private static bool TryParseArguments(
