@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace IntentSystem.Cli.Commands;
 
 internal static class BugImplementationIssueCommand
@@ -69,7 +71,7 @@ internal static class BugImplementationIssueCommand
             implementationRepairRef,
             "Bug implementation-repair artifact");
 
-        var repair = BugImplementationRepairArtifactYaml.Deserialize(File.ReadAllText(implementationRepairPath));
+        var repair = BugImplementationRepairArtifactYaml.Deserialize(StrictUtf8FileReader.ReadText(implementationRepairPath));
         if (!string.Equals(repair.BugId, bugId, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -87,6 +89,13 @@ internal static class BugImplementationIssueCommand
                 effectiveRepairTargets,
                 repair.RepairExecutionUnit);
             var body = BuildIssueBody(BuildIssueBodyContext(context.RepoRoot, repair, effectiveRepairTargets));
+            var submittedBodyBytes = Encoding.UTF8.GetByteCount(body);
+            if (submittedBodyBytes > IssueBodySizeLimits.HardLimitBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Issue body is {submittedBodyBytes} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit.");
+            }
+
             var linkedIssue = PublisherFactory().CreateIssue(targetRepo, repair.SuggestedIssueTitle, body);
             createdIssueUrl = linkedIssue.Url;
             createdIssueNumber = linkedIssue.Number;
@@ -149,7 +158,7 @@ internal static class BugImplementationIssueCommand
                 throw new InvalidOperationException($"Implementation repair target packet was not found at {packetPath}");
             }
 
-            var yaml = File.ReadAllText(packetPath);
+            var yaml = StrictUtf8FileReader.ReadText(packetPath);
             if (!string.IsNullOrWhiteSpace(recordedRepairExecutionUnit)
                 && UsesG337ImplementationIssuePacketSchema(yaml))
             {
@@ -442,7 +451,7 @@ internal static class BugImplementationIssueCommand
         ArgumentException.ThrowIfNullOrWhiteSpace(packetRef);
 
         var packetPath = ResolveExistingArtifactPath(repoRoot, packetRef, "Implementation repair target packet");
-        var yaml = File.ReadAllText(packetPath);
+        var yaml = StrictUtf8FileReader.ReadText(packetPath);
 
         try
         {
@@ -596,7 +605,7 @@ internal static class BugImplementationIssueCommand
     {
         var artifactPath = Path.GetFullPath(Path.Combine(repoRoot, artifactRef.Replace('/', Path.DirectorySeparatorChar)));
         return File.Exists(artifactPath)
-            ? BugExecutionArtifactYaml.Deserialize(File.ReadAllText(artifactPath))
+            ? BugExecutionArtifactYaml.Deserialize(StrictUtf8FileReader.ReadText(artifactPath))
             : null;
     }
 
@@ -604,7 +613,7 @@ internal static class BugImplementationIssueCommand
     {
         var artifactPath = Path.GetFullPath(Path.Combine(repoRoot, artifactRef.Replace('/', Path.DirectorySeparatorChar)));
         return File.Exists(artifactPath)
-            ? BugTriageArtifactYaml.Deserialize(File.ReadAllText(artifactPath))
+            ? BugTriageArtifactYaml.Deserialize(StrictUtf8FileReader.ReadText(artifactPath))
             : null;
     }
 
@@ -612,7 +621,7 @@ internal static class BugImplementationIssueCommand
     {
         var artifactPath = Path.GetFullPath(Path.Combine(repoRoot, artifactRef.Replace('/', Path.DirectorySeparatorChar)));
         return File.Exists(artifactPath)
-            ? BugReportArtifactYaml.Deserialize(File.ReadAllText(artifactPath))
+            ? BugReportArtifactYaml.Deserialize(StrictUtf8FileReader.ReadText(artifactPath))
             : null;
     }
 

@@ -193,6 +193,53 @@ the packet, issue body, queue snapshot, and observed PR base branch disagree;
 the conflict includes every observed value and remains detectable for a
 closed PR. Neither classification is emitted for a legacy packet.
 
+## JSON-payload issue-body gate (G847)
+
+The `issue create`, `queue dispatch`, and `bug implementation-issue` routes
+serialize `{title, body}` and submit that JSON document through `gh api
+--input`. Their shared `IssueBodySizeLimits` declares
+`HardLimitBytes = 65536` and `WarningThresholdBytes = 58000`. The hard
+boundary is inclusive for the submitted body content: 65,535 and 65,536
+bytes are accepted, while a body over 65,536 bytes is refused with exit code
+1 and this plain message:
+
+```text
+Issue body is <n> bytes, which exceeds the 65536-byte limit.
+```
+
+This gate measures the exact decoded string passed to `CreateIssue`, using
+`Encoding.UTF8.GetByteCount`. It measures submitted body content, not bytes on
+the wire. The JSON payload also contains the title and escapes the body, so
+the JSON overhead is content-dependent; no byte range for that overhead is a
+contract. **65,536 is intent-cli's own conservative limit on the submitted
+body content.** GitHub's boundary, inclusivity, unit, and treatment of a JSON
+payload were not verified; the only remote datum is the roughly 96,000-character
+failure reported on 2026-09-16.
+
+Every body-feeding read on these three JSON-payload routes uses the shared
+`StrictUtf8FileReader.ReadText(path)` helper: `IssueCreateCommand.cs:88`,
+`QueueDispatchCommand.cs:124`, and
+`BugImplementationIssueCommand.cs:72`, `:152`, `:445`, `:599`, `:607`, and
+`:615`. It reads bytes and strictly decodes UTF-8. Malformed input is refused
+before the size check with exit code 1 and:
+
+```text
+Issue body is not valid UTF-8 at byte offset <k> in <file>.
+```
+
+For this JSON-payload mechanism only, exactly one leading UTF-8 BOM is removed
+after decoding, preserving today's submitted content for UTF-8 files. A file
+starting with a UTF-16 or UTF-32 BOM is refused. This BOM behavior is scoped to
+the JSON-payload mechanism: sibling G845's `--body-file` routes hand `gh` the
+file bytes, so their counting rule is different. This unit adds no `--format`
+option or result surface. The ledger's generic `--format json` rows for these
+three commands are a recorded pre-existing inaccuracy and are deliberately not
+fixed here.
+
+The contract hedge is: **65,536 is intent-cli's own conservative limit on the
+submitted body content; GitHub's boundary, inclusivity, unit and treatment of
+a JSON payload were not verified.**
+
 ## Alternative: timer-loop setup
 
 Use [Implementation loop setup](05-implementation-loop.md) and then

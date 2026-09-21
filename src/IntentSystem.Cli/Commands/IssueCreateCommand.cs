@@ -1,3 +1,4 @@
+using System.Text;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
 
@@ -85,13 +86,20 @@ internal static class IssueCreateCommand
             throw new InvalidOperationException($"GitHub issue body artifact was not found at {issueBodyPath}");
         }
 
-        var body = File.ReadAllText(issueBodyPath);
+        var body = StrictUtf8FileReader.ReadText(issueBodyPath);
         if (string.IsNullOrWhiteSpace(body))
         {
             throw new InvalidOperationException("GitHub issue body artifact must not be empty.");
         }
 
         var targetRepo = GitHubRepositoryTargetResolver.Resolve(context.RepoRoot, packet.TargetRepo, GitCommandRunnerFactory());
+        var submittedBodyBytes = Encoding.UTF8.GetByteCount(body);
+        if (submittedBodyBytes > IssueBodySizeLimits.HardLimitBytes)
+        {
+            throw new InvalidOperationException(
+                $"Issue body is {submittedBodyBytes} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit.");
+        }
+
         var linkedIssue = PublisherFactory().CreateIssue(targetRepo, packet.IssueTitle, body);
 
         var updatedArtifact = artifact with
