@@ -1279,6 +1279,65 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Contains("exactly 0\\n is required", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("codex", "implementation")]
+    [InlineData("claude", "implementation")]
+    [InlineData("cursor", "implementation")]
+    [InlineData("copilot", "implementation")]
+    [InlineData("opencode", "implementation")]
+    [InlineData("codex", "design")]
+    [InlineData("claude", "design")]
+    [InlineData("cursor", "design")]
+    [InlineData("copilot", "design")]
+    [InlineData("opencode", "design")]
+    public void Record_VerdictSymlink_PreservesLegacyReadAndRestrictsNewRuntimes(string runtime, string kind)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var digest = CurrentDigest();
+        var content = kind == CrossRuntimeReviewRecord.KindDesign
+            ? runtime switch
+            {
+                "copilot" => CopilotDesignEnvelope("approve", digest),
+                "opencode" => OpencodeDesignEnvelope("approve", digest),
+                "claude" => ClaudeEnvelope(DesignVerdict("approve", digest)),
+                "cursor" => CursorEnvelope(DesignVerdict("approve", digest)),
+                _ => DesignVerdict("approve", digest),
+            }
+            : runtime switch
+            {
+                "copilot" => CopilotImplementationEnvelope("approve", H1),
+                "opencode" => OpencodeImplementationEnvelope("approve", H1),
+                "claude" => ClaudeEnvelope(Verdict("approve", H1)),
+                "cursor" => CursorEnvelope(Verdict("approve", H1)),
+                _ => Verdict("approve", H1),
+            };
+        var target = WriteVerdictFile(runtime, content);
+        var link = Path.Combine(Path.GetDirectoryName(target)!, $"{runtime}-{kind}-{Guid.NewGuid():N}.jsonl");
+        File.CreateSymbolicLink(link, target);
+
+        var args = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRecordArgs(runtime, link, digest, write: false, includeModel: runtime is "copilot" or "opencode")
+            : RecordArgs(runtime, link, H1, write: false);
+        var (exit, output) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+
+        if (runtime is "codex" or "claude" or "cursor")
+        {
+            Assert.True(exit == 0, output);
+            Assert.Equal("would-record", JsonDocument.Parse(output).RootElement.GetProperty("outcome").GetString());
+        }
+        else
+        {
+            Assert.Equal(1, exit);
+            using var refusal = JsonDocument.Parse(output);
+            Assert.Equal(CrossRuntimeReviewCauses.VerdictInvalid, refusal.RootElement.GetProperty("cause").GetString());
+            Assert.Contains("symlink", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+    }
+
     // ── record ─────────────────────────────────────────────────────────
 
     [Fact]

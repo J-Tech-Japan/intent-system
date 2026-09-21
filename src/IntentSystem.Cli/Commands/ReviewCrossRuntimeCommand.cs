@@ -209,25 +209,25 @@ internal static class ReviewCrossRuntimeCommand
                 "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
         }
 
-        byte[] bodyBytes;
-        byte[] reviewContextBytes;
-        byte[] implementationBytes;
-        try
+        byte[] bodyBytes = [];
+        byte[] reviewContextBytes = [];
+        byte[] implementationBytes = [];
+        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
         {
-            if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+            try
             {
                 CrossRuntimeReviewHomeAccessGuard.GuardPath(body);
                 CrossRuntimeReviewHomeAccessGuard.GuardPath(reviewContext);
                 CrossRuntimeReviewHomeAccessGuard.GuardPath(implementation);
-            }
 
-            bodyBytes = File.ReadAllBytes(body);
-            reviewContextBytes = File.ReadAllBytes(reviewContext);
-            implementationBytes = File.ReadAllBytes(implementation);
-        }
-        catch (InvalidOperationException exception)
-        {
-            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid, exception.Message, "do not read operator Copilot or OpenCode config directories.");
+                bodyBytes = File.ReadAllBytes(body);
+                reviewContextBytes = File.ReadAllBytes(reviewContext);
+                implementationBytes = File.ReadAllBytes(implementation);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid, exception.Message, "do not read operator Copilot or OpenCode config directories.");
+            }
         }
 
         string prompt;
@@ -767,18 +767,34 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         byte[] raw;
-        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(
-                verdictFile,
-                out raw,
-                out var verdictReadFailure,
-                out var verdictReadError))
+        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
         {
-            var verdictDetail = verdictReadFailure == CrossRuntimeReviewFileReadFailure.Empty
-                ? $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': verdict-invalid: file is empty."
-                : $"verdict file '{verdictFile}' could not be read: {verdictReadError}";
-            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
-                verdictDetail,
-                "pass the file the rendered invocation wrote (verdict.raw.json).");
+            if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(
+                    verdictFile,
+                    out raw,
+                    out var verdictReadFailure,
+                    out var verdictReadError))
+            {
+                var verdictDetail = verdictReadFailure == CrossRuntimeReviewFileReadFailure.Empty
+                    ? $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': verdict-invalid: file is empty."
+                    : $"verdict file '{verdictFile}' could not be read: {verdictReadError}";
+                return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
+                    verdictDetail,
+                    "pass the file the rendered invocation wrote (verdict.raw.json).");
+            }
+        }
+        else
+        {
+            try
+            {
+                raw = File.ReadAllBytes(verdictFile);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
+                    $"verdict file '{verdictFile}' could not be read: {exception.Message}",
+                    "pass the file the rendered invocation wrote (verdict.raw.json).");
+            }
         }
 
         string content;
@@ -1012,18 +1028,34 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         byte[] raw;
-        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(
-                verdictFile,
-                out raw,
-                out var verdictReadFailure,
-                out var verdictReadError))
+        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
         {
-            var verdictDetail = verdictReadFailure == CrossRuntimeReviewFileReadFailure.Empty
-                ? $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': verdict-invalid: file is empty."
-                : $"verdict file '{verdictFile}' could not be read: {verdictReadError}";
-            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
-                verdictDetail,
-                "pass the file the rendered invocation wrote (verdict.raw.json).");
+            if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(
+                    verdictFile,
+                    out raw,
+                    out var verdictReadFailure,
+                    out var verdictReadError))
+            {
+                var verdictDetail = verdictReadFailure == CrossRuntimeReviewFileReadFailure.Empty
+                    ? $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': verdict-invalid: file is empty."
+                    : $"verdict file '{verdictFile}' could not be read: {verdictReadError}";
+                return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
+                    verdictDetail,
+                    "pass the file the rendered invocation wrote (verdict.raw.json).");
+            }
+        }
+        else
+        {
+            try
+            {
+                raw = File.ReadAllBytes(verdictFile);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
+                    $"verdict file '{verdictFile}' could not be read: {exception.Message}",
+                    "pass the file the rendered invocation wrote (verdict.raw.json).");
+            }
         }
 
         string content;
@@ -1535,8 +1567,28 @@ internal static class ReviewCrossRuntimeCommand
     {
         model = null;
         effort = null;
-        options.TryGetValue("--model", out model);
         options.TryGetValue("--effort", out effort);
+
+        if (!CrossRuntimeReviewRuntimes.AcceptsEffort(runtime))
+        {
+            if (!TryOptionalModel(options, writer, format, subcommand, out model))
+            {
+                return false;
+            }
+
+            if (effort is not null)
+            {
+                Refuse(writer, format, subcommand,
+                    CrossRuntimeReviewCauses.ArgumentInvalid,
+                    $"--effort is accepted only for runtimes {CrossRuntimeReviewRuntimes.Copilot} and {CrossRuntimeReviewRuntimes.Opencode}.",
+                    "omit --effort for this runtime.");
+                return false;
+            }
+
+            return true;
+        }
+
+        options.TryGetValue("--model", out model);
 
         if (!CrossRuntimeReviewRuntimes.TryValidateModel(runtime, model, out var modelError))
         {
