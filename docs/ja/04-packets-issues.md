@@ -237,6 +237,8 @@ BOM も bytes に含め、decoded characters は数えません。共有する
 bytes まで inclusive で、65,536 bytes を超える body は local create-path
 gate が拒否します。
 
+**58,000 は予算上の選択です。2026-09-16 から手作業で守ってきた自己設定のドラフティング予算であり、GitHub の上限ではありません。**
+
 `issue validate-body` は `body_bytes`、`body_too_large`、
 `body_size_warning`、`body_size_reason` を返します。`packet draft` は常に
 top-level `warnings` array を返し、default と `--dry-run` の両方で

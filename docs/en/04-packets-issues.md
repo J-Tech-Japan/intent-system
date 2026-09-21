@@ -249,6 +249,8 @@ UTF-8 BOM when one is present; it does not count decoded characters. The shared
 through 65,536 bytes. A body over 65,536 bytes is refused by the local
 create-path gates.
 
+**58,000 is a budget choice: the self-imposed drafting budget held by hand since 2026-09-16, not a GitHub limit.**
+
 `issue validate-body` reports `body_bytes`, `body_too_large`,
 `body_size_warning`, and `body_size_reason`. `packet draft` always reports a
 top-level `warnings` array, refuses an oversized body in both default and

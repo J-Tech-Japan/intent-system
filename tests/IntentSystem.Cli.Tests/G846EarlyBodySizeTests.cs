@@ -831,6 +831,27 @@ public sealed class G846SyncBodyTests : IDisposable
         Assert.DoesNotContain("body-invalid", result.Root.GetProperty("summary").GetString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OversizedBodyWithMissingHeading_RefusesWithSizeBeforeValidationInBothModes(bool write)
+    {
+        var client = new CountingBodyClient(G846BodyFixtures.Decode(G846BodyFixtures.BodyBytes(50000)));
+        IssueSyncBodyCommand.BodyClientFactory = () => client;
+        WritePublishedBody(G846BodyFixtures.BodyBytes(70000, omitHeading: "Goal"));
+
+        var result = Run(write);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal("body-too-large", result.Root.GetProperty("reason_code").GetString());
+        Assert.Equal("refused", result.Root.GetProperty("outcome").GetString());
+        Assert.Equal(70000, result.Root.GetProperty("local_bytes").GetInt32());
+        Assert.False(result.Root.GetProperty("may_have_applied").GetBoolean());
+        Assert.DoesNotContain("body-invalid", result.Root.GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Equal(0, client.ReadCount);
+        Assert.Equal(0, client.UpdateCount);
+    }
+
     [Fact]
     public void WarningBand_PreservesWarningWhenRemoteReadFails()
     {
@@ -978,15 +999,19 @@ public sealed class G846DocumentationTests
             Assert.Contains("65,536 is intent-cli's own conservative limit", content, StringComparison.Ordinal);
             Assert.Contains("GitHub's boundary, inclusivity and unit were not verified", content, StringComparison.Ordinal);
             Assert.Contains("roughly 96,000-character failure", content, StringComparison.Ordinal);
+            var budgetChoice = path.Contains(Path.Combine("docs", "ja"), StringComparison.Ordinal)
+                ? "58,000 は予算上の選択です。2026-09-16 から手作業で守ってきた自己設定のドラフティング予算であり、GitHub の上限ではありません。"
+                : "58,000 is a budget choice: the self-imposed drafting budget held by hand since 2026-09-16, not a GitHub limit.";
+            Assert.Contains(budgetChoice, content, StringComparison.Ordinal);
         }
     }
 }
 
 internal static class G846BodyFixtures
 {
-    public static byte[] BodyBytes(int totalBytes, bool bom = false, bool includeH1 = true)
+    public static byte[] BodyBytes(int totalBytes, bool bom = false, bool includeH1 = true, string? omitHeading = null)
     {
-        var content = Encoding.UTF8.GetBytes(ValidBody(includeH1));
+        var content = Encoding.UTF8.GetBytes(ValidBody(includeH1, omitHeading));
         var prefix = bom ? new byte[] { 0xEF, 0xBB, 0xBF } : [];
         var contentLength = totalBytes - prefix.Length;
         Assert.True(contentLength >= content.Length, $"fixture size {totalBytes} is smaller than the deterministic contract body");
@@ -1005,7 +1030,7 @@ internal static class G846BodyFixtures
         return text.Length > 0 && text[0] == '\uFEFF' ? text[1..] : text;
     }
 
-    private static string ValidBody(bool includeH1)
+    private static string ValidBody(bool includeH1, string? omitHeading)
     {
         var builder = new StringBuilder();
         if (includeH1)
@@ -1015,6 +1040,11 @@ internal static class G846BodyFixtures
 
         foreach (var heading in IssueValidateBodyValidator.RequiredHeadings)
         {
+            if (string.Equals(heading, omitHeading, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             builder.Append("## ").Append(heading).Append("\n\n");
             if (heading == "Target Repo / Path / Part")
             {

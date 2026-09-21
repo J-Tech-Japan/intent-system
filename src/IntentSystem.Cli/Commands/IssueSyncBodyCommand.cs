@@ -98,25 +98,11 @@ internal static class IssueSyncBodyCommand
         }
 
         var localBytes = File.ReadAllBytes(bodyPath);
-        var localBody = Encoding.UTF8.GetString(localBytes);
-        if (localBody.Length > 0 && localBody[0] == '\uFEFF')
-        {
-            localBody = localBody[1..];
-        }
         var localSizeBand = IssueBodySizeLimits.GetBand(localBytes.Length);
         var localWarnings = localSizeBand == IssueBodySizeBand.Warning
             ? new[] { "issue-body-size-warning" }
             : Array.Empty<string>();
         result = result with { Warnings = localWarnings };
-        var validation = IssueValidateBodyValidator.Validate(bodyPath, localBody, requireTargetPathsDeclaration: true);
-        if (!validation.IsValid)
-        {
-            var detail = validation.MissingHeadings.Count > 0
-                ? $"missing headings: {string.Join(", ", validation.MissingHeadings)}"
-                : "body does not pass issue validate-body";
-            return Emit(writer, format, Refuse(result, "body-invalid", $"github-body.md fails issue validate-body ({detail})."));
-        }
-
         if (localSizeBand == IssueBodySizeBand.OverLimit)
         {
             var oversizedLocalSha = IssuePrepareCommand.ComputeSha256Hex(localBytes);
@@ -128,6 +114,20 @@ internal static class IssueSyncBodyCommand
                 },
                 "body-too-large",
                 $"github-body.md is {localBytes.Length} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit."));
+        }
+
+        var localBody = Encoding.UTF8.GetString(localBytes);
+        if (localBody.Length > 0 && localBody[0] == '\uFEFF')
+        {
+            localBody = localBody[1..];
+        }
+        var validation = IssueValidateBodyValidator.Validate(bodyPath, localBody, requireTargetPathsDeclaration: true);
+        if (!validation.IsValid)
+        {
+            var detail = validation.MissingHeadings.Count > 0
+                ? $"missing headings: {string.Join(", ", validation.MissingHeadings)}"
+                : "body does not pass issue validate-body";
+            return Emit(writer, format, Refuse(result, "body-invalid", $"github-body.md fails issue validate-body ({detail})."));
         }
 
         if (!File.Exists(artifactPath))
