@@ -1,0 +1,64 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "omlx070": {
+      "name": "Flash Next oQ4e (oMLX 0.7.0)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8070/v1"
+      },
+      "models": {
+        "Qwen3.8-Flash-Next-oQ4e-mtp": {
+          "name": "Qwen3.8 Flash Next oQ4e-mtp",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "permission": {
+    "*": "deny",
+    "edit": "deny",
+    "bash": "deny",
+    "task": "deny",
+    "external_directory": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "skill": "deny",
+    "todowrite": "deny",
+    "question": "deny",
+    "lsp": "deny",
+    "doom_loop": "deny",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow"
+  },
+  "agent": {
+    "intent-cli-reviewer": {
+      "description": "intent-cli read-only cross-runtime reviewer",
+      "mode": "primary",
+      "permission": {
+        "*": "deny",
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "external_directory": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "skill": "deny",
+        "todowrite": "deny",
+        "question": "deny",
+        "lsp": "deny",
+        "doom_loop": "deny",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow"
+      }
+    }
+  }
+}

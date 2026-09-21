@@ -27,10 +27,10 @@ internal static class ReviewCrossRuntimeCommand
     private const string FormatMarkdown = "markdown";
 
     internal const string RequestUsage =
-        "Usage: intent-cli review cross-runtime request (--repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> --runtime codex|claude|cursor --clone <read-only-clone-path> --out-dir <dir> | --kind design --execution-unit <unit> --runtime codex|claude|cursor --out-dir <dir> [--clone <read-only-clone>]) [--model <name>] [--format json|markdown]";
+        "Usage: intent-cli review cross-runtime request (--repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --clone <read-only-clone-path> --out-dir <dir> | --kind design --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --out-dir <dir> [--clone <read-only-clone>]) [--model <name>] [--effort <level>] [--opencode-provider-config <file>] [--format json|markdown]";
 
     internal const string RecordUsage =
-        "Usage: intent-cli review cross-runtime record (--repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> --kind implementation | --kind design --execution-unit <unit> --packet-digest <sha256>) --runtime codex|claude|cursor --runtime-version <text> --verdict-file <path> [--model <name>] [--comment-out <path>] [--write] [--format json|markdown]";
+        "Usage: intent-cli review cross-runtime record (--repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> --kind implementation | --kind design --execution-unit <unit> --packet-digest <sha256>) --runtime codex|claude|cursor|copilot|opencode --runtime-version <text> --verdict-file <path> [--model <name>] [--effort <level>] [--comment-out <path>] [--write] [--format json|markdown]";
 
     internal const string StatusUsage =
         "Usage: intent-cli review cross-runtime status (--repo <owner/repo> --pr <n> --head-sha <40-hex> --execution-unit <unit> | --kind design --execution-unit <unit>) [--format json|markdown]";
@@ -42,15 +42,12 @@ internal static class ReviewCrossRuntimeCommand
         "Confirming each vendor's automation terms for headless reviewer runs is the operator's responsibility; intent-cli does not assert that any use is permitted.";
 
     /// <summary>
-    /// Test seam mirroring the G187 <c>NestedProviderLauncher</c> sentinel. None of
-    /// the three subcommands ever invokes it.
+    /// Test-only seam. None of the three subcommands invokes this delegate.
     /// </summary>
     public static Func<bool>? NestedProviderLauncher { get; set; }
 
     /// <summary>
-    /// Process-runner seam in the <c>NotifyCommand.ProcessRunnerFactory</c> shape.
-    /// The request, record, and status paths never construct a process runner;
-    /// tests install a throwing factory to prove it.
+    /// Test-only runner seam. The request, record, and status paths do not use it.
     /// </summary>
     internal static Func<INotifyProcessRunner>? ProcessRunnerFactory { get; set; }
 
@@ -136,9 +133,22 @@ internal static class ReviewCrossRuntimeCommand
 
         if (!TryCommonArguments(options, writer, format, "request", out var repo, out var pr, out var head, out var unit)
             || !TryRuntime(options, writer, format, "request", out var runtime)
-            || !TryOptionalModel(options, writer, format, "request", out var model))
+            || !TryModelAndEffort(options, writer, format, "request", runtime, out var model, out var effort))
         {
             return 1;
+        }
+
+        string? opencodeProviderConfig = null;
+        if (options.ContainsKey("--opencode-provider-config"))
+        {
+            if (runtime != CrossRuntimeReviewRuntimes.Opencode)
+            {
+                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid,
+                    "--opencode-provider-config is accepted only for runtime opencode.",
+                    "omit --opencode-provider-config for other runtimes.");
+            }
+
+            opencodeProviderConfig = ResolvePath(context, options["--opencode-provider-config"]);
         }
 
         if (!TryRequired(options, "--clone", writer, format, "request", out var cloneArgument)
@@ -177,30 +187,89 @@ internal static class ReviewCrossRuntimeCommand
                 $"--out-dir '{outDir}' is a file.", "pass a new or empty directory.");
         }
 
-        if (Directory.Exists(outDir))
+        if (!CrossRuntimeReviewRequestSupport.TryValidateOutDir(
+                outDir,
+                runtime,
+                CrossRuntimeReviewRecord.KindImplementation,
+                true,
+                clone,
+                opencodeProviderConfig,
+                writer,
+                format,
+                out _))
         {
-            var foreign = Directory.EnumerateFileSystemEntries(outDir)
-                .Select(Path.GetFileName)
-                .Where(name => !CrossRuntimeReviewFiles.Rendered.Contains(name, StringComparer.Ordinal))
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToArray();
-            if (foreign.Length > 0)
-            {
-                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.OutDirNotEmpty,
-                    $"--out-dir '{outDir}' contains other entries: {string.Join(", ", foreign)}.",
-                    "pass a new or empty directory so a stale verdict can never be mixed with this request.");
-            }
+            return 1;
         }
 
-        var prompt = RenderPrompt(repo, pr, head, unit, clone, body, reviewContext, implementation);
-        var invocation = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
-            + CrossRuntimeReviewRuntimes.RenderInvocation(runtime, clone, outDir, model) + "\n";
+        if (opencodeProviderConfig is not null
+            && !CrossRuntimeReviewOpencodeConfig.TryValidateProviderConfigFile(opencodeProviderConfig, out _, out var providerError))
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.OpencodeProviderConfigInvalid,
+                providerError,
+                "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
+        }
 
-        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-        Directory.CreateDirectory(outDir);
-        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt), prompt, utf8);
-        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Schema), CrossRuntimeReviewVerdict.SchemaJson, utf8);
-        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation), invocation, utf8);
+        byte[] bodyBytes;
+        byte[] reviewContextBytes;
+        byte[] implementationBytes;
+        try
+        {
+            CrossRuntimeReviewHomeAccessGuard.GuardPath(body);
+            CrossRuntimeReviewHomeAccessGuard.GuardPath(reviewContext);
+            CrossRuntimeReviewHomeAccessGuard.GuardPath(implementation);
+            bodyBytes = File.ReadAllBytes(body);
+            reviewContextBytes = File.ReadAllBytes(reviewContext);
+            implementationBytes = File.ReadAllBytes(implementation);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid, exception.Message, "do not read operator Copilot or OpenCode config directories.");
+        }
+
+        string prompt;
+        try
+        {
+            prompt = RenderPrompt(
+                runtime,
+                context.RepoRoot,
+                repo,
+                pr,
+                head,
+                unit,
+                clone,
+                bodyBytes,
+                reviewContextBytes,
+                implementationBytes);
+        }
+        catch (DecoderFallbackException exception)
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketInvalid,
+                $"packet file bytes are not valid UTF-8: {exception.Message}",
+                "repair the packet files under `.intent-cli/issues/` so every file is UTF-8 text.");
+        }
+
+        var invocation = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
+            + CrossRuntimeReviewRuntimes.RenderInvocation(runtime, clone, outDir, model, effort) + "\n";
+        IReadOnlyList<string> files;
+        try
+        {
+            files = CrossRuntimeReviewRequestSupport.WriteRequestFiles(
+                runtime,
+                CrossRuntimeReviewRecord.KindImplementation,
+                true,
+                clone,
+                outDir,
+                prompt,
+                CrossRuntimeReviewVerdict.SchemaJson,
+                invocation,
+                opencodeProviderConfig);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
+                exception.Message,
+                "do not read operator Copilot or OpenCode config directories.");
+        }
 
         var result = new CrossRuntimeReviewImplementationRequestResult
         {
@@ -212,8 +281,10 @@ internal static class ReviewCrossRuntimeCommand
             ExecutionUnit = unit,
             Runtime = runtime,
             Model = model,
+            Effort = effort,
             OutDir = outDir,
-            Files = CrossRuntimeReviewFiles.Rendered.Select(name => Path.Combine(outDir, name)).ToArray(),
+            OpencodeProviderConfig = opencodeProviderConfig,
+            Files = files,
             Invocation = invocation.TrimEnd('\n'),
             RunBy = "seat",
             RawVerdictFile = Path.Combine(outDir, CrossRuntimeReviewFiles.RawVerdict),
@@ -245,9 +316,22 @@ internal static class ReviewCrossRuntimeCommand
         if (!TryRequired(options, "--execution-unit", writer, format, "request", out var unit)
             || !TryRuntime(options, writer, format, "request", out var runtime)
             || !TryRequired(options, "--out-dir", writer, format, "request", out var outDirArgument)
-            || !TryOptionalModel(options, writer, format, "request", out var model))
+            || !TryModelAndEffort(options, writer, format, "request", runtime, out var model, out var effort))
         {
             return 1;
+        }
+
+        string? opencodeProviderConfig = null;
+        if (options.ContainsKey("--opencode-provider-config"))
+        {
+            if (runtime != CrossRuntimeReviewRuntimes.Opencode)
+            {
+                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid,
+                    "--opencode-provider-config is accepted only for runtime opencode.",
+                    "omit --opencode-provider-config for other runtimes.");
+            }
+
+            opencodeProviderConfig = ResolvePath(context, options["--opencode-provider-config"]);
         }
 
         if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(unit, out var unitError))
@@ -268,10 +352,18 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         var outDir = ResolvePath(context, outDirArgument);
-        var workspace = string.IsNullOrWhiteSpace(cloneArgument)
-            ? outDir
-            : ResolvePath(context, cloneArgument!);
+        var hasClone = !string.IsNullOrWhiteSpace(cloneArgument);
+        var workspace = hasClone
+            ? ResolvePath(context, cloneArgument!)
+            : runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode
+                ? Path.Combine(outDir, CrossRuntimeReviewFiles.Workspace)
+                : outDir;
         var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
+        if (TryRefuseProtectedPacketDirectory(writer, format, "request", packetDirectory, out var packetRefusal))
+        {
+            return packetRefusal;
+        }
+
         if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
@@ -286,19 +378,26 @@ internal static class ReviewCrossRuntimeCommand
                 $"--out-dir '{outDir}' is a file.", "pass a new or empty directory.");
         }
 
-        if (Directory.Exists(outDir))
+        if (!CrossRuntimeReviewRequestSupport.TryValidateOutDir(
+                outDir,
+                runtime,
+                CrossRuntimeReviewRecord.KindDesign,
+                hasClone,
+                workspace,
+                opencodeProviderConfig,
+                writer,
+                format,
+                out _))
         {
-            var foreign = Directory.EnumerateFileSystemEntries(outDir)
-                .Select(Path.GetFileName)
-                .Where(name => !CrossRuntimeReviewFiles.Rendered.Contains(name, StringComparer.Ordinal))
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToArray();
-            if (foreign.Length > 0)
-            {
-                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.OutDirNotEmpty,
-                    $"--out-dir '{outDir}' contains other entries: {string.Join(", ", foreign)}.",
-                    "pass a new or empty directory so a stale verdict can never be mixed with this request.");
-            }
+            return 1;
+        }
+
+        if (opencodeProviderConfig is not null
+            && !CrossRuntimeReviewOpencodeConfig.TryValidateProviderConfigFile(opencodeProviderConfig, out _, out var providerError))
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.OpencodeProviderConfigInvalid,
+                providerError,
+                "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
         }
 
         string prompt;
@@ -314,13 +413,27 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         var invocation = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
-            + CrossRuntimeReviewRuntimes.RenderInvocation(runtime, workspace, outDir, model) + "\n";
-
-        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-        Directory.CreateDirectory(outDir);
-        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt), prompt, utf8);
-        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Schema), CrossRuntimeReviewVerdict.DesignSchemaJson, utf8);
-        File.WriteAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation), invocation, utf8);
+            + CrossRuntimeReviewRuntimes.RenderInvocation(runtime, workspace, outDir, model, effort) + "\n";
+        IReadOnlyList<string> files;
+        try
+        {
+            files = CrossRuntimeReviewRequestSupport.WriteRequestFiles(
+                runtime,
+                CrossRuntimeReviewRecord.KindDesign,
+                hasClone,
+                workspace,
+                outDir,
+                prompt,
+                CrossRuntimeReviewVerdict.DesignSchemaJson,
+                invocation,
+                opencodeProviderConfig);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
+                exception.Message,
+                "do not read operator Copilot or OpenCode config directories.");
+        }
 
         var result = new CrossRuntimeReviewRequestResult
         {
@@ -331,9 +444,11 @@ internal static class ReviewCrossRuntimeCommand
             PacketDigest = digest,
             Runtime = runtime,
             Model = model,
+            Effort = effort,
             OutDir = outDir,
             Workspace = workspace,
-            Files = CrossRuntimeReviewFiles.Rendered.Select(name => Path.Combine(outDir, name)).ToArray(),
+            OpencodeProviderConfig = opencodeProviderConfig,
+            Files = files,
             Invocation = invocation.TrimEnd('\n'),
             RunBy = "seat",
             RawVerdictFile = Path.Combine(outDir, CrossRuntimeReviewFiles.RawVerdict),
@@ -418,6 +533,16 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine($"- model: {result.Model}");
         }
 
+        if (result.Effort is not null)
+        {
+            writer.WriteLine($"- effort: {result.Effort}");
+        }
+
+        if (result.OpencodeProviderConfig is not null)
+        {
+            writer.WriteLine($"- opencode provider config: {result.OpencodeProviderConfig}");
+        }
+
         foreach (var file in result.Files)
         {
             writer.WriteLine($"- rendered: {file}");
@@ -436,14 +561,16 @@ internal static class ReviewCrossRuntimeCommand
     }
 
     internal static string RenderPrompt(
+        string runtime,
+        string repoRoot,
         string repo,
         int pr,
         string head,
         string unit,
         string clone,
-        string body,
-        string reviewContext,
-        string implementation)
+        byte[] bodyBytes,
+        byte[] reviewContextBytes,
+        byte[] implementationBytes)
     {
         var q = CrossRuntimeReviewPaths.ShellQuote;
         var prText = pr.ToString(CultureInfo.InvariantCulture);
@@ -452,9 +579,20 @@ internal static class ReviewCrossRuntimeCommand
         builder.Append("You are an independent reviewer on a different runtime from the author. ");
         builder.Append($"Review pull request #{prText} in {repo} at head {head}.\n\n");
         builder.Append("## Inputs\n\n");
-        builder.Append($"- Issue contract (packet github-body.md): {q(body)}\n");
-        builder.Append($"- Review context (packet review-context.md): {q(reviewContext)}\n");
-        builder.Append($"- Implementation notes (packet implementation.md): {q(implementation)}\n");
+        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+        {
+            AppendEmbeddedFile(builder, "github-body.md", bodyBytes);
+            AppendEmbeddedFile(builder, "review-context.md", reviewContextBytes);
+            AppendEmbeddedFile(builder, "implementation.md", implementationBytes);
+        }
+        else
+        {
+            var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(repoRoot, unit);
+            builder.Append($"- Issue contract (packet github-body.md): {q(Path.Combine(packetDirectory, "github-body.md"))}\n");
+            builder.Append($"- Review context (packet review-context.md): {q(Path.Combine(packetDirectory, "review-context.md"))}\n");
+            builder.Append($"- Implementation notes (packet implementation.md): {q(Path.Combine(packetDirectory, "implementation.md"))}\n");
+        }
+
         builder.Append($"- Pull request: {repo}#{prText}\n");
         builder.Append($"- Head SHA: {head}\n");
         builder.Append($"- Read-only clone checked out at that head: {q(clone)}\n\n");
@@ -595,7 +733,7 @@ internal static class ReviewCrossRuntimeCommand
             || !TryRuntime(options, writer, format, "record", out var runtime)
             || !TryRequired(options, "--runtime-version", writer, format, "record", out var runtimeVersion)
             || !TryRequired(options, "--verdict-file", writer, format, "record", out var verdictFileArgument)
-            || !TryOptionalModel(options, writer, format, "record", out var model))
+            || !TryModelAndEffort(options, writer, format, "record", runtime, out var model, out var effort))
         {
             return 1;
         }
@@ -639,11 +777,37 @@ internal static class ReviewCrossRuntimeCommand
                 $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.");
         }
 
-        if (!CrossRuntimeReviewVerdict.TryParse(runtime, content, out var verdict, out var verdictError))
+        if (runtime == CrossRuntimeReviewRuntimes.Opencode
+            && !CrossRuntimeReviewJsonlVerdict.TryValidateOpencodeExitStatus(verdictFile, out var exitCause, out var exitDetail))
+        {
+            return Refuse(writer, format, "record", exitCause, exitDetail,
+                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.");
+        }
+
+        if (!CrossRuntimeReviewVerdict.TryParse(runtime, content, out var verdict, out var observedModel, out var verdictError))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                 $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': {verdictError}",
                 "re-run the reviewer with the pinned invocation; never hand-write a verdict.");
+        }
+
+        if (runtime == CrossRuntimeReviewRuntimes.Copilot
+            && (observedModel is null || !string.Equals(observedModel, model, StringComparison.Ordinal)))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.ModelMismatch,
+                observedModel is null
+                    ? $"copilot envelope data.model is missing but --model is '{model}'."
+                    : $"copilot envelope data.model is '{observedModel}' but --model is '{model}'.",
+                "re-run the reviewer with the same --model value.");
+        }
+
+        if (runtime == CrossRuntimeReviewRuntimes.Copilot
+            && effort is not null
+            && !CrossRuntimeReviewJsonlVerdict.TryParseCopilotEffort(content, observedModel!, effort, out var effortError))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.EffortMismatch,
+                effortError,
+                "re-run the reviewer with the same --effort value.");
         }
 
         if (!string.Equals(verdict.HeadSha, head, StringComparison.OrdinalIgnoreCase))
@@ -685,6 +849,7 @@ internal static class ReviewCrossRuntimeCommand
             ConductorRuntime = declaration.ConductorRuntime,
             Relation = CrossRuntimeReviewRecord.RelationFor(runtime, declaration.ConductorRuntime),
             Model = model,
+            Effort = effort,
             Verdict = verdict.Verdict,
             BlockingFindings = verdict.BlockingFindings,
             Notes = verdict.Notes,
@@ -785,7 +950,7 @@ internal static class ReviewCrossRuntimeCommand
             || !TryRuntime(options, writer, format, "record", out var runtime)
             || !TryRequired(options, "--runtime-version", writer, format, "record", out var runtimeVersion)
             || !TryRequired(options, "--verdict-file", writer, format, "record", out var verdictFileArgument)
-            || !TryOptionalModel(options, writer, format, "record", out var model))
+            || !TryModelAndEffort(options, writer, format, "record", runtime, out var model, out var effort))
         {
             return 1;
         }
@@ -809,6 +974,11 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
+        if (TryRefuseProtectedPacketDirectory(writer, format, "record", packetDirectory, out var packetRefusal))
+        {
+            return packetRefusal;
+        }
+
         if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.PacketMissing,
@@ -848,11 +1018,38 @@ internal static class ReviewCrossRuntimeCommand
                 $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.");
         }
 
+        if (runtime == CrossRuntimeReviewRuntimes.Opencode
+            && !CrossRuntimeReviewJsonlVerdict.TryValidateOpencodeExitStatus(verdictFile, out var exitCause, out var exitDetail))
+        {
+            return Refuse(writer, format, "record", exitCause, exitDetail,
+                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.");
+        }
+
         if (!CrossRuntimeReviewVerdict.TryParseDesign(runtime, content, out var verdict, out var verdictError))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                 $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': {verdictError}",
                 "re-run the reviewer with the pinned invocation; never hand-write a verdict.");
+        }
+
+        CrossRuntimeReviewJsonlVerdict.TryReadCopilotObservedModel(content, out var observedModel, out _);
+        if (runtime == CrossRuntimeReviewRuntimes.Copilot
+            && (observedModel is null || !string.Equals(observedModel, model, StringComparison.Ordinal)))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.ModelMismatch,
+                observedModel is null
+                    ? $"copilot envelope data.model is missing but --model is '{model}'."
+                    : $"copilot envelope data.model is '{observedModel}' but --model is '{model}'.",
+                "re-run the reviewer with the same --model value.");
+        }
+
+        if (runtime == CrossRuntimeReviewRuntimes.Copilot
+            && effort is not null
+            && !CrossRuntimeReviewJsonlVerdict.TryParseCopilotEffort(content, observedModel!, effort, out var effortError))
+        {
+            return Refuse(writer, format, "record", CrossRuntimeReviewCauses.EffortMismatch,
+                effortError,
+                "re-run the reviewer with the same --effort value.");
         }
 
         if (!string.Equals(verdict.PacketDigest, currentDigest, StringComparison.OrdinalIgnoreCase))
@@ -879,6 +1076,7 @@ internal static class ReviewCrossRuntimeCommand
             ConductorRuntime = declaration.ConductorRuntime,
             Relation = CrossRuntimeReviewRecord.RelationFor(runtime, declaration.ConductorRuntime),
             Model = model,
+            Effort = effort,
             Verdict = verdict.Verdict,
             BlockingFindings = verdict.BlockingFindings,
             Notes = verdict.Notes,
@@ -972,6 +1170,11 @@ internal static class ReviewCrossRuntimeCommand
             builder.Append($"- model: {record.Model}\n");
         }
 
+        if (record.Effort is not null)
+        {
+            builder.Append($"- effort: {record.Effort}\n");
+        }
+
         builder.Append($"- conductor runtime: {record.ConductorRuntime}\n");
         builder.Append($"- head SHA: {record.HeadSha}\n");
         builder.Append($"- kind: {record.Kind}\n");
@@ -1020,6 +1223,11 @@ internal static class ReviewCrossRuntimeCommand
         if (record.Model is not null)
         {
             builder.Append($"- model: {record.Model}\n");
+        }
+
+        if (record.Effort is not null)
+        {
+            builder.Append($"- effort: {record.Effort}\n");
         }
 
         builder.Append($"- conductor runtime: {record.ConductorRuntime}\n");
@@ -1292,10 +1500,10 @@ internal static class ReviewCrossRuntimeCommand
     private static readonly IReadOnlyList<string> CommonValueFlags = ["--repo", "--pr", "--head-sha", "--execution-unit", "--format"];
 
     private static readonly FlagSet RequestFlags = new(
-        [.. CommonValueFlags, "--kind", "--runtime", "--clone", "--out-dir", "--model"], []);
+        [.. CommonValueFlags, "--kind", "--runtime", "--clone", "--out-dir", "--model", "--effort", "--opencode-provider-config"], []);
 
     private static readonly FlagSet RecordFlags = new(
-        [.. CommonValueFlags, "--kind", "--runtime", "--runtime-version", "--verdict-file", "--packet-digest", "--comment-out", "--model"], ["--write", "--dry-run"]);
+        [.. CommonValueFlags, "--kind", "--runtime", "--runtime-version", "--verdict-file", "--packet-digest", "--comment-out", "--model", "--effort"], ["--write", "--dry-run"]);
 
     private static readonly FlagSet StatusFlags = new([.. CommonValueFlags, "--kind"], []);
 
@@ -1303,6 +1511,48 @@ internal static class ReviewCrossRuntimeCommand
         options.TryGetValue("--kind", out var kind)
             ? kind
             : CrossRuntimeReviewRecord.KindImplementation;
+
+    private static bool TryModelAndEffort(
+        Dictionary<string, string> options,
+        TextWriter writer,
+        string format,
+        string subcommand,
+        string runtime,
+        out string? model,
+        out string? effort)
+    {
+        model = null;
+        effort = null;
+        options.TryGetValue("--model", out model);
+        options.TryGetValue("--effort", out effort);
+
+        if (!CrossRuntimeReviewRuntimes.TryValidateModel(runtime, model, out var modelError))
+        {
+            var cause = model is null && CrossRuntimeReviewRuntimes.RequiresModel(runtime)
+                ? CrossRuntimeReviewCauses.ModelRequired
+                : CrossRuntimeReviewCauses.ModelInvalid;
+            Refuse(writer, format, subcommand, cause, modelError, "pass a valid --model value for the runtime.");
+            return false;
+        }
+
+        if (!CrossRuntimeReviewRuntimes.TryValidateEffort(runtime, effort, out var effortError))
+        {
+            Refuse(writer, format, subcommand,
+                effort is not null && effort.Length == 0
+                    || effortError.Contains("must not", StringComparison.Ordinal)
+                    || effortError.Contains("must be one of", StringComparison.Ordinal)
+                    || effortError.Contains("Unicode", StringComparison.Ordinal)
+                    ? CrossRuntimeReviewCauses.EffortInvalid
+                    : CrossRuntimeReviewCauses.ArgumentInvalid,
+                effortError,
+                runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode
+                    ? "pass a valid --effort value for the runtime."
+                    : "omit --effort for this runtime.");
+            return false;
+        }
+
+        return true;
+    }
 
     private static bool TryOptionalModel(
         Dictionary<string, string> options,
@@ -1317,7 +1567,7 @@ internal static class ReviewCrossRuntimeCommand
             return true;
         }
 
-        if (!CrossRuntimeReviewRuntimes.TryValidateModel(value, out var error))
+        if (!CrossRuntimeReviewRuntimes.TryValidateModelCharacters(value, out var error))
         {
             Refuse(writer, format, subcommand, CrossRuntimeReviewCauses.ModelInvalid, error, "pass a non-empty model name without leading '-' or control characters.");
             return false;
@@ -1514,6 +1764,30 @@ internal static class ReviewCrossRuntimeCommand
     private static string ResolvePath(CliContext context, string value) =>
         Path.GetFullPath(Path.IsPathRooted(value) ? value : Path.Combine(context.RepoRoot, value));
 
+    private static bool TryRefuseProtectedPacketDirectory(
+        TextWriter writer,
+        string format,
+        string subcommand,
+        string packetDirectory,
+        out int refusal)
+    {
+        foreach (var packetFile in CrossRuntimeDesignReviewDigest.PacketFileNames)
+        {
+            var packetPath = Path.Combine(packetDirectory, packetFile);
+            if (!CrossRuntimeReviewHomeAccessGuard.TryRefuseProtectedPath(packetPath, out var detail))
+            {
+                continue;
+            }
+
+            refusal = Refuse(writer, format, subcommand, CrossRuntimeReviewCauses.PathInvalid, detail,
+                "do not read operator Copilot or OpenCode config directories.");
+            return true;
+        }
+
+        refusal = 0;
+        return false;
+    }
+
     private static int RefuseResolution(TextWriter writer, string format, string subcommand, CrossRuntimeReviewResolution resolution) =>
         Refuse(writer, format, subcommand, resolution.Cause!, resolution.Detail ?? string.Empty, resolution.Fix ?? string.Empty, resolution);
 
@@ -1592,6 +1866,12 @@ internal sealed record CrossRuntimeReviewImplementationRequestResult
     [JsonPropertyName("model")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Model { get; init; }
+    [JsonPropertyName("effort")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Effort { get; init; }
+    [JsonPropertyName("opencode_provider_config")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OpencodeProviderConfig { get; init; }
     [JsonPropertyName("out_dir")] public required string OutDir { get; init; }
     [JsonPropertyName("files")] public required IReadOnlyList<string> Files { get; init; }
     [JsonPropertyName("invocation")] public required string Invocation { get; init; }
@@ -1624,6 +1904,12 @@ internal sealed record CrossRuntimeReviewRequestResult
     [JsonPropertyName("model")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Model { get; init; }
+    [JsonPropertyName("effort")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Effort { get; init; }
+    [JsonPropertyName("opencode_provider_config")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OpencodeProviderConfig { get; init; }
     [JsonPropertyName("out_dir")] public required string OutDir { get; init; }
     [JsonPropertyName("workspace")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

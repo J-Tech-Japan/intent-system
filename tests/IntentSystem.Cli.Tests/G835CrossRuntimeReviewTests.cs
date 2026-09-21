@@ -97,6 +97,22 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     }
 
     [Theory]
+    [InlineData("copilot")]
+    [InlineData("opencode")]
+    public void DesignRequest_AndRecord_RefuseMissingModel_ForCopilotAndOpencode(string runtime)
+    {
+        var outDir = Path.Combine(root, "missing-model-" + runtime);
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs(runtime, outDir), "--format", "json"]);
+        Assert.Equal(1, requestExit);
+        Assert.Contains(CrossRuntimeReviewCauses.ModelRequired, requestOutput, StringComparison.Ordinal);
+
+        var verdict = WriteVerdictFile(runtime, File.ReadAllText(FixtureG842(runtime == "copilot" ? "copilot-approve.jsonl" : "opencode-approve.jsonl")));
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. DesignRecordArgs(runtime, verdict, CurrentDigest(), write: false), "--format", "json"]);
+        Assert.Equal(1, recordExit);
+        Assert.Contains(CrossRuntimeReviewCauses.ModelRequired, recordOutput, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("-bad")]
     [InlineData("a\tb")]
     [InlineData("a\nb")]
@@ -1021,6 +1037,9 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
 
     private static string FixtureG834(string name) =>
         Path.Combine(RepoVersionPolicySource.RepoRoot(), "tests", "IntentSystem.Cli.Tests", "Fixtures", "G834", name);
+
+    private static string FixtureG842(string name) =>
+        Path.Combine(RepoVersionPolicySource.RepoRoot(), "tests", "IntentSystem.Cli.Tests", "Fixtures", "G842", name);
 
     private static List<string> ShellTokens(string command)
     {

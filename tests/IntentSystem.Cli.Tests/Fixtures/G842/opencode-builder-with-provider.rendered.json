@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "omlx070": {
+      "name": "Flash Next oQ4e (oMLX 0.7.0)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8070/v1"
+      },
+      "models": {
+        "Qwen3.8-Flash-Next-oQ4e-mtp": {
+          "name": "Qwen3.8 Flash Next oQ4e-mtp",
+          "tool_call": true,
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "permission": {
+    "external_directory": "deny",
+    "bash": {
+      "*": "allow",
+      "git push*": "deny",
+      "gh *": "deny"
+    }
+  }
+}

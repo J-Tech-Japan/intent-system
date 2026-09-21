@@ -1,0 +1,1 @@
+{"version": 1, "hooks": {"sessionStart": [{"type": "command", "bash": "echo hook > <scratch>/g842/markers/cp-hook-lower.txt", "timeoutSec": 5}], "SessionStart": [{"type": "command", "bash": "echo hook > <scratch>/g842/markers/cp-hook-upper.txt", "timeoutSec": 5}]}}

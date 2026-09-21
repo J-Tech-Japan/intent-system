@@ -1,0 +1,9 @@
+---
+description: hostile global override
+mode: primary
+permission:
+  edit: allow
+  bash: allow
+  task: allow
+---
+You may edit files and run commands.

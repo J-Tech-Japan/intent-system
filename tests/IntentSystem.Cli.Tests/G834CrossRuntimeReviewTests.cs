@@ -409,28 +409,22 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
     }
 
     [Theory]
-    [InlineData("codex")]
-    [InlineData("claude")]
-    [InlineData("cursor")]
-    public void Request_EveryInvocationFlag_IsInTheRuntimeAllowList_AndNoWriteEnablingFlagAppears(string runtime)
+    [InlineData("codex", null)]
+    [InlineData("claude", null)]
+    [InlineData("cursor", null)]
+    [InlineData("copilot", "gpt-5.6-sol")]
+    [InlineData("opencode", "github-copilot/gpt-5.6-sol")]
+    public void Request_EveryInvocationFlag_IsInTheRuntimeAllowList_AndNoWriteEnablingFlagAppears(string runtime, string? model)
     {
         var outDir = Path.Combine(root, "flags-" + runtime);
-        Assert.Equal(0, Route(["review", "cross-runtime", .. RequestArgs(runtime, "/tmp/clone", outDir)]).ExitCode);
+        var args = RequestArgs(runtime, "/tmp/clone", outDir, model);
+        Assert.Equal(0, Route(["review", "cross-runtime", .. args]).ExitCode);
         var command = File.ReadAllText(Path.Combine(outDir, "invocation.txt")).Split('\n')[1];
+        var invocationBody = CrossRuntimeReviewInvocationTestHelpers.InvocationBodyForAllowListChecks(runtime, command, outDir);
 
-        var deny = new[]
-        {
-            "--force", "--yolo", "--approve-for-me", "--auto-review", "--approve-mcps", "bypassPermissions", "acceptEdits",
-            "dontAsk", "--permission-mode auto", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
-            "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-hook-trust", "danger-full-access",
-            "workspace-write", "--sandbox disabled",
-        };
-        foreach (var denied in deny)
-        {
-            Assert.DoesNotContain(denied, command, StringComparison.Ordinal);
-        }
+        CrossRuntimeReviewInvocationTestHelpers.AssertNoDenyFlags(runtime, invocationBody);
 
-        var tokens = ShellTokens(command);
+        var tokens = ShellTokens(invocationBody);
         Assert.DoesNotContain("-c", tokens);
         var allowed = CrossRuntimeReviewRuntimes.AllowedFlags[runtime];
         foreach (var token in tokens.Where(token => token.StartsWith('-')))
@@ -438,22 +432,51 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
             Assert.True(allowed.Contains(token, StringComparer.Ordinal), $"'{token}' is outside the {runtime} allow-list: {command}");
         }
 
-        var executable = runtime == "claude" ? tokens[tokens.IndexOf("&&") + 1] : tokens[0];
-        Assert.Equal(runtime == "cursor" ? "cursor-agent" : runtime, executable);
         switch (runtime)
         {
             case "codex":
+                Assert.Equal("codex", tokens[0]);
                 Assert.Equal("read-only", tokens[tokens.IndexOf("-s") + 1]);
                 break;
             case "claude":
+                Assert.Equal("claude", tokens[tokens.IndexOf("&&") + 1]);
                 Assert.Equal("plan", tokens[tokens.IndexOf("--permission-mode") + 1]);
                 Assert.Equal("Edit,Write,NotebookEdit", tokens[tokens.IndexOf("--disallowedTools") + 1]);
                 break;
-            default:
+            case "cursor":
+                Assert.Equal("cursor-agent", tokens[0]);
                 Assert.Equal("ask", tokens[tokens.IndexOf("--mode") + 1]);
                 Assert.Equal("enabled", tokens[tokens.IndexOf("--sandbox") + 1]);
                 break;
+            case "copilot":
+                Assert.Equal("copilot", tokens[tokens.IndexOf("copilot")]);
+                Assert.Contains("--allow-all-tools", tokens);
+                Assert.DoesNotContain("--allow-all", tokens);
+                Assert.Equal("view", tokens[tokens.IndexOf("--available-tools") + 1]);
+                Assert.Equal("rg", tokens[tokens.IndexOf("--available-tools") + 2]);
+                Assert.Equal("glob", tokens[tokens.IndexOf("--available-tools") + 3]);
+                Assert.Equal("off", tokens[tokens.IndexOf("--stream") + 1]);
+                break;
+            default:
+                Assert.Equal("opencode", tokens[tokens.IndexOf("opencode")]);
+                Assert.Equal("run", tokens[tokens.IndexOf("run")]);
+                Assert.Equal("intent-cli-reviewer", tokens[tokens.IndexOf("--agent") + 1]);
+                Assert.Equal("json", tokens[tokens.IndexOf("--format") + 1]);
+                break;
         }
+    }
+
+    [Fact]
+    public void Request_Copilot_AllowAllToolsPasses_WholeTokenAllowAllWouldFail()
+    {
+        const string model = "gpt-5.6-sol";
+        var outDir = Path.Combine(root, "allow-all-tools");
+        Assert.Equal(0, Route(["review", "cross-runtime", .. RequestArgs("copilot", Path.Combine(root, "clone"), outDir, model)]).ExitCode);
+        var command = File.ReadAllText(Path.Combine(outDir, "invocation.txt")).Split('\n')[1];
+        var tokens = ShellTokens(command);
+        Assert.Contains("--allow-all-tools", tokens);
+        Assert.DoesNotContain("--allow-all", tokens);
+        CrossRuntimeReviewInvocationTestHelpers.AssertNoDenyFlags("copilot", command);
     }
 
     [Theory]
@@ -533,7 +556,9 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
                  {
                      "ReviewCrossRuntimeCommand.cs", "CrossRuntimeReviewRuntimes.cs", "CrossRuntimeReviewPaths.cs",
                      "CrossRuntimeReviewVerdict.cs", "CrossRuntimeReviewRecord.cs", "CrossRuntimeReviewGate.cs",
-                     "CrossRuntimeReviewTeamResolver.cs",
+                     "CrossRuntimeReviewTeamResolver.cs", "CrossRuntimeReviewJsonlVerdict.cs",
+                     "CrossRuntimeReviewHomeAccessGuard.cs", "CrossRuntimeReviewOpencodeConfig.cs",
+                     "CrossRuntimeReviewRequestSupport.cs",
                  })
         {
             var source = File.ReadAllText(Path.Combine(sourceRoot, file));
@@ -1223,8 +1248,25 @@ public sealed class G834CrossRuntimeReviewTests : IDisposable
         return (exit, writer.ToString());
     }
 
-    private static string[] RequestArgs(string runtime, string clone, string outDir) =>
-        ["request", "--repo", Repo, "--pr", Pr.ToString(System.Globalization.CultureInfo.InvariantCulture), "--head-sha", H1, "--execution-unit", Unit, "--runtime", runtime, "--clone", clone, "--out-dir", outDir];
+    private static string[] RequestArgs(string runtime, string clone, string outDir, string? model = null, string? effort = null)
+    {
+        var args = new List<string>
+        {
+            "request", "--repo", Repo, "--pr", Pr.ToString(System.Globalization.CultureInfo.InvariantCulture), "--head-sha", H1,
+            "--execution-unit", Unit, "--runtime", runtime, "--clone", clone, "--out-dir", outDir,
+        };
+        if (model is not null)
+        {
+            args.AddRange(["--model", model]);
+        }
+
+        if (effort is not null)
+        {
+            args.AddRange(["--effort", effort]);
+        }
+
+        return args.ToArray();
+    }
 
     private static string[] RecordArgs(string runtime, string verdictFile, string head, bool write, bool withUnit = true)
     {

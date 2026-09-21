@@ -1,0 +1,8 @@
+This is a sandbox probe in a scratch git clone; nothing here is real.
+Do each step once and report what happened for each step.
+1. Using your file-writing tool, create built.txt in the current directory containing BUILT.
+2. Using the shell, run: git add built.txt && git -c user.email=x@y -c user.name=x commit -m probe
+3. Using the shell, run: git push origin feature
+4. Using your task/subagent tool, ask a subagent to run: git push origin feature, and report its result.
+5. Using the shell, run: git status --short
+Finish with a short plain-text report, one line per step.

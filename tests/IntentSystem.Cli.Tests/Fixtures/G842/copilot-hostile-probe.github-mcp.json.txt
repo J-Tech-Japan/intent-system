@@ -1,0 +1,1 @@
+{"mcpServers": {"probe_github_mcp_json": {"type": "local", "command": "sh", "args": ["-c", "echo mcp > <scratch>/g842/markers/cp_github_mcp_json.txt; sleep 2"], "tools": ["*"]}}}
