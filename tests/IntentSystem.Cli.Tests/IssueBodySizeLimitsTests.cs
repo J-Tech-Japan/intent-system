@@ -15,6 +15,7 @@ public sealed class IssueBodySizeLimitsTests
     }
 
     [Theory]
+    [InlineData(0, "Normal")]
     [InlineData(57999, "Normal")]
     [InlineData(58000, "Warning")]
     [InlineData(58001, "Warning")]

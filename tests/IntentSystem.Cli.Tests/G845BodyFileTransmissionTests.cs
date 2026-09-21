@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using IntentSystem.Cli.Commands;
 
@@ -222,25 +223,93 @@ public sealed class G845TransmissionPrimitiveTests
     }
 
     [Fact]
-    public void StagerHandsExactBytesAnd0600FileToTheTransmissionSeam()
+    public void StagerHandsExactBytesAndCreationModesToTheTransmissionSeam()
     {
         var expected = G845BodyFixtures.ValidBytes(50_003);
         string? stagedPath = null;
 
-        using (var stagedBody = IssueBodyFileStager.Stage(expected))
+        if (OperatingSystem.IsWindows())
         {
+            using var stagedBody = IssueBodyFileStager.Stage(expected);
             stagedPath = stagedBody.Path;
             Assert.Equal(expected, File.ReadAllBytes(stagedBody.Path));
-            if (!OperatingSystem.IsWindows())
+            return;
+        }
+
+        var expectedDirectoryMode = UnixFileMode.UserRead
+            | UnixFileMode.UserWrite
+            | UnixFileMode.UserExecute;
+        var expectedFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        var creationEvents = new List<string>();
+        UnixFileMode? directoryModeAtCreation = null;
+        UnixFileMode? fileModeAtCreation = null;
+        long? fileLengthAtCreation = null;
+
+        IssueBodyFileStager.DirectoryCreatedObserver = path =>
+        {
+            if (OperatingSystem.IsWindows())
             {
-                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(stagedBody.Path));
+                return;
             }
+
+            creationEvents.Add("directory-created");
+            directoryModeAtCreation = File.GetUnixFileMode(path);
+        };
+        IssueBodyFileStager.FileCreatedObserver = path =>
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                return;
+            }
+
+            creationEvents.Add("file-created");
+            fileModeAtCreation = File.GetUnixFileMode(path);
+            fileLengthAtCreation = new FileInfo(path).Length;
+        };
+
+        try
+        {
+            // 0x12 is 022 in the conventional octal umask notation.
+            foreach (var umask in new[] { 0x12u, 0u })
+            {
+                creationEvents.Clear();
+                directoryModeAtCreation = null;
+                fileModeAtCreation = null;
+                fileLengthAtCreation = null;
+                var previousUmask = SetUmask(umask);
+                try
+                {
+                    using var stagedBody = IssueBodyFileStager.Stage(expected);
+                    stagedPath = stagedBody.Path;
+                    var directoryPath = Path.GetDirectoryName(stagedBody.Path)!;
+
+                    Assert.Equal(new[] { "directory-created", "file-created" }, creationEvents);
+                    Assert.Equal(expectedDirectoryMode, directoryModeAtCreation);
+                    Assert.Equal(expectedFileMode, fileModeAtCreation);
+                    Assert.Equal(0L, fileLengthAtCreation);
+                    Assert.Equal(expectedDirectoryMode, File.GetUnixFileMode(directoryPath));
+                    Assert.Equal(expectedFileMode, File.GetUnixFileMode(stagedBody.Path));
+                    Assert.Equal(expected, File.ReadAllBytes(stagedBody.Path));
+                }
+                finally
+                {
+                    SetUmask(previousUmask);
+                }
+            }
+        }
+        finally
+        {
+            IssueBodyFileStager.DirectoryCreatedObserver = null;
+            IssueBodyFileStager.FileCreatedObserver = null;
         }
 
         Assert.NotNull(stagedPath);
         Assert.False(File.Exists(stagedPath));
         Assert.False(Directory.Exists(Path.GetDirectoryName(stagedPath!)!));
     }
+
+    [DllImport("libc", EntryPoint = "umask")]
+    private static extern uint SetUmask(uint mask);
 
     [Fact]
     public void StagerCleansAfterSuccessFailureAndThrowingTransmission()
@@ -409,6 +478,14 @@ public sealed class G845DocumentationTests
             Assert.Contains("BOM", text, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("issue-body-invalid-utf8", text, StringComparison.Ordinal);
             Assert.Contains("body-invalid-utf8", text, StringComparison.Ordinal);
+            Assert.Contains(
+                "refused (body-too-large): github-body.md is <n> bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.",
+                text,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "refused (body-too-large): Issue body is <n> bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.",
+                text,
+                StringComparison.Ordinal);
             Assert.Contains("source body is not valid UTF-8 at byte offset <k>", text, StringComparison.Ordinal);
             Assert.Contains("--format", text, StringComparison.Ordinal);
             Assert.Contains("result surface", text, StringComparison.Ordinal);

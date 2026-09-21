@@ -7,11 +7,16 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal static class IssueBodyFileStager
 {
-    // Test seams cover directory creation, byte writing and mode application.
-    // Production leaves all three null and uses the guarded implementations.
+    // Test seams cover directory creation, creation-time observations, byte
+    // writing and mode application. Production leaves them null and uses the
+    // guarded implementations.
     internal static Action<string>? DirectoryCreateOverride { get; set; }
 
+    internal static Action<string>? DirectoryCreatedObserver { get; set; }
+
     internal static Action<string, byte[]>? FileWriteOverride { get; set; }
+
+    internal static Action<string>? FileCreatedObserver { get; set; }
 
     internal static Action<string>? FileModeOverride { get; set; }
 
@@ -54,18 +59,19 @@ internal static class IssueBodyFileStager
         if (DirectoryCreateOverride is not null)
         {
             DirectoryCreateOverride(path);
-            return;
         }
-
-        if (OperatingSystem.IsWindows())
+        else if (OperatingSystem.IsWindows())
         {
             Directory.CreateDirectory(path);
-            return;
+        }
+        else
+        {
+            Directory.CreateDirectory(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
 
-        Directory.CreateDirectory(
-            path,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        DirectoryCreatedObserver?.Invoke(path);
     }
 
     private static void WriteFile(string path, byte[] bytes)
@@ -89,6 +95,7 @@ internal static class IssueBodyFileStager
         }
 
         using var stream = new FileStream(path, options);
+        FileCreatedObserver?.Invoke(path);
         stream.Write(bytes);
         stream.Flush(flushToDisk: true);
     }

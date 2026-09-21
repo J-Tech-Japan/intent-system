@@ -246,7 +246,7 @@ read、dry-run return、concurrent-edit check の後、equality/no-op の判断�
 拒否 summary は次の exact text です:
 
 ```text
-refused (body-too-large): Issue body is <n> bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.
+refused (body-too-large): github-body.md is <n> bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.
 refused (body-invalid-utf8): Issue body is not valid UTF-8 at byte offset <k>. The issue body was read, but no update was sent.
 ```
 

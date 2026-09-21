@@ -258,7 +258,7 @@ remote read, dry-run return, and concurrent-edit check, immediately before the
 equality/no-op decision. Its exact refusal summaries are:
 
 ```text
-refused (body-too-large): Issue body is <n> bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.
+refused (body-too-large): github-body.md is <n> bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.
 refused (body-invalid-utf8): Issue body is not valid UTF-8 at byte offset <k>. The issue body was read, but no update was sent.
 ```
 
