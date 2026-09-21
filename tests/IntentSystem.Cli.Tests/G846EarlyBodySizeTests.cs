@@ -310,6 +310,110 @@ public sealed class G846PacketDraftTests
     }
 }
 
+[Collection("WorkerNextActionSharedState")]
+public sealed class G846PacketDraftUnreadableYamlTests : IDisposable
+{
+    private const string Unit = "G846UNR";
+    private const string Domain = "intent-cli";
+    private const string Repo = "J-Tech-Japan/intent-system";
+    private const string Team = "intent-cli-dev";
+
+    private readonly string root = Directory.CreateTempSubdirectory("g846-draft-unreadable-").FullName;
+
+    public G846PacketDraftUnreadableYamlTests()
+    {
+        PacketFileReader.ReadAllText = File.ReadAllText;
+        Context = new CliContext
+        {
+            RepoRoot = root,
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = Domain,
+                    ArtifactRoot = ".intent-cli",
+                    WorktreeRoot = ".intent-cli/worktrees"
+                }
+            }
+        };
+
+        G841TestHelpers.WriteClaim(root, Unit, Team);
+        var packetDirectory = Path.Combine(root, ".intent-cli", "issues", Unit);
+        Directory.CreateDirectory(packetDirectory);
+        File.WriteAllText(
+            Path.Combine(packetDirectory, "packet.yaml"),
+            $"implementation_issue_packet:\n  source_execution_unit: {Unit}\n");
+        File.WriteAllText(Path.Combine(packetDirectory, "implementation.md"), "implementation\n");
+        File.WriteAllText(Path.Combine(packetDirectory, "review-context.md"), "review\n");
+        File.WriteAllBytes(
+            Path.Combine(packetDirectory, "github-body.md"),
+            G846BodyFixtures.BodyBytes(70_000));
+    }
+
+    private CliContext Context { get; }
+
+    public void Dispose()
+    {
+        PacketFileReader.ReadAllText = File.ReadAllText;
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnreadablePacketYaml_WithOversizedBody_ReportsBothRefusalsInBothModes(bool dryRun)
+    {
+        var packetPath = Path.Combine(root, ".intent-cli", "issues", Unit, "packet.yaml");
+        PacketFileReader.ReadAllText = path =>
+            string.Equals(path, packetPath, StringComparison.Ordinal)
+                ? throw new UnauthorizedAccessException("Access to the path is denied.")
+                : File.ReadAllText(path);
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(
+            Context,
+            [
+                "--execution-unit", Unit,
+                "--domain", Domain,
+                "--target-repo", Repo,
+                "--team", Team,
+                .. (dryRun ? new[] { "--dry-run" } : Array.Empty<string>()),
+                "--format", "json"
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        var result = document.RootElement;
+        Assert.Equal(Unit, result.GetProperty("execution_unit").GetString());
+        Assert.Equal(Domain, result.GetProperty("domain").GetString());
+        Assert.Equal(Repo, result.GetProperty("target_repo").GetString());
+        Assert.EndsWith(
+            Path.Combine(".intent-cli", "issues", Unit),
+            result.GetProperty("packet_directory").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal(dryRun ? "dry-run" : "write", result.GetProperty("mode").GetString());
+        var refusalReasons = result.GetProperty("refusal_reasons").EnumerateArray().ToArray();
+        Assert.Equal(2, refusalReasons.Length);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable, refusalReasons[0].GetString());
+        Assert.Equal("issue-body-too-large", refusalReasons[1].GetString());
+        var action = Assert.Single(result.GetProperty("recommended_actions").EnumerateArray()).GetString() ?? string.Empty;
+        Assert.Equal(
+            "Resolve issue-body-too-large: github-body.md is 70000 bytes; the limit is 65536 bytes.",
+            action);
+        Assert.Contains("70000", action, StringComparison.Ordinal);
+        Assert.Contains("65536", action, StringComparison.Ordinal);
+        Assert.Empty(result.GetProperty("files").EnumerateArray());
+        Assert.Empty(result.GetProperty("missing_canonical_files").EnumerateArray());
+        Assert.Empty(result.GetProperty("missing_contract_sections").EnumerateArray());
+        Assert.Empty(result.GetProperty("warnings").EnumerateArray());
+        Assert.False(result.GetProperty("contract_publishable").GetBoolean());
+    }
+}
+
 public sealed class G846PreparedPacketCommitReadyAnalyzerTests
 {
     [Fact]

@@ -187,6 +187,11 @@ internal static class PacketDraftCommand
         // refreshes the generated block to match current references —
         // never the surrounding hand-owned content.
         var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
+        var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
+        var githubBodyBytes = File.Exists(githubBodyPath)
+            ? File.ReadAllBytes(githubBodyPath).Length
+            : 0;
+        var sizeBand = IssueBodySizeLimits.GetBand(githubBodyBytes);
         IReadOnlyList<string> intentReferences;
         try
         {
@@ -194,6 +199,18 @@ internal static class PacketDraftCommand
         }
         catch (PacketDraftUnreadableException)
         {
+            var earlyRefusalReasons = new List<string>
+            {
+                PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable
+            };
+            var earlyRecommendedActions = new List<string>();
+            if (sizeBand == IssueBodySizeBand.OverLimit)
+            {
+                earlyRefusalReasons.Add("issue-body-too-large");
+                earlyRecommendedActions.Add(
+                    $"Resolve issue-body-too-large: github-body.md is {githubBodyBytes} bytes; the limit is {IssueBodySizeLimits.HardLimitBytes} bytes.");
+            }
+
             return new PacketDraftResult
             {
                 ExecutionUnit = executionUnit,
@@ -204,8 +221,8 @@ internal static class PacketDraftCommand
                 Files = Array.Empty<PacketDraftFile>(),
                 MissingCanonicalFiles = Array.Empty<string>(),
                 MissingContractSections = Array.Empty<string>(),
-                RefusalReasons = [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
-                RecommendedActions = Array.Empty<string>(),
+                RefusalReasons = earlyRefusalReasons,
+                RecommendedActions = earlyRecommendedActions,
                 Warnings = Array.Empty<string>(),
                 ContractPublishable = false,
             };
@@ -301,6 +318,18 @@ internal static class PacketDraftCommand
         }
         catch (PacketDraftUnreadableException)
         {
+            var lateRefusalReasons = new List<string>
+            {
+                PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable
+            };
+            var lateRecommendedActions = new List<string>();
+            if (sizeBand == IssueBodySizeBand.OverLimit)
+            {
+                lateRefusalReasons.Add("issue-body-too-large");
+                lateRecommendedActions.Add(
+                    $"Resolve issue-body-too-large: github-body.md is {githubBodyBytes} bytes; the limit is {IssueBodySizeLimits.HardLimitBytes} bytes.");
+            }
+
             return new PacketDraftResult
             {
                 ExecutionUnit = executionUnit,
@@ -311,8 +340,8 @@ internal static class PacketDraftCommand
                 Files = files,
                 MissingCanonicalFiles = Array.Empty<string>(),
                 MissingContractSections = Array.Empty<string>(),
-                RefusalReasons = [PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable],
-                RecommendedActions = Array.Empty<string>(),
+                RefusalReasons = lateRefusalReasons,
+                RecommendedActions = lateRecommendedActions,
                 Warnings = Array.Empty<string>(),
                 ContractPublishable = false,
             };
@@ -329,11 +358,6 @@ internal static class PacketDraftCommand
         }
 
         var warnings = new List<string>();
-        var githubBodyPath = Path.Combine(packetDirectory, "github-body.md");
-        var githubBodyBytes = File.Exists(githubBodyPath)
-            ? File.ReadAllBytes(githubBodyPath).Length
-            : 0;
-        var sizeBand = IssueBodySizeLimits.GetBand(githubBodyBytes);
         if (sizeBand == IssueBodySizeBand.OverLimit)
         {
             refusalReasons.Add("issue-body-too-large");
