@@ -223,7 +223,9 @@ internal static class PacketDraftCommand
                 MissingContractSections = Array.Empty<string>(),
                 RefusalReasons = earlyRefusalReasons,
                 RecommendedActions = earlyRecommendedActions,
-                Warnings = Array.Empty<string>(),
+                Warnings = sizeBand == IssueBodySizeBand.Warning
+                    ? ["issue-body-size-warning"]
+                    : Array.Empty<string>(),
                 ContractPublishable = false,
             };
         }
@@ -342,7 +344,9 @@ internal static class PacketDraftCommand
                 MissingContractSections = Array.Empty<string>(),
                 RefusalReasons = lateRefusalReasons,
                 RecommendedActions = lateRecommendedActions,
-                Warnings = Array.Empty<string>(),
+                Warnings = sizeBand == IssueBodySizeBand.Warning
+                    ? ["issue-body-size-warning"]
+                    : Array.Empty<string>(),
                 ContractPublishable = false,
             };
         }

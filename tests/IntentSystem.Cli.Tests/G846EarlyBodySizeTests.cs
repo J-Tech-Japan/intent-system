@@ -416,6 +416,72 @@ public sealed class G846PacketDraftUnreadableYamlTests : IDisposable
         Assert.Empty(result.GetProperty("warnings").EnumerateArray());
         Assert.False(result.GetProperty("contract_publishable").GetBoolean());
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EarlyUnreadablePacketYaml_InWarningBand_ReportsWarningInBothModes(bool dryRun)
+    {
+        AssertUnreadablePacketYamlWarning(dryRun, lateRead: false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LateUnreadablePacketYaml_InWarningBand_ReportsWarningInBothModes(bool dryRun)
+    {
+        AssertUnreadablePacketYamlWarning(dryRun, lateRead: true);
+    }
+
+    private void AssertUnreadablePacketYamlWarning(bool dryRun, bool lateRead)
+    {
+        var packetPath = Path.Combine(root, ".intent-cli", "issues", Unit, "packet.yaml");
+        File.WriteAllBytes(
+            Path.Combine(root, ".intent-cli", "issues", Unit, "github-body.md"),
+            G846BodyFixtures.BodyBytes(58_000));
+
+        if (!lateRead)
+        {
+            G841PacketDraftTests.SetPacketReader(_ =>
+                throw new UnauthorizedAccessException("Access to the path is denied."));
+        }
+        else
+        {
+            var reads = 0;
+            G841PacketDraftTests.SetPacketReader(path =>
+            {
+                if (string.Equals(path, packetPath, StringComparison.Ordinal)
+                    && Interlocked.Increment(ref reads) == 2)
+                {
+                    throw new UnauthorizedAccessException("Access to the path is denied.");
+                }
+
+                return File.ReadAllText(path);
+            });
+        }
+
+        using var writer = new StringWriter();
+        var exitCode = PacketDraftCommand.Execute(
+            Context,
+            [
+                "--execution-unit", Unit,
+                "--domain", Domain,
+                "--target-repo", Repo,
+                "--team", Team,
+                .. (dryRun ? new[] { "--dry-run" } : Array.Empty<string>()),
+                "--format", "json"
+            ],
+            writer);
+
+        Assert.Equal(0, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(
+            ["issue-body-size-warning"],
+            document.RootElement.GetProperty("warnings")
+                .EnumerateArray()
+                .Select(item => item.GetString()!)
+                .ToArray());
+    }
 }
 
 public sealed class G846PreparedPacketCommitReadyAnalyzerTests
