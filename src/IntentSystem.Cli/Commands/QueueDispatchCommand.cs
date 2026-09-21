@@ -1,3 +1,4 @@
+using System.Text;
 using IntentSystem.Supervisor;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
@@ -121,11 +122,19 @@ internal static class QueueDispatchCommand
             throw new InvalidOperationException("Projection packet must contain a non-empty issue title.");
         }
 
-        var body = File.ReadAllText(githubBodyPath);
+        var body = StrictUtf8FileReader.ReadText(githubBodyPath);
         var githubTargetRepo = GitHubRepositoryTargetResolver.Resolve(
             context.RepoRoot,
             packetTargetRepo,
             GitCommandRunnerFactory());
+        var submittedBodyBytes = Encoding.UTF8.GetByteCount(body);
+        // This measures submitted UTF-8 body content, not bytes on the wire; see IssueBodySizeLimits.
+        if (submittedBodyBytes > IssueBodySizeLimits.HardLimitBytes)
+        {
+            throw new InvalidOperationException(
+                $"Issue body is {submittedBodyBytes} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit.");
+        }
+
         var linkedIssue = PublisherFactory().CreateIssue(githubTargetRepo, issueTitle, body);
         var result = QueueManager.LinkIssue(
             queueState,

@@ -181,6 +181,53 @@ snapshot、観測した PR base branch が食い違う場合は、PR が closed 
 `branch-routing-conflict` を出し、観測した全 value を列挙します。legacy packet には
 どちらの classification も出しません。
 
+## JSON payload の issue 本文 gate (G847)
+
+`issue create`、`queue dispatch`、`bug implementation-issue` は
+`{title, body}` を JSON document に serialize して `gh api --input` で送信
+します。共有 `IssueBodySizeLimits` は `HardLimitBytes = 65536` と
+`WarningThresholdBytes = 58000` を宣言します。hard boundary は submitted
+body content に対して inclusive です。65,535 と 65,536 bytes は受理し、
+65,536 bytes を超える body は exit code 1 と次の plain message で拒否します:
+
+```text
+Issue body is <n> bytes, which exceeds the 65536-byte limit.
+```
+
+この gate が測るのは `CreateIssue` に渡す decoded string そのもので、
+`Encoding.UTF8.GetByteCount` による submitted body content です。wire 上の
+bytes ではありません。JSON payload には title も含まれ、body は escape
+されるため、JSON overhead は content-dependent です。この overhead の
+byte range は contract にしません。**65,536 は submitted body content に
+対する intent-cli 自身の conservative limit です。** GitHub の boundary、
+inclusive かどうか、unit、JSON payload の扱いは verify していません。利用
+できる remote datum は、2026-09-16 に約 96,000 characters の body の publish
+が失敗したという記録だけです。
+
+この JSON-payload route の body を供給する全 read は、共有
+`StrictUtf8FileReader.ReadText(path)` helper を使います:
+`IssueCreateCommand.cs:88`、`QueueDispatchCommand.cs:124`、
+`BugImplementationIssueCommand.cs:72`、`:152`、`:445`、`:599`、`:607`、
+`:615`。bytes を strict UTF-8 として decode し、malformed input は size check
+より前に exit code 1 で拒否します:
+
+```text
+Issue body is not valid UTF-8 at byte offset <k> in <file>.
+```
+
+この JSON-payload mechanism に限り、decode 後の先頭にある UTF-8 BOM を
+ちょうど 1 つ取り除き、UTF-8 file の submitted content を従来と同じに
+します。UTF-16 または UTF-32 BOM で始まる file は拒否します。この BOM
+behavior は JSON-payload mechanism に scope されます。姉妹 G845 の
+`--body-file` route は file bytes を `gh` に渡すため、counting rule は
+異なります。この unit は `--format` option や result surface を追加しません。
+この 3 command の ledger にある generic な `--format json` row は、既存の
+不正確さを記録したものであり、この unit では修正しません。
+
+contract の hedge は次のとおりです: **65,536 is intent-cli's own
+conservative limit on the submitted body content; GitHub's boundary,
+inclusivity, unit and treatment of a JSON payload were not verified.**
+
 ## 代替: timer-loop のセットアップ
 
 timer-loop の alternative を選ぶときだけ、[実装ループの設定](05-implementation-loop.md)、続けて
