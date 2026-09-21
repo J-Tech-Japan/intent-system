@@ -944,6 +944,48 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         Assert.DoesNotContain(marker, inside.Output, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("workspace")]
+    [InlineData("protected")]
+    public void Request_ProviderConfig_RefusesSymlinkedAncestor(string target)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var env = target == "protected" ? ScratchHome() : null;
+        var marker = "SYMLINKED-PROVIDER-MARKER-G842";
+        var targetRoot = target == "workspace"
+            ? Path.Combine(root, "provider-symlink-workspace")
+            : Path.Combine(env!.Home, ".config", "opencode");
+        Directory.CreateDirectory(targetRoot);
+        var targetProvider = Path.Combine(targetRoot, "provider.json");
+        File.WriteAllText(targetProvider, JsonSerializer.Serialize(new { provider = new { local = new { options = new { apiKey = marker } } } }));
+
+        var link = Path.Combine(root, "provider-symlink-ancestor-" + target);
+        Directory.CreateSymbolicLink(link, targetRoot);
+        var linkedProvider = Path.Combine(link, "provider.json");
+        var touched = false;
+        CrossRuntimeReviewHomeAccessGuard.ProtectedPathAccessProbe = _ => touched = true;
+
+        var result = Route([
+            "review", "cross-runtime", .. RequestArgs("opencode", Path.Combine(root, "provider-symlink-workspace"),
+                Path.Combine(root, "provider-symlink-out-" + target), OpencodeModel),
+            "--opencode-provider-config", linkedProvider, "--format", "json"]);
+
+        Assert.Equal(1, result.ExitCode);
+        using var refusal = JsonDocument.Parse(result.Output);
+        Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(
+            target == "protected"
+                ? $"opencode provider config source '{linkedProvider}' resolves inside an operator-protected root."
+                : $"opencode provider config source '{linkedProvider}' resolves inside the review workspace.",
+            refusal.RootElement.GetProperty("detail").GetString());
+        Assert.False(touched);
+        Assert.DoesNotContain(marker, result.Output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Request_ProtectedRootSeamAllowsMetadataButNoEnumerationOrContentRead()
     {

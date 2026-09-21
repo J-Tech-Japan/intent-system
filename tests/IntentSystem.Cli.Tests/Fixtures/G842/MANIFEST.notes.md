@@ -1,6 +1,7 @@
 # G842 runtime fixtures: manifest notes
 
-- `MANIFEST.sha256` lists every file in this directory except `MANIFEST.sha256` itself. Verify it with `shasum -a 256 -c MANIFEST.sha256`.
+- `MANIFEST.sha256` lists every file in this directory and the committed `base/` golden tree except `MANIFEST.sha256` itself. Verify it from this directory with `shasum -a 256 -c MANIFEST.sha256`.
+- `base/` is the byte-identity tree captured from merge base `cbe5475977d151f953d1235733e6d9688e0296f1`; its README records the generator command, normalization, and OpenCode capture exclusions.
 - The no-launch source-guard tables are measured at merge base `cbe5475977d151f953d1235733e6d9688e0296f1` and carry the abbreviated commit in each filename. There are no retained pre-G842 tables; the guard has no consumer for them.
 - **Scrub rule** (from 2026-09-17). A live capture is scrubbed before it is copied here.
   - Every occurrence of the operator email is replaced with `<operator-email>`.

@@ -336,7 +336,10 @@ Read-only enforcement (measured):
 - **opencode:** The rendered config denies every tool (`*`) and allows only read,
   glob, grep, and list, at the top level and for the `intent-cli-reviewer` agent.
   `task` is denied because agent-level denials do not reach subagents.
-  `external_directory` is denied, so reads outside the workspace are refused.
+  The pre-render path scan refuses a workspace containing an escaping symlink before
+  the reviewer runs. At runtime, OpenCode's own permission rules do not confine a
+  read through a symlink whose lexical path is inside the workspace; the outside
+  target can still be read.
   `OPENCODE_DISABLE_PROJECT_CONFIG=1` and `--pure` stop the reviewed workspace's
   `opencode.json`, `.opencode` agents, plugins, and MCP entries from overriding
   these rules or running code. `XDG_CONFIG_HOME` and `OPENCODE_CONFIG_DIR` point

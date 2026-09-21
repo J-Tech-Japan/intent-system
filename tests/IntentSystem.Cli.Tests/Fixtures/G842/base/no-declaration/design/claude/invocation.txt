@@ -1,0 +1,2 @@
+# run by the seat (claude); intent-cli renders this text and never runs it
+cd '{{G842_WORKSPACE_ROOT}}/request-json' && claude -p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit --output-format json --json-schema "$(cat '{{G842_WORKSPACE_ROOT}}/request-json/verdict.schema.json')" < '{{G842_WORKSPACE_ROOT}}/request-json/prompt.md' > '{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json'

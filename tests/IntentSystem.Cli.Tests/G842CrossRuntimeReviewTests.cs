@@ -78,6 +78,9 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         }
     }
 
+    internal static void ConfigureG842ClaimReader(Func<string, string, ClaimOwnershipVerification>? reader) =>
+        CrossRuntimeReviewTeamResolver.ClaimReader = reader;
+
     // ── runtime set ──────────────────────────────────────────────────────
 
     [Fact]
@@ -252,6 +255,58 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     public void RelationFor_MatchesSectionSixTable(string conductor, string reviewer, string expected)
     {
         Assert.Equal(expected, CrossRuntimeReviewRecord.RelationFor(reviewer, conductor));
+    }
+
+    public static TheoryData<string, string> RelationCells()
+    {
+        var data = new TheoryData<string, string>();
+        foreach (var conductor in CrossRuntimeReviewRuntimes.All)
+        {
+            foreach (var reviewer in CrossRuntimeReviewRuntimes.All)
+            {
+                data.Add(conductor, reviewer);
+            }
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(RelationCells))]
+    public void Gate_ExercisesEveryConductorReviewerPair_ForDesignAndImplementation(string conductor, string reviewer)
+    {
+        var digest = CurrentDigest();
+        var companion = reviewer == conductor
+            ? CrossRuntimeReviewRuntimes.All.First(runtime => runtime != conductor)
+            : conductor;
+
+        RecordDesignVerdict(reviewer, "approve", digest, conductor);
+        if (companion != reviewer)
+        {
+            RecordDesignVerdict(companion, "approve", digest, conductor);
+        }
+
+        var designStatus = Route(
+            ["review", "cross-runtime", "status", "--kind", "design", "--execution-unit", Unit, "--format", "json"],
+            Context(conductor: conductor));
+        Assert.Equal(0, designStatus.ExitCode);
+        Assert.Equal("satisfied", GateDecision(designStatus.Output));
+        Assert.Equal(
+            CrossRuntimeReviewRecord.RelationFor(reviewer, conductor),
+            GateRelation(designStatus.Output, reviewer));
+
+        RecordVerdict(reviewer, "approve", H1, conductor);
+        if (companion != reviewer)
+        {
+            RecordVerdict(companion, "approve", H1, conductor);
+        }
+
+        var implementationStatus = Status(H1, Context(conductor: conductor));
+        Assert.Equal(0, implementationStatus.ExitCode);
+        Assert.Equal("satisfied", implementationStatus.Status.GetProperty("gate").GetProperty("decision").GetString());
+        Assert.Equal(
+            CrossRuntimeReviewRecord.RelationFor(reviewer, conductor),
+            GateRelation(implementationStatus.Status, reviewer));
     }
 
     [Fact]
@@ -1113,6 +1168,133 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Contains(verdict.Verdict, CrossRuntimeReviewVerdict.VerdictValues);
     }
 
+    public static TheoryData<string, string, string> SuccessfulOpencodeCaptures()
+    {
+        var data = new TheoryData<string, string, string>();
+        foreach (var capture in OpenCodeSuccessfulCaptureCases)
+        {
+            data.Add(capture.Item1, capture.Item2, capture.Item3);
+        }
+
+        return data;
+    }
+
+    [Fact]
+    public void OpencodeEnvelope_EveryCommittedJsonlCapture_IsClassified()
+    {
+        var committed = Directory.EnumerateFiles(Path.GetDirectoryName(Fixture("opencode-approve.jsonl"))!, "opencode*.jsonl")
+            .Select(Path.GetFileName)
+            .Where(name => name is not null)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        var classified = OpenCodeSuccessfulCaptureCases.Select(capture => capture.Item1)
+            .Concat(OpenCodeCaptureExclusions.Select(entry => entry[..entry.IndexOf(':', StringComparison.Ordinal)]))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(committed, classified);
+    }
+
+    [Theory]
+    [MemberData(nameof(SuccessfulOpencodeCaptures))]
+    public void OpencodeEnvelope_EverySuccessfulCommittedCapture_ReplaysToExpectedTerminalState(
+        string fixture,
+        string kind,
+        string expectedVerdict)
+    {
+        var state = "idle";
+        var buffer = string.Empty;
+        var lineNumber = 0;
+        foreach (var line in File.ReadLines(Fixture(fixture)))
+        {
+            lineNumber++;
+            using var document = JsonDocument.Parse(line);
+            var type = document.RootElement.GetProperty("type").GetString()!;
+            Assert.True(
+                CrossRuntimeReviewJsonlVerdict.TryAdvanceOpencodeState(
+                    ref state, ref buffer, type, document.RootElement, lineNumber, out var stateError),
+                $"{fixture} line {lineNumber}: {stateError}");
+        }
+
+        Assert.Equal("terminated", state);
+        var content = File.ReadAllText(Fixture(fixture));
+        bool parsed;
+        string error;
+        string actualVerdict;
+        if (kind == "design")
+        {
+            parsed = CrossRuntimeReviewVerdict.TryParseDesign("opencode", content, out var designVerdict, out error);
+            actualVerdict = parsed ? designVerdict.Verdict : string.Empty;
+        }
+        else
+        {
+            parsed = CrossRuntimeReviewVerdict.TryParse("opencode", content, out var implementationVerdict, out error);
+            actualVerdict = parsed ? implementationVerdict.Verdict : string.Empty;
+        }
+        if (expectedVerdict == "invalid")
+        {
+            Assert.False(parsed);
+            return;
+        }
+
+        Assert.True(parsed, error);
+        Assert.Equal(expectedVerdict, actualVerdict);
+    }
+
+    [Fact]
+    public void OpencodeEnvelope_Exclusions_AreNamedWithReasons()
+    {
+        Assert.Equal(
+            new[]
+            {
+                "opencode-error-401.jsonl: provider returned an error and no successful terminal run",
+                "opencode-error-local-unreachable.jsonl: provider returned an error and no successful terminal run",
+                "opencode-error-unknown-model.jsonl: provider returned an error and no successful terminal run",
+                "opencode-free-tier-403.jsonl: provider returned an error and no successful terminal run",
+                "opencode-design-big-pickle-killed-mid-compaction.jsonl: exit sidecar is 143 (killed/truncated)",
+                "opencode-design-local-live-compaction-timeout.jsonl: timed out before a terminal stop",
+                "opencode-design-local-live-context-overflow.jsonl: context overflow exited with an error",
+                "opencode-implementation-local-context-overflow.jsonl: context overflow exited with status 1",
+            },
+            OpenCodeCaptureExclusions);
+    }
+
+    private static readonly string[] OpenCodeCaptureExclusions =
+    [
+        "opencode-error-401.jsonl: provider returned an error and no successful terminal run",
+        "opencode-error-local-unreachable.jsonl: provider returned an error and no successful terminal run",
+        "opencode-error-unknown-model.jsonl: provider returned an error and no successful terminal run",
+        "opencode-free-tier-403.jsonl: provider returned an error and no successful terminal run",
+        "opencode-design-big-pickle-killed-mid-compaction.jsonl: exit sidecar is 143 (killed/truncated)",
+        "opencode-design-local-live-compaction-timeout.jsonl: timed out before a terminal stop",
+        "opencode-design-local-live-context-overflow.jsonl: context overflow exited with an error",
+        "opencode-implementation-local-context-overflow.jsonl: context overflow exited with status 1",
+    ];
+
+    private static readonly (string, string, string)[] OpenCodeSuccessfulCaptureCases =
+    [
+        ("opencode-agentsmd-control-local.jsonl", "design", "approve"),
+        ("opencode-agentsmd-pinned-local.jsonl", "design", "approve"),
+        ("opencode-approve-narrated.jsonl", "design", "approve"),
+        ("opencode-approve.jsonl", "design", "approve"),
+        ("opencode-builder-hardened-hostile-local.jsonl", "implementation", "invalid"),
+        ("opencode-config-dir-hostile-unisolated-local.jsonl", "design", "invalid"),
+        ("opencode-design-big-pickle-live-compaction-retry.jsonl", "design", "invalid"),
+        ("opencode-design-big-pickle-live-compaction.jsonl", "design", "invalid"),
+        ("opencode-design-local-live-g840.jsonl", "design", "request-changes"),
+        ("opencode-global-hostile-isolated-local.jsonl", "design", "invalid"),
+        ("opencode-global-hostile-unisolated-local.jsonl", "design", "approve"),
+        ("opencode-implementation-big-pickle-live-compaction.jsonl", "implementation", "request-changes"),
+        ("opencode-implementation-local-live-g840-pr1827.jsonl", "implementation", "approve"),
+        ("opencode-implementation-local-two-compactions.jsonl", "implementation", "invalid"),
+        ("opencode-inherited-env-hostile-local.jsonl", "design", "approve"),
+        ("opencode-inherited-env-neutralized-local.jsonl", "design", "approve"),
+        ("opencode-isolated-approve-local.jsonl", "design", "approve"),
+        ("opencode-parent-escape-canary.jsonl", "design", "invalid"),
+        ("opencode-pinned-all-hostile-local.jsonl", "design", "approve"),
+        ("opencode-request-changes.jsonl", "design", "request-changes"),
+        ("opencode-symlink-escape-canary.jsonl", "design", "invalid"),
+    ];
+
     [Theory]
     [InlineData("opencode-error-401.jsonl", "verdict-invalid: T1 refused error event 'APIError' on line 1: Unauthorized: unauthorized: AuthenticateToken authentication failed")]
     [InlineData("opencode-error-unknown-model.jsonl", "verdict-invalid: T1 refused error event 'UnknownError' on line 1: Unexpected server error. Check server logs for details.")]
@@ -1638,6 +1820,20 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         return (exit, document.RootElement.Clone());
     }
 
+    private static string GateDecision(string output) =>
+        JsonDocument.Parse(output).RootElement.GetProperty("gate").GetProperty("decision").GetString()!;
+
+    private static string GateRelation(string output, string runtime) =>
+        GateRelation(JsonDocument.Parse(output).RootElement, runtime);
+
+    private static string GateRelation(JsonElement status, string runtime) =>
+        status.GetProperty("gate").GetProperty("records")
+            .EnumerateArray()
+            .Single(record => record.GetProperty("runtime").GetString() == runtime
+                && record.GetProperty("status").GetString() == "deciding")
+            .GetProperty("relation")
+            .GetString()!;
+
     private void RecordVerdict(string runtime, string verdict, string head, string conductor = "claude", string? model = null, string? effort = null)
     {
         var content = runtime switch
@@ -1666,6 +1862,23 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         }
 
         var (exit, output) = Route(["review", "cross-runtime", .. args, "--format", "json"], Context(conductor: conductor));
+        Assert.True(exit == 0, output);
+    }
+
+    private void RecordDesignVerdict(string runtime, string verdict, string digest, string conductor)
+    {
+        var content = runtime switch
+        {
+            "copilot" => CopilotDesignEnvelope(verdict, digest),
+            "opencode" => OpencodeDesignEnvelope(verdict, digest),
+            "claude" => ClaudeEnvelope(DesignVerdict(verdict, digest)),
+            "cursor" => CursorEnvelope(DesignVerdict(verdict, digest)),
+            _ => DesignVerdict(verdict, digest),
+        };
+        var file = WriteVerdictFile(runtime, content);
+        var (exit, output) = Route(
+            ["review", "cross-runtime", .. DesignRecordArgs(runtime, file, digest, write: true, includeModel: runtime is "copilot" or "opencode"), "--format", "json"],
+            Context(conductor: conductor));
         Assert.True(exit == 0, output);
     }
 

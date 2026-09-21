@@ -1,0 +1,42 @@
+{
+  "execution_unit": "G842",
+  "domain": "intent-cli",
+  "repo": "J-Tech-Japan/intent-system",
+  "packet_directory": "{{G842_WORKSPACE_ROOT}}/.intent-cli/issues/G842",
+  "github_body_path": "{{G842_WORKSPACE_ROOT}}/.intent-cli/issues/G842/github-body.md",
+  "publish_yaml_path": "{{G842_WORKSPACE_ROOT}}/.intent-cli/issues/G842/publish.yaml",
+  "packet_exists": true,
+  "github_body_present": true,
+  "missing_contract_sections": [],
+  "mode": "dry-run",
+  "title": "G842 AC13 gated dry-run",
+  "issue_title": "G842 AC13 gated dry-run",
+  "title_source": "packet-yaml",
+  "warnings": [],
+  "created": false,
+  "idempotent": false,
+  "durable_state_synced": false,
+  "queue_state_patched": false,
+  "publish_yaml_patched": false,
+  "runs_appended": false,
+  "intent_target_applied": false,
+  "next_steps": [],
+  "cross_runtime_design_review": {
+    "decision": "missing",
+    "reasons": [
+      {
+        "cause": "cross-runtime-review-missing",
+        "detail": "digest a0ab37c244b88e834723827403414a1acc4aed977838915f4c1b49987a41cc2e has no approve whose latest record comes from the conductor runtime \u0027claude\u0027 (independent same-runtime subagent review).",
+        "relation": "same-runtime"
+      },
+      {
+        "cause": "cross-runtime-review-missing",
+        "detail": "digest a0ab37c244b88e834723827403414a1acc4aed977838915f4c1b49987a41cc2e has no approve whose latest record comes from a runtime other than the conductor runtime \u0027claude\u0027 (cross-runtime review).",
+        "relation": "cross-runtime"
+      }
+    ],
+    "digest": "a0ab37c244b88e834723827403414a1acc4aed977838915f4c1b49987a41cc2e",
+    "domain": "intent-cli",
+    "team": "intent-cli-dev"
+  }
+}

@@ -305,7 +305,9 @@ read-only enforcement（実測）:
 - **opencode:** 出力された config はすべての tool（`*`）を拒否し、top level と
   `intent-cli-reviewer` agent では read、glob、grep、list だけを許可します。`task` は
   agent レベルの拒否が subagent に届かないため拒否します。`external_directory` は拒否
-  のため workspace 外の読み取りは拒否されます。`OPENCODE_DISABLE_PROJECT_CONFIG=1` と
+  のため、レビュー実行前の pre-render path scan は escaping symlink を含む workspace を拒否します。
+  ただし実行時に OpenCode 自身の permission rule は、workspace 内に見える symlink を経由した読み取りを
+  制限しないため、リンク先の workspace 外 target は読めます。`OPENCODE_DISABLE_PROJECT_CONFIG=1` と
   `--pure` は査読対象 workspace の `opencode.json`、`.opencode` agent、plugin、MCP entry が
   これらの rule を上書きしたり code を実行したりするのを止めます。`XDG_CONFIG_HOME` と
   `OPENCODE_CONFIG_DIR` は intent-cli が作った空 directory を指し、2 つの空 variable は

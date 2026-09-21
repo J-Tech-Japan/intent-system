@@ -1,0 +1,7 @@
+{
+  "command": "review cross-runtime record",
+  "outcome": "refused",
+  "cause": "cross-runtime-review-not-declared",
+  "detail": "team \u0027intent-cli/intent-cli-dev\u0027 is not declared in [[cross_runtime_review.teams]]; its PRs need only the independent same-runtime subagent review.",
+  "fix": "declare the team in \u0060.intent-cli/config.toml\u0060 under [[cross_runtime_review.teams]] if cross-runtime review is required."
+}

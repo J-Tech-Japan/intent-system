@@ -1,0 +1,2 @@
+# run by the seat (codex); intent-cli renders this text and never runs it
+codex exec -s read-only -C '{{G842_WORKSPACE_ROOT}}/request-json' --output-schema '{{G842_WORKSPACE_ROOT}}/request-json/verdict.schema.json' -o '{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json' - < '{{G842_WORKSPACE_ROOT}}/request-json/prompt.md'
