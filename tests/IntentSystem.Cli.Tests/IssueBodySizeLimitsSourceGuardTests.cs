@@ -9,12 +9,16 @@ public sealed class IssueBodySizeLimitsSourceGuardTests
     public void ProductionSource_DeclaresEachBodyLimitSpellingExactlyOnce()
     {
         var root = RepoVersionPolicySource.RepoRoot();
+        // Generated build output (bin/obj) is not production source: its AssemblyInfo
+        // embeds the commit SHA, whose hex digits can contain these spellings.
         var sourceFiles = Directory.GetFiles(
-            Path.Combine(root, "src"),
-            "*.cs",
-            SearchOption.AllDirectories);
-        var hardMatches = FindMatches(sourceFiles, @"(?:65536|65_536)");
-        var warningMatches = FindMatches(sourceFiles, @"(?:58000|58_000)");
+                Path.Combine(root, "src"),
+                "*.cs",
+                SearchOption.AllDirectories)
+            .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(segment => segment is "bin" or "obj"))
+            .ToArray();
+        var hardMatches = FindMatches(sourceFiles, @"\b(?:65536|65_536)\b");
+        var warningMatches = FindMatches(sourceFiles, @"\b(?:58000|58_000)\b");
 
         var hardMatch = Assert.Single(hardMatches);
         var warningMatch = Assert.Single(warningMatches);
