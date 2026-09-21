@@ -809,6 +809,64 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         Assert.Equal((UnixFileMode)0x180, File.GetUnixFileMode(prompt) & (UnixFileMode)0x1ff);
     }
 
+    [Theory]
+    [InlineData("022")]
+    [InlineData("000")]
+    public void Request_AcceptsExistingIsolationDirectories_AndNarrowsThemTo0700_UnderUmask(string umaskText)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var old = umask(Convert.ToInt32(umaskText, 8));
+        try
+        {
+            foreach (var (runtime, kind, hasClone) in new[]
+                     {
+                         ("copilot", CrossRuntimeReviewRecord.KindImplementation, true),
+                         ("copilot", CrossRuntimeReviewRecord.KindDesign, false),
+                         ("opencode", CrossRuntimeReviewRecord.KindImplementation, true),
+                         ("opencode", CrossRuntimeReviewRecord.KindDesign, false),
+                     })
+            {
+                foreach (var initialMode in new[] { (UnixFileMode)0x1ed, (UnixFileMode)0x1c0 })
+                {
+                    var outDir = Path.Combine(root, $"existing-isolation-{runtime}-{kind}-{umaskText}-{(int)initialMode}");
+                    Directory.CreateDirectory(outDir);
+                    var directoryNames = CrossRuntimeReviewRuntimes.IsolationDirectories(runtime)
+                        .Concat(kind == CrossRuntimeReviewRecord.KindDesign ? [CrossRuntimeReviewFiles.Workspace] : [])
+                        .ToArray();
+                    foreach (var directoryName in directoryNames)
+                    {
+                        var path = Path.Combine(outDir, directoryName);
+                        Directory.CreateDirectory(path);
+                        File.SetUnixFileMode(path, initialMode);
+                    }
+
+                    var result = RequestAt(
+                        runtime,
+                        kind,
+                        Path.Combine(root, $"existing-isolation-clone-{runtime}-{kind}-{umaskText}-{(int)initialMode}"),
+                        outDir,
+                        hasClone);
+                    Assert.True(result.ExitCode == 0, result.Output);
+
+                    foreach (var directoryName in directoryNames)
+                    {
+                        Assert.Equal(
+                            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                            File.GetUnixFileMode(Path.Combine(outDir, directoryName)) & (UnixFileMode)0x1ff);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            umask(old);
+        }
+    }
+
     [Fact]
     public void Request_ProviderSecretAppearsOnlyInReviewerConfig_AndSourceMustBeOutsideWorkspace()
     {

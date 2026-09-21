@@ -257,15 +257,19 @@ internal static class CrossRuntimeReviewRequestSupport
 
     private static void CreatePrivateDirectory(string path)
     {
+        const UnixFileMode privateDirectoryMode =
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
         if (OperatingSystem.IsWindows())
         {
             Directory.CreateDirectory(path);
             return;
         }
 
-        Directory.CreateDirectory(
-            path,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Directory.CreateDirectory(path, privateDirectoryMode);
+        // Directory.CreateDirectory(path, mode) preserves an existing directory's
+        // mode. An accepted empty isolation directory must still be private.
+        File.SetUnixFileMode(path, privateDirectoryMode);
     }
 
     private static bool PathIsPresent(string path) => CrossRuntimeReviewHomeAccessGuard.PathIsPresent(path);

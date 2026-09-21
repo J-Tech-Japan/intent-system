@@ -250,8 +250,8 @@ G835 extends the declared-team cross-runtime review surface in two ways:
   store `model` only when given.
 
 ```text
-intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor --out-dir <dir> [--clone <read-only-clone>] [--model <name>]
-intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--write]
+intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --out-dir <dir> [--clone <read-only-clone>] [--model <name>] [--effort <level>] [--opencode-provider-config <file>]
+intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--write]
 intent-cli review cross-runtime status --kind design --execution-unit <unit>
 ```
 

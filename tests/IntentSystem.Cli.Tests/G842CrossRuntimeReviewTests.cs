@@ -395,6 +395,32 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
             refusal.RootElement.GetProperty("detail").GetString());
     }
 
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("opencode")]
+    public void Request_AndRecord_RefuseExplicitlyEmptyEffort(string runtime)
+    {
+        var model = runtime == "copilot" ? CopilotModel : OpencodeModel;
+        var requestArgs = RequestArgs(runtime, Path.Combine(root, "empty-effort-clone"), Path.Combine(root, "empty-effort-" + runtime), model, string.Empty);
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. requestArgs, "--format", "json"]);
+        Assert.Equal(1, requestExit);
+        using (var requestRefusal = JsonDocument.Parse(requestOutput))
+        {
+            Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, requestRefusal.RootElement.GetProperty("cause").GetString());
+            Assert.Contains("empty", requestRefusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+
+        var verdict = WriteVerdictFile(runtime, runtime == "copilot"
+            ? CopilotImplementationEnvelope("approve", H1)
+            : OpencodeImplementationEnvelope("approve", H1));
+        var recordArgs = RecordArgs(runtime, verdict, H1, write: false, model: model, effort: string.Empty);
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. recordArgs, "--format", "json"]);
+        Assert.Equal(1, recordExit);
+        using var recordRefusal = JsonDocument.Parse(recordOutput);
+        Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, recordRefusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("empty", recordRefusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Request_OpencodeProviderConfig_IsAcceptedOnlyForOpencode()
     {
@@ -1454,6 +1480,14 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
             Assert.Contains("G842", orchestration, StringComparison.Ordinal);
             Assert.Contains("copilot", orchestration, StringComparison.Ordinal);
             Assert.Contains("opencode", orchestration, StringComparison.Ordinal);
+            Assert.Contains(
+                "intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --out-dir <dir> [--clone <read-only-clone>] [--model <name>] [--effort <level>] [--opencode-provider-config <file>]",
+                orchestration,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--write]",
+                orchestration,
+                StringComparison.Ordinal);
 
             var ledger = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "1.0-compatibility-ledger.md"));
             foreach (var row in new[] { "| `review cross-runtime request` |", "| `review cross-runtime record` |", "| `review cross-runtime status` |", "| cross-runtime review declaration |" })

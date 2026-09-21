@@ -1696,7 +1696,7 @@ internal static class ReviewCrossRuntimeCommand
             }
 
             var value = args[++index];
-            if (argument != "--model" && string.IsNullOrEmpty(value))
+            if (argument is not ("--model" or "--effort") && string.IsNullOrEmpty(value))
             {
                 writer.WriteLine($"{argument} requires a value.");
                 writer.WriteLine(usage);
