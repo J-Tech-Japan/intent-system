@@ -338,7 +338,7 @@ internal static class IssueSyncBodyCommand
         {
             IssueBodyTransmissionFailure.TooLarge =>
                 ("body-too-large",
-                    $"Issue body is {refusal.ByteCount} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit."),
+                    $"github-body.md is {refusal.ByteCount} bytes, which exceeds the {IssueBodySizeLimits.HardLimitBytes}-byte limit."),
             IssueBodyTransmissionFailure.InvalidUtf8 =>
                 ("body-invalid-utf8",
                     $"Issue body is not valid UTF-8 at byte offset {refusal.InvalidByteOffset}."),

@@ -211,7 +211,7 @@ public sealed class G845TransmissionPrimitiveTests
         Assert.Equal("body-too-large", syncTooLarge.ReasonCode);
         Assert.Equal(1, syncTooLarge.ExitCode);
         Assert.Equal(
-            "refused (body-too-large): Issue body is 70000 bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.",
+            "refused (body-too-large): github-body.md is 70000 bytes, which exceeds the 65536-byte limit. The issue body was read, but no update was sent.",
             syncTooLarge.Summary);
         var syncInvalid = IssueSyncBodyCommand.BuildTransmissionRefusal(baseResult, invalid);
         Assert.Equal("body-invalid-utf8", syncInvalid.ReasonCode);

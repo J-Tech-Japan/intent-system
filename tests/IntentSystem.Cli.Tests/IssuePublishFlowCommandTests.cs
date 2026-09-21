@@ -366,6 +366,34 @@ public sealed class IssuePublishFlowCommandTests : IDisposable
     }
 
     [Fact]
+    public void G845_Point1_ExistingMalformedHeadingValidationStillWins()
+    {
+        using var workspace = new IssuePublishFlowWorkspace();
+        var title = "G845 point one malformed heading";
+        workspace.WriteGithubBodyBytes("G845", G845BodyFixtures.InvalidHeadingBytes(50003, title));
+        workspace.SeedQueueState("G845", title);
+        var creator = new StubIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        using var writer = new StringWriter();
+        Assert.Equal(1, IssuePublishFlowCommand.Execute(
+            workspace.Context,
+            ["G845", "--repo", "J-Tech-Japan/intent-system", "--write", "--format", "json"],
+            writer));
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var root = document.RootElement;
+        Assert.Equal(
+            "Child Issue Contract is incomplete; the existing publish gate rejected headings or placeholder-only Related Links.",
+            root.GetProperty("error").GetString());
+        Assert.Contains(
+            "Goal",
+            root.GetProperty("missing_contract_sections").EnumerateArray().Select(section => section.GetString()));
+        Assert.False(root.GetProperty("created").GetBoolean());
+        Assert.Equal(0, creator.CallCount);
+    }
+
+    [Fact]
     public void G845_Point1_NonUtf8BomBodiesNeverReachCreate()
     {
         foreach (var bytes in new[]

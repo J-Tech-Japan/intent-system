@@ -56,6 +56,18 @@ public sealed class IssueBodyTransmissionGateSourceGuardTests
 
             Require(evaluate >= 0, path, route.MemberName, source, route.StartMarker,
                 "the complete IssueBodyTransmissionGate.Evaluate call is present");
+            // AC3: "no route calls a decode-only variant". A member-substring
+            // check alone passes for a helper whose name merely starts with
+            // Evaluate, so the call must be Evaluate( exactly and no
+            // longer-named gate entry point may appear in the member.
+            Require(
+                Regex.IsMatch(member, @"IssueBodyTransmissionGate\.Evaluate\("),
+                path, route.MemberName, source, route.StartMarker,
+                "the gate entry point called is IssueBodyTransmissionGate.Evaluate itself");
+            Require(
+                !Regex.IsMatch(member, @"IssueBodyTransmissionGate\.Evaluate\w"),
+                path, route.MemberName, source, route.StartMarker,
+                "the route calls no decode-only gate variant");
             Require(transmission >= 0, path, route.MemberName, source, route.TransmissionCall,
                 "the measured transmission call is still anchored in this member");
             Require(evaluate < transmission, path, route.MemberName, source, route.TransmissionCall,

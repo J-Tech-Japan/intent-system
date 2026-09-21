@@ -657,6 +657,31 @@ public sealed class G835PublishFlowTests : IDisposable
     }
 
     [Fact]
+    public void G845_Point2_ExistingMalformedHeadingValidationStillWins()
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.WriteAllBytes(workspace.GithubBodyPath(Unit), G845BodyFixtures.InvalidHeadingBytes(50003, Title()));
+        workspace.SeedQueueState(Unit, Title());
+        var recorder = new RecordingIssueCreator("unused");
+        IssuePublishFlowCommand.CreatorFactory = () => recorder;
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        Assert.Equal(
+            "Child Issue Contract is incomplete; the existing publish gate rejected headings or placeholder-only Related Links.",
+            root.GetProperty("error").GetString());
+        Assert.Contains(
+            "Goal",
+            root.GetProperty("missing_contract_sections").EnumerateArray().Select(section => section.GetString()));
+        Assert.False(root.GetProperty("created").GetBoolean());
+        Assert.Equal(0, recorder.CallCount);
+    }
+
+    [Fact]
     public void G845_Point2_NonUtf8BomBodiesNeverReachCreate()
     {
         foreach (var bytes in new[]
