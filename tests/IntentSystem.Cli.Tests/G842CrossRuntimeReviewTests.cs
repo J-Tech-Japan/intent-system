@@ -632,6 +632,34 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     }
 
     [Fact]
+    public void DenyList_RejectsNonEmptyOpencodeAssignments_ButAcceptsPinnedEmptyAssignments()
+    {
+        var command = G842PinnedContractTexts.ExpectedReviewerInvocation(
+            "opencode",
+            Path.Combine(root, "clone"),
+            Path.Combine(root, "out"),
+            OpencodeModel,
+            null);
+
+        CrossRuntimeReviewInvocationTestHelpers.AssertNoDenyFlags("opencode", command);
+
+        var mutations = new[]
+        {
+            (Name: "OPENCODE_PERMISSION", Command: command.Replace("OPENCODE_PERMISSION=", "OPENCODE_PERMISSION=allow", StringComparison.Ordinal)),
+            (Name: "OPENCODE_PERMISSION", Command: command.Replace("OPENCODE_PERMISSION=", "OPENCODE_PERMISSION='{\"*\":\"allow\"}'", StringComparison.Ordinal)),
+            (Name: "OPENCODE_CONFIG_CONTENT", Command: command.Replace("OPENCODE_CONFIG_CONTENT=", "OPENCODE_CONFIG_CONTENT={}", StringComparison.Ordinal)),
+            (Name: "XDG_DATA_HOME", Command: command.Replace("OPENCODE_CONFIG_CONTENT= ", "OPENCODE_CONFIG_CONTENT= XDG_DATA_HOME=/x ", StringComparison.Ordinal)),
+        };
+
+        foreach (var mutation in mutations)
+        {
+            var exception = Assert.ThrowsAny<Exception>(() =>
+                CrossRuntimeReviewInvocationTestHelpers.AssertNoDenyFlags("opencode", mutation.Command));
+            Assert.Contains(mutation.Name, exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void CopilotInstructionCanary_OnlyThePinnedFlagSuppressesWorkspaceInstructions()
     {
         var withFlag = File.ReadAllText(Fixture("copilot-instruction-canary-with-flag.jsonl"));

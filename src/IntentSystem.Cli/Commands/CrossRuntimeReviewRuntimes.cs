@@ -109,7 +109,7 @@ internal static class CrossRuntimeReviewRuntimes
                 "--allow-dangerously-skip-permissions", "--dangerously-bypass-approvals-and-sandbox",
                 "--dangerously-bypass-hook-trust", "danger-full-access", "workspace-write", "--sandbox disabled",
                 "--auto", "--attach", "--share", "--continue", "--session", "--fork", "--port", "--command",
-                "--interactive", "-i", "XDG_DATA_HOME",
+                "--interactive", "-i", "OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT", "XDG_DATA_HOME",
             ],
         };
 

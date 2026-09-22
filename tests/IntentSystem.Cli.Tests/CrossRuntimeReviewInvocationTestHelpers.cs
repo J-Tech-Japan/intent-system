@@ -91,9 +91,23 @@ internal static class CrossRuntimeReviewInvocationTestHelpers
             else
             {
                 Assert.DoesNotContain(denied, tokens);
+                if (IsEnvironmentVariableName(denied))
+                {
+                    var assignmentPrefix = denied + "=";
+                    Assert.False(
+                        tokens.Any(token => token.StartsWith(assignmentPrefix, StringComparison.Ordinal)
+                            && token.Length > assignmentPrefix.Length),
+                        $"deny-list entry '{denied}' has a non-empty assignment in: {command}");
+                }
             }
         }
     }
+
+    private static bool IsEnvironmentVariableName(string value) =>
+        value.Length > 0
+        && value.All(character => character == '_'
+            || (character >= 'A' && character <= 'Z')
+            || (character >= '0' && character <= '9'));
 
     private static bool ContainsConsecutiveTokens(IReadOnlyList<string> tokens, IReadOnlyList<string> parts)
     {
