@@ -284,7 +284,7 @@ internal static class CrossRuntimeReviewHomeAccessGuard
     {
         try
         {
-            return ResolveRealPath(Path.GetFullPath(path), new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0);
+            return ResolvePathCore(path);
         }
         catch (IOException)
         {
@@ -296,12 +296,37 @@ internal static class CrossRuntimeReviewHomeAccessGuard
         }
     }
 
-    private static string ResolveRealPath(string path, HashSet<string> seen, int depth)
+    internal static bool TryResolvePath(string path, out string resolved)
     {
-        if (depth > 64 || !seen.Add(path))
+        try
         {
-            return path;
+            resolved = ResolvePathCore(path);
+            return true;
         }
+        catch (IOException)
+        {
+            resolved = string.Empty;
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            resolved = string.Empty;
+            return false;
+        }
+    }
+
+    private static string ResolvePathCore(string path)
+    {
+        var absolute = Path.IsPathRooted(path)
+            ? path
+            : Path.Combine(Environment.CurrentDirectory, path);
+        var linkExpansions = 0;
+        return ResolveRealPath(absolute, ref linkExpansions);
+    }
+
+    private static string ResolveRealPath(string path, ref int linkExpansions)
+    {
+        const int maxLinkExpansions = 40;
 
         var root = Path.GetPathRoot(path) ?? string.Empty;
         var relative = path[root.Length..];
@@ -311,17 +336,33 @@ internal static class CrossRuntimeReviewHomeAccessGuard
         var resolved = root;
         foreach (var segment in segments)
         {
-            var current = Path.GetFullPath(Path.Combine(resolved, segment));
-            if (!TryGetLinkTarget(current, out var target))
+            if (segment == ".")
+            {
+                continue;
+            }
+
+            if (segment == "..")
+            {
+                resolved = Path.GetDirectoryName(resolved) ?? root;
+                continue;
+            }
+
+            var current = Path.Combine(resolved, segment);
+            if (!TryGetLinkTarget(current, out var target, failOnError: true))
             {
                 resolved = current;
                 continue;
             }
 
+            if (++linkExpansions > maxLinkExpansions)
+            {
+                throw new IOException("too many symbolic-link expansions");
+            }
+
             var targetPath = Path.IsPathRooted(target)
                 ? target
                 : Path.Combine(Path.GetDirectoryName(current) ?? root, target);
-            resolved = ResolveRealPath(Path.GetFullPath(targetPath), seen, depth + 1);
+            resolved = ResolveRealPath(targetPath, ref linkExpansions);
         }
 
         return Path.GetFullPath(resolved);
@@ -410,13 +451,39 @@ internal static class CrossRuntimeReviewHomeAccessGuard
 
             foreach (var entry in entries.OrderBy(value => value, StringComparer.Ordinal))
             {
-                if (IsSymlink(entry))
+                var relative = Path.GetRelativePath(resolvedWorkspace, entry).Replace(Path.DirectorySeparatorChar, '/');
+                bool isSymlink;
+                try
                 {
-                    if (!TryResolveExistingLink(entry, out var target)
-                        || !PathIsPresent(target)
-                        || !IsInsideOrEqual(ResolvePath(target), resolvedWorkspace))
+                    isSymlink = TryGetLinkTarget(entry, out _, failOnError: true);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    detail = $"review workspace contains an escaping symlink at '{relative}'.";
+                    return false;
+                }
+
+                if (isSymlink)
+                {
+                    var valid = false;
+                    try
                     {
-                        var relative = Path.GetRelativePath(resolvedWorkspace, entry).Replace(Path.DirectorySeparatorChar, '/');
+                        if (TryResolveExistingLink(entry, out var target)
+                            && TryResolvePath(target, out var resolvedTarget))
+                        {
+                            if (PathIsPresent(resolvedTarget))
+                            {
+                                valid = IsInsideOrEqual(resolvedTarget, resolvedWorkspace);
+                            }
+                        }
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        valid = false;
+                    }
+
+                    if (!valid)
+                    {
                         detail = $"review workspace contains an escaping symlink at '{relative}'.";
                         return false;
                     }
@@ -437,7 +504,7 @@ internal static class CrossRuntimeReviewHomeAccessGuard
     private static bool TryResolveExistingLink(string path, out string target)
     {
         target = string.Empty;
-        if (!TryGetLinkTarget(path, out var linkTarget))
+        if (!TryGetLinkTarget(path, out var linkTarget, failOnError: true))
         {
             return false;
         }
@@ -448,7 +515,7 @@ internal static class CrossRuntimeReviewHomeAccessGuard
         return true;
     }
 
-    private static bool TryGetLinkTarget(string path, out string target)
+    private static bool TryGetLinkTarget(string path, out string target, bool failOnError = false)
     {
         target = string.Empty;
         try
@@ -467,11 +534,11 @@ internal static class CrossRuntimeReviewHomeAccessGuard
                 return true;
             }
         }
-        catch (IOException)
+        catch (IOException) when (!failOnError)
         {
             return false;
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException) when (!failOnError)
         {
             return false;
         }

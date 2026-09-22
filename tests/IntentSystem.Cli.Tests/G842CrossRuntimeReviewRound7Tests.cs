@@ -721,6 +721,178 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
     [InlineData("copilot", "design")]
     [InlineData("opencode", "implementation")]
     [InlineData("opencode", "design")]
+    public void Request_RefusesEscapingWorkspaceSymlink_WhenDotDotFollowsLink(string runtime, string kind)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var parent = Path.Combine(root, "dotdot-parent-" + runtime + "-" + kind);
+        var workspace = Path.Combine(parent, "grand", "W");
+        var links = Path.Combine(workspace, "a", "b");
+        Directory.CreateDirectory(links);
+        File.WriteAllText(Path.Combine(workspace, "a", "secret.txt"), "decoy");
+        var outside = Path.Combine(parent, "secret.txt");
+        File.WriteAllText(outside, "outside");
+        Directory.CreateSymbolicLink(Path.Combine(links, "dl"), "../..");
+        File.CreateSymbolicLink(Path.Combine(workspace, "e"), "a/b/dl/../../secret.txt");
+
+        var result = RequestAt(runtime, kind, workspace, Path.Combine(root, "dotdot-out-" + runtime + "-" + kind), hasClone: true);
+        AssertWorkspaceSymlinkRefusal(result, "e", outside);
+    }
+
+    [Theory]
+    [InlineData("copilot", "implementation")]
+    [InlineData("copilot", "design")]
+    [InlineData("opencode", "implementation")]
+    [InlineData("opencode", "design")]
+    public void Request_AcceptsWorkspaceSymlink_WhenDotDotFollowsLinkButStaysInside(string runtime, string kind)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var workspace = Path.Combine(root, "dotdot-inside-" + runtime + "-" + kind);
+        var links = Path.Combine(workspace, "a", "b");
+        Directory.CreateDirectory(links);
+        File.WriteAllText(Path.Combine(workspace, "a", "secret.txt"), "decoy");
+        File.WriteAllText(Path.Combine(workspace, "a", "inside.txt"), "inside");
+        Directory.CreateSymbolicLink(Path.Combine(links, "dl"), "../..");
+        File.CreateSymbolicLink(Path.Combine(workspace, "e"), "a/b/dl/a/b/dl/a/inside.txt");
+
+        var result = RequestAt(runtime, kind, workspace, Path.Combine(root, "dotdot-inside-out-" + runtime + "-" + kind), hasClone: true);
+        Assert.True(result.ExitCode == 0, result.Output);
+    }
+
+    [Theory]
+    [InlineData("copilot", "implementation")]
+    [InlineData("copilot", "design")]
+    [InlineData("opencode", "implementation")]
+    [InlineData("opencode", "design")]
+    public void Request_AcceptsWorkspaceSymlink_WhenResolvedTargetExistsButRawJoinedTargetDoesNot(string runtime, string kind)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var env = ScratchHome();
+        var workspace = Path.Combine(root, "raw-presence-" + runtime + "-" + kind);
+        var links = Path.Combine(workspace, "a", "b");
+        Directory.CreateDirectory(links);
+        Directory.CreateDirectory(Path.Combine(workspace, "b"));
+        File.WriteAllText(Path.Combine(workspace, "b", "inside.txt"), "inside");
+        Directory.CreateSymbolicLink(Path.Combine(links, "dl"), "..");
+        File.CreateSymbolicLink(Path.Combine(workspace, "e"), "a/b/dl/../b/inside.txt");
+
+        var rawJoinedTarget = Path.Combine(workspace, "a/b/dl/../b/inside.txt");
+        Assert.False(File.Exists(rawJoinedTarget));
+        Assert.True(CrossRuntimeReviewHomeAccessGuard.TryResolvePath(rawJoinedTarget, out var resolvedTarget), rawJoinedTarget);
+        Assert.Equal(CrossRuntimeReviewHomeAccessGuard.ResolvePath(Path.Combine(workspace, "b", "inside.txt")), resolvedTarget);
+        var resolvedWorkspace = CrossRuntimeReviewHomeAccessGuard.ResolvePath(workspace);
+        Assert.True(CrossRuntimeReviewHomeAccessGuard.TryResolvePath(Path.Combine(resolvedWorkspace, "a/b/dl/../b/inside.txt"), out var scanResolvedTarget));
+        Assert.Equal(resolvedTarget, scanResolvedTarget);
+        Assert.True(CrossRuntimeReviewHomeAccessGuard.PathIsPresent(scanResolvedTarget), scanResolvedTarget);
+
+        var result = RequestAt(runtime, kind, workspace, Path.Combine(root, "raw-presence-out-" + runtime + "-" + kind), hasClone: true);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("copilot", "implementation")]
+    [InlineData("copilot", "design")]
+    [InlineData("opencode", "implementation")]
+    [InlineData("opencode", "design")]
+    public void Request_RefusesWorkspaceSymlinkCycle_NamingEntry(string runtime, string kind)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var workspace = Path.Combine(root, "symlink-cycle-" + runtime + "-" + kind);
+        Directory.CreateDirectory(workspace);
+        Directory.CreateSymbolicLink(Path.Combine(workspace, "x"), "y");
+        Directory.CreateSymbolicLink(Path.Combine(workspace, "y"), "x");
+
+        var result = RequestAt(runtime, kind, workspace, Path.Combine(root, "symlink-cycle-out-" + runtime + "-" + kind), hasClone: true);
+        AssertWorkspaceSymlinkRefusal(result, "x", Path.Combine(workspace, "y"));
+    }
+
+    [Theory]
+    [InlineData("copilot", "implementation")]
+    [InlineData("copilot", "design")]
+    [InlineData("opencode", "implementation")]
+    [InlineData("opencode", "design")]
+    public void Request_RefusesWorkspaceSymlinkChainOverFortyExpansions_NamingEntry(string runtime, string kind)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var workspace = Path.Combine(root, "symlink-chain-" + runtime + "-" + kind);
+        Directory.CreateDirectory(workspace);
+        File.WriteAllText(Path.Combine(workspace, "inside.txt"), "inside");
+        for (var index = 40; index >= 0; index--)
+        {
+            var target = index == 40 ? "inside.txt" : "zchain" + (index + 1);
+            File.CreateSymbolicLink(Path.Combine(workspace, "zchain" + index), target);
+        }
+
+        File.CreateSymbolicLink(Path.Combine(workspace, "entry"), "zchain0");
+
+        var result = RequestAt(runtime, kind, workspace, Path.Combine(root, "symlink-chain-out-" + runtime + "-" + kind), hasClone: true);
+        AssertWorkspaceSymlinkRefusal(result, "entry", Path.Combine(workspace, "zchain0"));
+    }
+
+    [Theory]
+    [InlineData("copilot", "implementation")]
+    [InlineData("copilot", "design")]
+    [InlineData("opencode", "implementation")]
+    [InlineData("opencode", "design")]
+    public void Request_RefusesProtectedRoot_WhenDotDotFollowsLink(string runtime, string kind)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var env = ScratchHome();
+        var protectedRoot = Path.Combine(env.Home, ".config", "opencode");
+        var protectedLinkTarget = Path.Combine(protectedRoot, "link-target", "child");
+        Directory.CreateDirectory(protectedLinkTarget);
+
+        var lexicalRoot = Path.Combine(root, "protected-dotdot-" + runtime + "-" + kind);
+        var links = Path.Combine(lexicalRoot, "a", "b");
+        Directory.CreateDirectory(links);
+        Directory.CreateSymbolicLink(Path.Combine(links, "dl"), protectedLinkTarget);
+        File.CreateSymbolicLink(Path.Combine(lexicalRoot, "e"), "a/b/dl/../../inside");
+
+        var workspace = Path.Combine(root, "protected-dotdot-workspace-" + runtime + "-" + kind);
+        Directory.CreateDirectory(workspace);
+        var linkedOut = Path.Combine(lexicalRoot, "e", "review");
+        var directOut = Path.Combine(protectedRoot, "direct-review-" + runtime + "-" + kind);
+
+        var direct = RequestAt(runtime, kind, workspace, directOut, hasClone: true);
+        var linked = RequestAt(runtime, kind, workspace, linkedOut, hasClone: true);
+
+        AssertPathInvalid(direct);
+        AssertPathInvalid(linked);
+        Assert.Equal(
+            JsonDocument.Parse(direct.Output).RootElement.GetProperty("cause").GetString(),
+            JsonDocument.Parse(linked.Output).RootElement.GetProperty("cause").GetString());
+        Assert.Contains("protected home", linked.Output, StringComparison.Ordinal);
+        Assert.Contains(protectedRoot, linked.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("copilot", "implementation")]
+    [InlineData("copilot", "design")]
+    [InlineData("opencode", "implementation")]
+    [InlineData("opencode", "design")]
     public void Request_AcceptsWorkspaceSymlinkResolvingInside(string runtime, string kind)
     {
         var workspace = Path.Combine(root, "inside-workspace-" + runtime + kind);
