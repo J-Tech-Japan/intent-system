@@ -295,9 +295,10 @@ empty `<out>/workspace`; that is the reviewer workspace and contains no rendered
 file. The implementation workspace is the clone, and codex, claude, and cursor
 keep their existing design fallback.
 
-Rendered files are created 0600 through a temporary file and atomic rename; an
-existing stricter mode such as 0400 is preserved, and isolation directories are
-0700. `cross-runtime-review-path-invalid` refuses resolved, case-insensitive
+Rendered files are written through a temporary file and an atomic rename. The
+temporary file is created 0600 for a new or 0600 target, and at the existing
+target's own stricter mode, such as 0400, when it replaces one, so the rename
+never broadens a mode. Isolation directories are 0700. `cross-runtime-review-path-invalid` refuses resolved, case-insensitive
 overlap between the workspace, out-dir, planned paths, and one unified list of
 operator roots: `$HOME/.copilot`, `COPILOT_HOME`, `$HOME/.config/opencode`,
 `XDG_CONFIG_HOME/opencode`, `OPENCODE_CONFIG_DIR`, the home and XDG forms of
@@ -307,7 +308,11 @@ The same check follows symlinks in both directions and runs before out-dir
 enumeration. It also refuses rendered or isolation symlinks, non-regular
 rendered paths, and a workspace symlink at its root, nested, or dangling that
 resolves outside the workspace; the refusal names the workspace-relative link,
-not its target. A link resolving inside is accepted.
+not its target. A link resolving inside is accepted. Links are resolved the way
+the kernel does, every link followed before the `..` after it, so a link ahead
+of `..` cannot hide an escape. A zero-byte rendered path counts as non-regular
+on purpose: without interop a FIFO and an empty file look alike, and intent-cli
+never renders an empty file, so delete a truncated one and rerun.
 
 `cross-runtime-review-out-dir-not-empty` refuses an existing `opencode-exit.txt`
 or `verdict.raw.json`. intent-cli never enumerates an operator-protected root and never reads a

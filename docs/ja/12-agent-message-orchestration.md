@@ -271,15 +271,22 @@ rm -f <out>/opencode-exit.txt; OPENCODE_PERMISSION= OPENCODE_CONFIG_CONTENT= XDG
 書きます。`--clone` なしの design では空の `<out>/workspace` も作り、そこを reviewer
 workspace にします。rendered file は workspace 内に置きません。
 
-rendered file は temp file を 0600 で作成して原子的に置換し、既存の 0400 などの
-strict な mode は広げず、isolation directory は 0700 にします。`path-invalid` は
+rendered file は temp file を経由して原子的に置換します。temp file は、新規または
+0600 の target なら 0600、0400 など strict な既存 target を置き換えるときは
+その mode で作成するので、rename で mode が広がることはありません。isolation
+directory は 0700 にします。`path-invalid` は
 workspace、out-dir、planned path と、`$HOME/.copilot`、`COPILOT_HOME`、3 つの
 OpenCode config form、home/XDG の data・state・cache form、`GH_CONFIG_DIR`、次に
 `$XDG_CONFIG_HOME/gh`、最後に `$HOME/.config/gh` で解決する `gh` root の unified list
 との重複を、両側の symlink を解決して case-insensitive に拒否します。この検査は
 out-dir の列挙より前に行います。workspace 内の root、nested、dangling な escaping
 symlink は workspace 相対の entry 名だけを示して拒否し、workspace 内に解決する link は
-受け付けます。
+受け付けます。rendered path や isolation directory の symlink、regular でない rendered
+path も拒否します。link は kernel と同じく、後ろの `..` より先に辿って解決するので、
+`..` の前に置いた link で脱出を隠すことはできません。既存の 0 byte の rendered path は
+意図して regular でないものとして扱います。interop なしでは FIFO と空の file を
+区別できず、intent-cli は空の file を render しないためです。切り詰められた file は
+削除してから再実行します。
 
 `cross-runtime-review-out-dir-not-empty` は既存の `opencode-exit.txt` または
 `verdict.raw.json` を拒否します。intent-cli は protected root を列挙せず、その中の
