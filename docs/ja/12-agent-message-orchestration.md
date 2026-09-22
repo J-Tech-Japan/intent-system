@@ -127,7 +127,7 @@ headless で実行）の reviewer にも review させることを要求でき�
 ```toml
 [[cross_runtime_review.teams]]
 team = "<domain>/<team>"
-conductor_runtime = "codex|claude|cursor"
+conductor_runtime = "codex|claude|cursor|copilot|opencode"
 repos = ["<owner/repo>"]
 ```
 
@@ -145,8 +145,8 @@ PR の team は引数で渡さず解決します。host の `queue-state.json` �
 `--team` 付きで claim を取得する）を示します。
 
 ```text
-intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor --clone <read-only-clone> --out-dir <dir>
-intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--comment-out <file>] --write
+intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --clone <read-only-clone> --out-dir <dir> [--model <name>] [--effort <level>] [--opencode-provider-config <file>]
+intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--comment-out <file>] --write
 intent-cli review cross-runtime status --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit>
 intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition approved --head-sha <sha> --write
 ```
@@ -229,8 +229,8 @@ G835 は宣言済み team の cross-runtime review を次の 2 点で拡張し�
   `model` を保存します。
 
 ```text
-intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor --out-dir <dir> [--clone <read-only-clone>] [--model <name>]
-intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--write]
+intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --out-dir <dir> [--clone <read-only-clone>] [--model <name>] [--effort <level>] [--opencode-provider-config <file>]
+intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--write]
 intent-cli review cross-runtime status --kind design --execution-unit <unit>
 ```
 
@@ -245,6 +245,165 @@ packet と claim から解決し（`--domain` ではない）、create path で 
 **前方互換性。** G835 を含まない intent-cli は design record を無視し、publish-flow gate を
 適用しません。宣言済み team の packet を publish する intent-cli を更新してから design
 gate に依存してください。
+
+## Copilot CLI と OpenCode runtime（G842 — preview-through-1.x）
+
+G842 は `codex`、`claude`、`cursor` に加えて `copilot`（GitHub Copilot CLI）と
+`opencode`（OpenCode）を cross-runtime set に追加します。5 つの runtime のいずれも
+宣言された `conductor_runtime`、reviewer（`review cross-runtime request` / `record` /
+`status`、`--kind implementation` と `--kind design` の両方）、builder（
+`guide solo-conductor` の builder invocation）になれます。intent-cli は text を出力し
+evidence を記録するだけで、reviewer、builder、AI provider CLI を起動しません。例外は
+既存の claim-read `git fetch` だけです。
+
+### reviewer invocation と enforcement
+
+2 つの新 runtime の固定 `invocation.txt` 行（ラベルの後）:
+
+```text
+COPILOT_ALLOW_ALL= COPILOT_HOME=<out>/copilot-home XDG_CONFIG_HOME=<out>/copilot-xdg copilot -C <ws> --model <model>[ --reasoning-effort <effort>] --available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json < <out>/prompt.md > <out>/verdict.raw.json
+
+rm -f <out>/opencode-exit.txt; OPENCODE_PERMISSION= OPENCODE_CONFIG_CONTENT= XDG_CONFIG_HOME=<out>/opencode-xdg OPENCODE_CONFIG_DIR=<out>/opencode-config-dir OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG=<out>/opencode-reviewer.json opencode run --pure --dir <ws> -m <model>[ --variant <effort>] --agent intent-cli-reviewer --format json < <out>/prompt.md > <out>/verdict.raw.json; printf '%s\n' "$?" > <out>/opencode-exit.txt
+```
+
+`request` は `--out-dir` 下に空の isolation directory（`copilot-home`、`copilot-xdg`、
+`opencode-xdg`、`opencode-config-dir`）を作り、opencode では `opencode-reviewer.json` を
+書きます。`--clone` なしの design では空の `<out>/workspace` も作り、そこを reviewer
+workspace にします。rendered file は workspace 内に置きません。
+
+rendered file は temp file を経由して原子的に置換します。temp file は、新規または
+0600 の target なら 0600、0400 など strict な既存 target を置き換えるときは
+その mode で作成するので、rename で mode が広がることはありません。isolation
+directory は 0700 にします。`path-invalid` は
+workspace、out-dir、planned path と、`$HOME/.copilot`、`COPILOT_HOME`、3 つの
+OpenCode config form、home/XDG の data・state・cache form、`GH_CONFIG_DIR`、次に
+`$XDG_CONFIG_HOME/gh`、最後に `$HOME/.config/gh` で解決する `gh` root の unified list
+との重複を、両側の symlink を解決して case-insensitive に拒否します。この検査は
+out-dir の列挙より前に行います。workspace 内の root、nested、dangling な escaping
+symlink は workspace 相対の entry 名だけを示して拒否し、workspace 内に解決する link は
+受け付けます。rendered path や isolation directory の symlink、regular でない rendered
+path も拒否します。link は kernel と同じく、後ろの `..` より先に辿って解決するので、
+`..` の前に置いた link で脱出を隠すことはできません。既存の 0 byte の rendered path は
+意図して regular でないものとして扱います。interop なしでは FIFO と空の file を
+区別できず、intent-cli が空の file を書き出すことはないためです。切り詰められた file は
+削除してから再実行します。
+
+`cross-runtime-review-out-dir-not-empty` は既存の `opencode-exit.txt` または
+`verdict.raw.json` を拒否します。intent-cli は protected root を列挙せず、その中の
+file content も読みません（metadata の lstat と path resolution だけを許可します）。既存の isolation directory は
+空であることを確かめるために列挙しますが、その中の file は読みません。
+`--opencode-provider-config` は workspace と全 protected root の外でなければならず、
+UTF-8 JSON の唯一の object-valued `provider` key を `$schema` の直後へ挿入します。
+provider secret は `opencode-reviewer.json` だけにコピーされ、prompt、invocation、
+result、refusal、log には出ません。isolated copilot home では Copilot 自身が
+`gh auth token` を実行するため、PATH 先頭にサインイン済みの実 `gh` が必要です。
+
+read-only enforcement（実測、pinned statement）:
+
+以下は implementation notes の固定文をそのまま掲載します。
+
+```text
+copilot:
+`--available-tools view rg glob` leaves only those three tools, so the reviewer reads but cannot write or run commands, and path verification refuses reads outside the workspace.
+`--disable-builtin-mcps` disables the GitHub MCP server, and with the isolated home the operator's user MCP servers do not start (measured); another server's tools would not be exposed anyway.
+`--no-custom-instructions` stops the reviewed workspace from instructing the reviewer through `AGENTS.md` or `.github/copilot-instructions.md`, which matters most for the implementation kind, where the workspace is the clone of the PR head (canary-measured 2026-09-18 both ways; fixtures `copilot-instruction-canary-without-flag.jsonl` and `copilot-instruction-canary-with-flag.jsonl`).
+`COPILOT_ALLOW_ALL=` stops the variable from trusting the workspace, and `COPILOT_HOME` and `XDG_CONFIG_HOME` point at empty directories created under the out-dir, so the operator's `trustedFolders`, IDE lock files, user hooks and user MCP servers are not read.
+**Credentials.** The isolated home holds no token, so Copilot runs `gh auth token --hostname github.com` itself (measured 2026-09-17: with a fake `gh` first on PATH it exits 1, "No authentication information found"); a signed-in real `gh` must therefore be first on PATH, and intent-cli never launches it. The earlier note that authentication is unaffected by `COPILOT_HOME` (2026-09-16) is superseded: it held only because the real `gh` was on PATH.
+Unmeasured trust sources (implementation notes) are mitigated by the isolated home and by using no SDK or ACP host.
+opencode:
+The rendered config denies every tool (`*`) and allows only read, glob, grep and list, at the top level and for the `intent-cli-reviewer` agent.
+`task` is denied because agent-level denials do not reach subagents: a reviewer delegated a file change to `general`.
+`external_directory` is denied, so a path that is lexically outside the workspace is refused. Measured 2026-09-18: that check compares lexically, so a symlink inside the workspace whose target is outside is still read. intent-cli refuses such a workspace before rendering; the runtime does not confine itself.
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` and `--pure` stop a workspace's config, agents, plugins and MCP entries from overriding these rules or running code, and its `AGENTS.md` does not reach the model (measured with a canary).
+The isolated config directories and the two empty variables keep out the operator's global config and inherited overrides; each re-enabled writes when not isolated, and the full form held against all of them (measured).
+Data, state and cache stay the operator's (credentials); they were not probed as permission sources.
+```
+
+**trusted-folder 警告。** isolated clone はすべての runtime の trusted folder の外に置きます。
+copilot builder 行は run ごとに新しい空の `COPILOT_HOME` と `XDG_CONFIG_HOME` を使うため、
+operator の Copilot trust 設定、hook、MCP server は builder に適用されません。
+
+### relation 規則
+
+`relation` は reviewer の `--runtime` が宣言された `conductor_runtime`（ordinal）と一致するとき
+だけ `same-runtime`、それ以外は `cross-runtime` です。rule は CLI runtime 単位で、model
+vendor や provider ではありません:
+
+| conductor ↓ / reviewer → | codex | claude | cursor | copilot | opencode |
+|---|---|---|---|---|---|
+| codex | same | cross | cross | cross | cross |
+| claude | cross | same | cross | cross | cross |
+| cursor | cross | cross | same | cross | cross |
+| copilot | cross | cross | cross | same | cross |
+| opencode | cross | cross | cross | cross | same |
+
+reviewer model は conductor の model と異なる vendor・model family から選ぶことを勧めます。
+gate はこれを検査しません。
+
+### `--model`、`--effort`、provider config
+
+- **`copilot` と `opencode` では `--model` が必須**（`request` と `record`、両 kind）。
+  欠落は `cross-runtime-review-model-required`。他 3 runtime では任意のまま。copilot の
+  `auto`（任意の case）は `cross-runtime-review-model-invalid`。opencode の値は有効な
+  provider id 付きの `provider/model` である必要があります。
+- **任意の `--effort`。** copilot は
+  `none|minimal|low|medium|high|xhigh|max` のみ（`--reasoning-effort` として出力）。
+  opencode は文字規則を満たす任意の非空値（`--variant` として出力）。codex、claude、cursor
+  は `--effort` を `cross-runtime-review-argument-invalid` で拒否します。
+- **`--opencode-provider-config <file>`**（`request` のみ、opencode のみ、任意）。ファイルは
+  UTF-8 JSON で root に `provider` キーだけを持ち、値は object。出力される
+  `opencode-reviewer.json` は `$schema` の直後にその `provider` block を挿入します。指定時は
+  request 結果が `opencode_provider_config` としてファイル名を示します。
+
+`record` は `model` の隣に、渡されたときだけ `effort` を保存します。copilot envelope は
+observed model を持ち、`--effort` 指定時は observed effort が一致する必要があります。OpenCode
+event はこの path で model id を持たないため、opencode の記録 `model` と `effort` は
+seat 報告のみで未検査です。
+
+### verdict envelope
+
+2 つの新 runtime は UTF-8 JSONL を使います。bare verdict object（runtime の `type`
+field なし）は拒否されます。**copilot と opencode** は末尾の fenced JSON block（````
+または ````json`）または unfenced trailing object を受け付けます。opener または object の前の
+narration は許容されます。**cursor** は変更なしで、fenced verdict は拒否されます。
+
+- **copilot:** 最後の event だけが `exitCode` 0 の `type: "result"` である必要があります。
+  `data.phase == "final_answer"` の `type: "assistant.message"` が 1 つだけで、string
+  `data.content` と absent または空の `data.toolRequests` を持ちます。observed model は
+  `--model` と一致する必要があります。`--effort` 指定時は、すべての
+  `session.usage_checkpoint` の main conversation entry に observed model の string
+  `reasoning_effort` が flag と一致して存在する必要があります。
+- **opencode:** event は T13 までの固定 state machine に従います。`terminated` では compaction
+  reopen（`part.synthetic` と `part.metadata.compaction_continue` の `text`）だけが `idle` に
+  戻り、他の event は拒否されます。`part.reason == "stop"` の terminal `step_finish` が
+  answer step を終えます。`error` event は `error.name` と `error.data.message` で拒否されます。
+  `record --runtime opencode` は regular file の `opencode-exit.txt` が byte 単位で
+  ちょうど `0\n` であることを要求します。
+
+### builder guidance
+
+`guide solo-conductor` は `builder` field と **Builder invocations (guidance)** Markdown
+section を追加します。step 6 がそれを指します。field は 7 項目の `contract`、5 つの
+`invocations`（codex、claude、cursor、copilot、opencode。各 `runtime`、`command`、
+`enforcement`、`measured`）、`opencode_config`（固定 builder config text）を持ちます。
+copilot と opencode の builder 行では `--model` が必須で、`enforcement` text は
+`The model is required.` で始まります。OpenCode builder は run ごとに新しい空の
+`XDG_CONFIG_HOME` と `OPENCODE_CONFIG_DIR` で動き、project config と `AGENTS.md` は
+読み込まれないため、task file に repository 指示をすべて載せる必要があります。
+
+**local-model 規則。** local model provider は 1 seat ずつです。別の local-model seat が
+動いている間に local-model builder や reviewer を起動しないでください。intent-cli は
+これを検査しません。
+
+**local-model の context window guidance（実測）。** 初期 prompt は収まっても、蓄積した会話と
+tool output が後から context window を超えることがあります。同じ prompt でも run ごとに挙動が
+異なることがあります。tool-heavy な review では、より小さい packet、より大きい context window、
+または retry が必要になることがあります。
+
+**前方互換性。** G842 を含まない intent-cli は 2 つの新 runtime で
+`cross-runtime-review-runtime-invalid` を返し、`runtime: copilot` または
+`runtime: opencode` の stored record を読めません（`record-unreadable`、gate は fail
+closed）。copilot または opencode で記録する前に host を読むすべての binary を更新してください。
 
 ## completion continuation chain の永続記録（G695 — preview-through-1.x）
 

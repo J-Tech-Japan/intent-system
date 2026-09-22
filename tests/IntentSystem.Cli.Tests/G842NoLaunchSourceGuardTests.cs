@@ -1,0 +1,374 @@
+using System.Text.RegularExpressions;
+using IntentSystem.Cli.Commands;
+using IntentSystem.Cli.Infrastructure;
+
+namespace IntentSystem.Cli.Tests;
+
+/// <summary>
+/// G842: textual no-launch source guard using pinned allow-list, declared-type,
+/// surface-reference, and repository-wide type-reference fixtures.
+/// The current merge-base is a24cf8ab: the allow-list, declared-type, and
+/// surface-reference tables are unchanged from cbe54759. The base .cs path
+/// table grows from 700 to 703 paths with the G846/G845 issue-body files, and
+/// the type-reference table adds IssueBodyFileStager Options plus two
+/// IssueSyncBodyResult references from G845.
+/// Drift from c66f4936 fixture to 3da9e7a1 (G841):
+///   IssuePublishFlowCommand CrossRuntimeDesignReviewField 16→19;
+///   PreparedPacketCommitReadyAnalyzer MetadataValidateAnalyzer 2→0;
+///   ReviewCrossRuntimeCommand NotifyCommand 0→1 (doc comment; G842 reword removes it on head).
+/// Surface-file claim-read pins are five; NotifyCommand on ReviewCrossRuntimeCommand is not a pin.
+/// </summary>
+public sealed class G842NoLaunchSourceGuardTests
+{
+    private static readonly string[] LaunchTokens =
+    [
+        "Process", "ProcessStartInfo", "GitProcessRunner", "GitCommandRunner", "CheckoutFreshnessGitCommandRunner",
+        "GitRemoteCommandRunner", "GhCommandRunner", "GhReviewCommandRunner", "HostStateGitRetryRunner",
+        "NotifyProcessRunner", "ProcessUpdateRunner", "ShellGitRunner", "IGitCommandRunner", "IGitHubCommandRunner",
+        "IGitRemoteCommandRunner", "IGitRunner", "INotifyProcessRunner", "IReviewCommandRunner", "IUpdateProcessRunner",
+        "ProcessRunnerFactory", "NestedProviderLauncher", "DllImport", "LibraryImport", "NativeLibrary",
+        "Interaction",
+    ];
+
+    private static readonly HashSet<string> ExemptReviewCrossRuntimeLines = new(StringComparer.Ordinal)
+    {
+        "public static Func<bool>? NestedProviderLauncher { get; set; }",
+        "internal static Func<INotifyProcessRunner>? ProcessRunnerFactory { get; set; }",
+    };
+
+    private static readonly Regex DeclaredTypeRegex = new(
+        @"^[ \t]*(?:(?:public|internal|private|protected|static|sealed|abstract|partial|readonly|file|unsafe|new|ref)[ \t]+)*(?:class|struct|interface|record(?:[ \t]+(?:class|struct))?)[ \t]+([A-Z][A-Za-z0-9_]*)",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex WholeIdentifierRegex = new(
+        @"(?<![A-Za-z0-9_])([A-Z][A-Za-z0-9_]*)(?![A-Za-z0-9_])",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly string[] InteropTokens = ["DllImport", "LibraryImport", "NativeLibrary"];
+
+    [Fact]
+    public void AllowList_MatchesPinnedFixture_AndHasNoCrossRuntimeEntries()
+    {
+        var allowList = ReadAllowList();
+        var fixture = ReadAllowListFixture().ToArray();
+        Assert.Equal(fixture.Length, allowList.Count);
+        foreach (var (path, token, count) in fixture)
+        {
+            Assert.True(allowList.TryGetValue((path, token), out var actual), $"{path} {token}");
+            Assert.Equal(count, actual);
+        }
+
+        foreach (var (path, _, _) in fixture)
+        {
+            Assert.DoesNotContain("CrossRuntime", path, StringComparison.Ordinal);
+            Assert.DoesNotContain("ReviewCrossRuntimeCommand", path, StringComparison.Ordinal);
+            Assert.DoesNotContain("GuideSoloConductorCommand", path, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void LaunchTokens_StayWithinPinnedAllowList()
+    {
+        var allowList = ReadAllowListFixture().ToDictionary(entry => (entry.Path, entry.Token), entry => entry.Count);
+        var repoRoot = RepoVersionPolicySource.RepoRoot();
+        foreach (var path in EnumerateScannedSourceFiles(repoRoot))
+        {
+            var relative = Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
+            var lines = File.ReadAllLines(path);
+            var content = string.Join(
+                '\n',
+                lines.Where(line => !(relative == "src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs"
+                                      && ExemptReviewCrossRuntimeLines.Contains(line.Trim()))));
+
+            foreach (var token in LaunchTokens)
+            {
+                var count = CountWholeIdentifiers(content, token);
+                if (count == 0)
+                {
+                    continue;
+                }
+
+                Assert.True(
+                    allowList.TryGetValue((relative, token), out var allowed),
+                    $"unlisted launch token '{token}' in {relative}");
+                Assert.True(
+                    count <= allowed,
+                    $"launch token '{token}' count {count} exceeds pinned {allowed} in {relative}");
+            }
+        }
+    }
+
+    [Fact]
+    public void CrossRuntimeReviewFileMode_HasNoInteropBindings()
+    {
+        var path = Path.Combine(
+            RepoVersionPolicySource.RepoRoot(),
+            "src",
+            "IntentSystem.Cli",
+            "Commands",
+            "CrossRuntimeReviewFileMode.cs");
+        var content = File.ReadAllText(path);
+        Assert.All(InteropTokens, token => Assert.Equal(0, CountWholeIdentifiers(content, token)));
+    }
+
+    [Fact]
+    public void CrossRuntimeSurfaceFiles_CarryNoInterop()
+    {
+        var repoRoot = RepoVersionPolicySource.RepoRoot();
+        var commandsRoot = Path.Combine(repoRoot, "src", "IntentSystem.Cli", "Commands");
+        foreach (var path in Directory.EnumerateFiles(commandsRoot, "CrossRuntime*.cs", SearchOption.TopDirectoryOnly))
+        {
+            var relative = Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
+            var content = File.ReadAllText(path);
+            foreach (var token in InteropTokens)
+            {
+                var count = CountWholeIdentifiers(content, token);
+                Assert.True(
+                    count == 0,
+                    $"{relative} must not reference interop token '{token}' (count {count})");
+            }
+        }
+    }
+
+    [Fact]
+    public void SurfaceFilePins_AreExactlyFiveClaimReadReferences()
+    {
+        var expected = ReadSurfaceRefFixture().ToArray();
+        var expectedKeys = expected.Select(entry => (entry.Path, entry.Identifier)).ToHashSet();
+        var claimReadPins = ReadSurfaceRefFixture()
+            .Where(entry => expectedKeys.Contains((entry.Path, entry.Identifier)))
+            .Select(entry => (entry.Path, entry.Identifier, entry.Count))
+            .OrderBy(entry => entry.Path, StringComparer.Ordinal)
+            .ThenBy(entry => entry.Identifier, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expected, claimReadPins);
+    }
+
+    [Fact]
+    public void SurfaceFiles_DoNotReferenceAllowListedTypesBeyondPinnedBaseReferences()
+    {
+        var allowListPaths = ReadAllowListFixture().Select(entry => entry.Path).ToHashSet(StringComparer.Ordinal);
+        var declaredTypes = CollectDeclaredTypes(allowListPaths);
+        var pinnedSurfaceReferences = ReadSurfaceRefFixture()
+            .Where(entry => IsSurfaceFile(entry.Path))
+            .ToDictionary(entry => (entry.Path, entry.Identifier), entry => entry.Count);
+
+        foreach (var path in EnumerateScannedSourceFiles(RepoVersionPolicySource.RepoRoot()))
+        {
+            var relative = Path.GetRelativePath(RepoVersionPolicySource.RepoRoot(), path).Replace('\\', '/');
+            if (!IsSurfaceFile(relative))
+            {
+                continue;
+            }
+
+            foreach (var typeName in declaredTypes)
+            {
+                var count = CountWholeIdentifiers(File.ReadAllText(path), typeName);
+                if (count == 0)
+                {
+                    continue;
+                }
+
+                if (pinnedSurfaceReferences.TryGetValue((relative, typeName), out var allowed))
+                {
+                    Assert.True(count <= allowed, $"{relative} references {typeName} {count} > {allowed}");
+                    continue;
+                }
+
+                Assert.Fail($"surface file {relative} references allow-listed type {typeName} ({count}) without a pinned base reference");
+            }
+        }
+    }
+
+    [Fact]
+    public void RepositoryWide_TypeReferences_MatchPinnedFixture()
+    {
+        var pinned = ReadTypeRefFixture().ToDictionary(entry => (entry.Path, entry.Identifier), entry => entry.Count);
+        var declaredTypes = ReadDeclaredTypeFixture().Select(entry => entry.Identifier).ToHashSet(StringComparer.Ordinal);
+        var repoRoot = RepoVersionPolicySource.RepoRoot();
+        foreach (var path in Directory.EnumerateFiles(Path.Combine(repoRoot, "src"), "*.cs", SearchOption.AllDirectories))
+        {
+            if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var relative = Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
+            var content = File.ReadAllText(path);
+            var violation = FindRepositoryWideTypeReferenceViolation(relative, content, pinned, declaredTypes);
+            if (violation is not null)
+            {
+                Assert.Fail(violation);
+            }
+        }
+
+        foreach (var (relative, identifier, count) in ReadTypeRefFixture())
+        {
+            var path = Path.Combine(repoRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(path), $"pinned type-ref file missing: {relative}");
+            var actual = CountWholeIdentifiers(File.ReadAllText(path), identifier);
+            Assert.True(
+                actual <= count,
+                $"{relative} {identifier} count {actual} exceeds pinned {count}");
+        }
+    }
+
+    [Theory]
+    [InlineData("INotifyRoleCollectWaitClock")]
+    [InlineData("StopwatchNotifyRoleCollectWaitClock")]
+    public void RepositoryWide_TypeReferenceMutation_IsRejectedByTypeName(string typeName)
+    {
+        const string relative = "src/IntentSystem.Cli/Commands/IssueStatusCommand.cs";
+        var repoRoot = RepoVersionPolicySource.RepoRoot();
+        Assert.False(IsSurfaceFile(relative));
+
+        var pinned = ReadTypeRefFixture().ToDictionary(entry => (entry.Path, entry.Identifier), entry => entry.Count);
+        var declaredTypes = ReadDeclaredTypeFixture().Select(entry => entry.Identifier).ToHashSet(StringComparer.Ordinal);
+        Assert.Contains(typeName, declaredTypes);
+        Assert.DoesNotContain((relative, typeName), pinned.Keys);
+
+        var mutated = File.ReadAllText(Path.Combine(repoRoot, relative.Replace('/', Path.DirectorySeparatorChar)))
+            + $"\n// G842 mutation: {typeName}\n";
+        var violation = FindRepositoryWideTypeReferenceViolation(relative, mutated, pinned, declaredTypes);
+
+        Assert.Equal($"unlisted type reference '{typeName}' in {relative} (1)", violation);
+    }
+
+    [Fact]
+    public void ReviewCrossRuntimeCommand_ExemptSeamLines_AreTheOnlyLaunchTokenHits()
+    {
+        var path = Path.Combine(RepoVersionPolicySource.RepoRoot(), "src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs");
+        var hits = LaunchTokens.SelectMany(token => WholeIdentifierRegex.Matches(File.ReadAllText(path))
+                .Select(match => match.Groups[1].Value)
+                .Where(name => string.Equals(name, token, StringComparison.Ordinal)))
+            .ToArray();
+        Assert.Equal(["INotifyProcessRunner", "NestedProviderLauncher", "ProcessRunnerFactory"], hits.OrderBy(name => name, StringComparer.Ordinal));
+    }
+
+    private static bool IsSurfaceFile(string relativePath) =>
+        relativePath.StartsWith("src/IntentSystem.Cli/Commands/CrossRuntime", StringComparison.Ordinal)
+        || string.Equals(relativePath, "src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs", StringComparison.Ordinal)
+        || string.Equals(relativePath, "src/IntentSystem.Cli/Commands/GuideSoloConductorCommand.cs", StringComparison.Ordinal)
+        || !ReadBaseCsPaths().Contains(relativePath);
+
+    private static HashSet<string> ReadBaseCsPaths() =>
+        File.ReadAllLines(FixturePath("no-launch-base-cs-paths-a24cf8ab.txt"))
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static IEnumerable<(string Path, string Token, int Count)> ReadAllowListFixture() =>
+        File.ReadAllLines(FixturePath("no-launch-allowlist-a24cf8ab.tsv"))
+            .Skip(1)
+            .Select(line => line.Split('\t'))
+            .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));
+
+    private static Dictionary<(string Path, string Token), int> ReadAllowList() =>
+        ReadAllowListFixture().ToDictionary(entry => (entry.Path, entry.Token), entry => entry.Count);
+
+    private static IEnumerable<(string Path, string Identifier, int Count)> ReadTypeRefFixture() =>
+        File.ReadAllLines(FixturePath("no-launch-type-refs-a24cf8ab.tsv"))
+            .Skip(1)
+            .Select(line => line.Split('\t'))
+            .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));
+
+    private static IEnumerable<(string Identifier, string Path)> ReadDeclaredTypeFixture() =>
+        File.ReadAllLines(FixturePath("no-launch-declared-types-a24cf8ab.tsv"))
+            .Where(line => line.Length > 0)
+            .Select(line => line.Split('\t'))
+            .Select(parts => (parts[0], parts[1]));
+
+    private static IEnumerable<(string Path, string Identifier, int Count)> ReadSurfaceRefFixture() =>
+        File.ReadAllLines(FixturePath("no-launch-surface-refs-a24cf8ab.tsv"))
+            .Skip(1)
+            .Select(line => line.Split('\t'))
+            .Select(parts => (parts[0], parts[1], int.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)));
+
+    private static HashSet<string> CollectDeclaredTypes(HashSet<string> allowListPaths)
+    {
+        var repoRoot = RepoVersionPolicySource.RepoRoot();
+        var declared = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var relative in allowListPaths)
+        {
+            var path = Path.Combine(repoRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            foreach (Match match in DeclaredTypeRegex.Matches(File.ReadAllText(path)))
+            {
+                declared.Add(match.Groups[1].Value);
+            }
+        }
+
+        return declared;
+    }
+
+    private static string? FindRepositoryWideTypeReferenceViolation(
+        string relative,
+        string content,
+        IReadOnlyDictionary<(string Path, string Identifier), int> pinned,
+        IReadOnlySet<string> declaredTypes)
+    {
+        foreach (var typeName in declaredTypes)
+        {
+            var actual = CountWholeIdentifiers(content, typeName);
+            if (actual == 0)
+            {
+                continue;
+            }
+
+            if (pinned.TryGetValue((relative, typeName), out var allowed))
+            {
+                if (actual > allowed)
+                {
+                    return $"{relative} {typeName} count {actual} exceeds pinned {allowed}";
+                }
+
+                continue;
+            }
+
+            return $"unlisted type reference '{typeName}' in {relative} ({actual})";
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateScannedSourceFiles(string repoRoot)
+    {
+        var srcRoot = Path.Combine(repoRoot, "src");
+        foreach (var path in Directory.EnumerateFiles(srcRoot, "*", SearchOption.AllDirectories))
+        {
+            if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".props", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".targets", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return path;
+            }
+        }
+
+        var rootProps = Path.Combine(repoRoot, "Directory.Build.props");
+        if (File.Exists(rootProps))
+        {
+            yield return rootProps;
+        }
+    }
+
+    private static int CountWholeIdentifiers(string content, string identifier)
+    {
+        return WholeIdentifierRegex.Matches(content)
+            .Count(match => string.Equals(match.Groups[1].Value, identifier, StringComparison.Ordinal));
+    }
+
+    private static string FixturePath(string name) =>
+        Path.Combine(RepoVersionPolicySource.RepoRoot(), "tests", "IntentSystem.Cli.Tests", "Fixtures", "G842", name);
+}

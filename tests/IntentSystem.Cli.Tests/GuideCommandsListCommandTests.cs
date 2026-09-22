@@ -77,6 +77,17 @@ public sealed class GuideCommandsListCommandTests
     }
 
     [Fact]
+    public void Execute_ReviewCatalog_PinsRuntimeDependentModelAndNewOptions_G842()
+    {
+        var purpose = GuideCommandsListCommand.Groups.Single(group => group.Name == "review").Purpose;
+
+        Assert.Contains("`--model` is required for `copilot` and `opencode` on request and record (both kinds)", purpose, StringComparison.Ordinal);
+        Assert.Contains("remains optional for `codex`, `claude`, and `cursor`", purpose, StringComparison.Ordinal);
+        Assert.Contains("optional `--effort`", purpose, StringComparison.Ordinal);
+        Assert.Contains("request-only optional `--opencode-provider-config`", purpose, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_JsonFormat_EmitsClassifiedGroupArray()
     {
         using var writer = new StringWriter();

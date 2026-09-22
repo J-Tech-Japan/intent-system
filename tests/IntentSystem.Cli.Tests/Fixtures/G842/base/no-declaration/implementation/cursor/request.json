@@ -1,0 +1,21 @@
+{
+  "command": "review cross-runtime request",
+  "outcome": "rendered",
+  "repo": "J-Tech-Japan/intent-system",
+  "pr": 1812,
+  "head_sha": "1111111111111111111111111111111111111111",
+  "execution_unit": "G842",
+  "runtime": "cursor",
+  "out_dir": "{{G842_WORKSPACE_ROOT}}/request-json",
+  "files": [
+    "{{G842_WORKSPACE_ROOT}}/request-json/prompt.md",
+    "{{G842_WORKSPACE_ROOT}}/request-json/verdict.schema.json",
+    "{{G842_WORKSPACE_ROOT}}/request-json/invocation.txt"
+  ],
+  "invocation": "# run by the seat (cursor); intent-cli renders this text and never runs it\ncursor-agent -p --mode ask --sandbox enabled --trust --workspace \u0027{{G842_WORKSPACE_ROOT}}/clone\u0027 --output-format json \u0022$(cat \u0027{{G842_WORKSPACE_ROOT}}/request-json/prompt.md\u0027)\u0022 \u003E \u0027{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json\u0027",
+  "run_by": "seat",
+  "raw_verdict_file": "{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json",
+  "read_only_enforcement": "cursor \u0060--mode ask\u0060 refuses every non-read-only tool, including all shell commands, so the reviewer reads files but cannot run git or tests; the head it echoes is read from files such as \u0060.git/HEAD\u0060, not checked with git. \u0060--mode plan\u0060 was not used because a measured plan-mode run switched itself to agent mode and wrote files inside and outside the workspace; \u0060--sandbox enabled\u0060 did not stop those writes.",
+  "no_execution_boundary": "intent-cli renders text and records evidence only; the seat runs the reviewer and posts with gh. intent-cli does not start, launch, or manage any agent or provider process.",
+  "terms": "Confirming each vendor\u0027s automation terms for headless reviewer runs is the operator\u0027s responsibility; intent-cli does not assert that any use is permitted."
+}

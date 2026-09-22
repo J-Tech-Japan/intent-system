@@ -114,6 +114,31 @@ internal static class CrossRuntimeReviewPaths
             throw new InvalidOperationException("a path containing a newline or NUL cannot be rendered.");
         }
 
+        return Quote(value);
+    }
+
+    /// <summary>
+    /// POSIX single-quote escaping for a model or effort value. The accepted
+    /// characters match <c>TryValidateModelCharacters</c>: non-empty, no
+    /// leading dash, and no Unicode control characters. Whitespace-only
+    /// values are valid values and must remain one quoted argument.
+    /// </summary>
+    public static string ShellQuoteValue(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (value.Length == 0
+            || value[0] == '-'
+            || value.Any(character => char.GetUnicodeCategory(character) == System.Globalization.UnicodeCategory.Control))
+        {
+            throw new InvalidOperationException(
+                "a model or effort value must be non-empty, not start with '-', and contain no Unicode control characters.");
+        }
+
+        return Quote(value);
+    }
+
+    private static string Quote(string value)
+    {
         return "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
     }
 }

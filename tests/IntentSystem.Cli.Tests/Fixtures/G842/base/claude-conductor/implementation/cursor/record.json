@@ -1,0 +1,43 @@
+{
+  "command": "review cross-runtime record",
+  "mode": "dry-run",
+  "outcome": "would-record",
+  "resolution": {
+    "resolved": true,
+    "execution_unit": "G842",
+    "execution_unit_source": "queue-state:linked_pr",
+    "domain": "intent-cli",
+    "domain_source": "packet:implementation_issue_packet.domain",
+    "team": "intent-cli-dev",
+    "team_source": "claim:execution-unit"
+  },
+  "declaration_source": "config:cross_runtime_review.teams",
+  "record": {
+    "artifact_kind": "cross-runtime-review-record",
+    "repo": "J-Tech-Japan/intent-system",
+    "pr": 1812,
+    "head_sha": "1111111111111111111111111111111111111111",
+    "execution_unit": "G842",
+    "domain": "intent-cli",
+    "team": "intent-cli-dev",
+    "kind": "implementation",
+    "runtime": "cursor",
+    "runtime_version": "2.1.269",
+    "conductor_runtime": "claude",
+    "relation": "cross-runtime",
+    "verdict": "approve",
+    "blocking_findings": [],
+    "notes": [
+      "base fixture"
+    ],
+    "recorded_at": "{{G842_TIMESTAMP}}",
+    "raw_verdict_file": ".intent-cli/cross-runtime-reviews/j-tech-japan__intent-system/pr-1812/{{G842_COMPACT_TIMESTAMP}}-cursor-1111111.raw-verdict",
+    "raw_verdict_sha256": "27e2942a97890811771d290a489b4731bb9e3d6c2b4b0def789891e8523629b3"
+  },
+  "record_file": ".intent-cli/cross-runtime-reviews/j-tech-japan__intent-system/pr-1812/{{G842_COMPACT_TIMESTAMP}}-cursor-1111111.json",
+  "raw_verdict_copy": ".intent-cli/cross-runtime-reviews/j-tech-japan__intent-system/pr-1812/{{G842_COMPACT_TIMESTAMP}}-cursor-1111111.raw-verdict",
+  "comment_body": "## Cross-runtime review: approve\n\n- reviewer: cross-runtime review\n- runtime: cursor\n- runtime version: 2.1.269\n- conductor runtime: claude\n- head SHA: 1111111111111111111111111111111111111111\n- kind: implementation\n- execution unit: G842\n- verdict: approve\n\n### Blocking findings\n\n- none\n\n### Notes\n\n- base fixture\n\nRecorded as \u0060.intent-cli/cross-runtime-reviews/j-tech-japan__intent-system/pr-1812/{{G842_COMPACT_TIMESTAMP}}-cursor-1111111.json\u0060 by \u0060intent-cli review cross-runtime record\u0060.\n",
+  "comment_out": null,
+  "post_command": "gh pr review 1812 --repo J-Tech-Japan/intent-system --comment --body-file \u003Ccomment-body-file\u003E",
+  "durability": "Dry run: nothing was written. Re-run with --write to store the record."
+}

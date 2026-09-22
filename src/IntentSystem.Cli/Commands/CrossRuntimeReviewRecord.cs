@@ -66,6 +66,10 @@ internal sealed record CrossRuntimeReviewRecord
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Model { get; init; }
 
+    [JsonPropertyName("effort")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Effort { get; init; }
+
     [JsonPropertyName("verdict")]
     public required string Verdict { get; init; }
 

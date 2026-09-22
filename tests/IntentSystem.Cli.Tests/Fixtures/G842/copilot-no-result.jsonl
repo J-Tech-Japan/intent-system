@@ -1,0 +1,2 @@
+{"type":"session.mcp_server_status_changed","data":{"serverName":"aspire","status":"pending"},"ephemeral":true,"id":"7fcc3b2c-a438-44c9-bbc5-12c40bf5e068","timestamp":"2026-09-17T00:07:20.424Z","parentId":"9e0208f4-edc8-4fbc-9be5-0786ba9c6477"}
+{"type":"session.mcp_server_status_changed","data":{"serverName":"aspire","status":"connected"},"ephemeral":true,"id":"72cff6d4-0a2f-4cde-8b68-7111ac7b900f","timestamp":"2026-09-17T00:07:20.477Z","parentId":"9e0208f4-edc8-4fbc-9be5-0786ba9c6477"}

@@ -141,7 +141,7 @@ requirement is declared, never inferred, in the host `.intent-cli/config.toml`:
 ```toml
 [[cross_runtime_review.teams]]
 team = "<domain>/<team>"
-conductor_runtime = "codex|claude|cursor"
+conductor_runtime = "codex|claude|cursor|copilot|opencode"
 repos = ["<owner/repo>"]
 ```
 
@@ -160,8 +160,8 @@ with `worker complete ... --pr <n>`, pass `--execution-unit <unit>`, or acquire 
 claim with `--team`).
 
 ```text
-intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor --clone <read-only-clone> --out-dir <dir>
-intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--comment-out <file>] --write
+intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --clone <read-only-clone> --out-dir <dir> [--model <name>] [--effort <level>] [--opencode-provider-config <file>]
+intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--comment-out <file>] --write
 intent-cli review cross-runtime status --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit>
 intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition approved --head-sha <sha> --write
 ```
@@ -250,8 +250,8 @@ G835 extends the declared-team cross-runtime review surface in two ways:
   store `model` only when given.
 
 ```text
-intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor --out-dir <dir> [--clone <read-only-clone>] [--model <name>]
-intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--write]
+intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --out-dir <dir> [--clone <read-only-clone>] [--model <name>] [--effort <level>] [--opencode-provider-config <file>]
+intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--write]
 intent-cli review cross-runtime status --kind design --execution-unit <unit>
 ```
 
@@ -267,6 +267,173 @@ issue, declared teams receive `idempotent-not-gated`.
 **Forward compatibility.** An intent-cli without G835 ignores design records and
 applies no publish-flow gate. Refresh every intent-cli that publishes packets for a
 declared team before relying on the design gate.
+
+## Copilot CLI and OpenCode runtimes (G842 — preview-through-1.x)
+
+G842 adds `copilot` (GitHub Copilot CLI) and `opencode` (OpenCode) to the
+cross-runtime set beside `codex`, `claude`, and `cursor`. Any of the five may be
+the declared `conductor_runtime`, a reviewer (`review cross-runtime request` /
+`record` / `status` for both `--kind implementation` and `--kind design`), or a
+builder (`guide solo-conductor` builder invocations). intent-cli renders text and
+records evidence only; it never launches a reviewer, a builder, or an AI
+provider CLI. The one exception remains the pre-existing claim-read `git fetch`.
+
+### Reviewer invocations and enforcement
+
+Pinned `invocation.txt` lines (after the label) for the two new runtimes:
+
+```text
+COPILOT_ALLOW_ALL= COPILOT_HOME=<out>/copilot-home XDG_CONFIG_HOME=<out>/copilot-xdg copilot -C <ws> --model <model>[ --reasoning-effort <effort>] --available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json < <out>/prompt.md > <out>/verdict.raw.json
+
+rm -f <out>/opencode-exit.txt; OPENCODE_PERMISSION= OPENCODE_CONFIG_CONTENT= XDG_CONFIG_HOME=<out>/opencode-xdg OPENCODE_CONFIG_DIR=<out>/opencode-config-dir OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG=<out>/opencode-reviewer.json opencode run --pure --dir <ws> -m <model>[ --variant <effort>] --agent intent-cli-reviewer --format json < <out>/prompt.md > <out>/verdict.raw.json; printf '%s\n' "$?" > <out>/opencode-exit.txt
+```
+
+`request` creates empty isolation directories under `--out-dir` (`copilot-home`,
+`copilot-xdg`, `opencode-xdg`, `opencode-config-dir`) and, for opencode, writes
+`opencode-reviewer.json`. A design request without `--clone` also creates the
+empty `<out>/workspace`; that is the reviewer workspace and contains no rendered
+file. The implementation workspace is the clone, and codex, claude, and cursor
+keep their existing design fallback.
+
+Rendered files are written through a temporary file and an atomic rename. The
+temporary file is created 0600 for a new or 0600 target, and at the existing
+target's own stricter mode, such as 0400, when it replaces one, so the rename
+never broadens a mode. Isolation directories are 0700. `cross-runtime-review-path-invalid` refuses resolved, case-insensitive
+overlap between the workspace, out-dir, planned paths, and one unified list of
+operator roots: `$HOME/.copilot`, `COPILOT_HOME`, `$HOME/.config/opencode`,
+`XDG_CONFIG_HOME/opencode`, `OPENCODE_CONFIG_DIR`, the home and XDG forms of
+OpenCode data, state, and cache, and the `gh` root resolved as
+`GH_CONFIG_DIR`, then `$XDG_CONFIG_HOME/gh`, then `$HOME/.config/gh`.
+The same check follows symlinks in both directions and runs before out-dir
+enumeration. It also refuses rendered or isolation symlinks, non-regular
+rendered paths, and a workspace symlink at its root, nested, or dangling that
+resolves outside the workspace; the refusal names the workspace-relative link,
+not its target. A link resolving inside is accepted. Links are resolved the way
+the kernel does, every link followed before the `..` after it, so a link ahead
+of `..` cannot hide an escape. A zero-byte rendered path counts as non-regular
+on purpose: without interop a FIFO and an empty file look alike, and intent-cli
+never renders an empty file, so delete a truncated one and rerun.
+
+`cross-runtime-review-out-dir-not-empty` refuses an existing `opencode-exit.txt`
+or `verdict.raw.json`. intent-cli never enumerates an operator-protected root and never reads a
+file inside one; it may resolve path metadata. It does enumerate an existing
+isolation directory to verify that it is empty, and reads no file inside one. An optional
+`--opencode-provider-config` must resolve outside both the workspace and every
+protected root; it is UTF-8 JSON with exactly one object-valued `provider` key,
+inserted after `$schema`. Its provider secrets are copied only to
+`opencode-reviewer.json`, never to the prompt, invocation, result, refusal, or
+log. With the isolated copilot home, Copilot runs `gh auth token` itself, so a
+signed-in real `gh` must be first on PATH.
+
+Read-only enforcement (measured; pinned statements):
+
+- **copilot:**
+  - `--available-tools view rg glob` leaves only those three tools, so the reviewer reads but cannot write or run commands, and path verification refuses reads outside the workspace.
+  - `--disable-builtin-mcps` disables the GitHub MCP server, and with the isolated home the operator's user MCP servers do not start (measured); another server's tools would not be exposed anyway.
+  - `--no-custom-instructions` stops the reviewed workspace from instructing the reviewer through `AGENTS.md` or `.github/copilot-instructions.md`, which matters most for the implementation kind, where the workspace is the clone of the PR head (canary-measured 2026-09-18 both ways; fixtures `copilot-instruction-canary-without-flag.jsonl` and `copilot-instruction-canary-with-flag.jsonl`).
+  - `COPILOT_ALLOW_ALL=` stops the variable from trusting the workspace, and `COPILOT_HOME` and `XDG_CONFIG_HOME` point at empty directories created under the out-dir, so the operator's `trustedFolders`, IDE lock files, user hooks and user MCP servers are not read.
+  - **Credentials.** The isolated home holds no token, so Copilot runs `gh auth token --hostname github.com` itself (measured 2026-09-17: with a fake `gh` first on PATH it exits 1, "No authentication information found"); a signed-in real `gh` must therefore be first on PATH, and intent-cli never launches it. The earlier note that authentication is unaffected by `COPILOT_HOME` (2026-09-16) is superseded: it held only because the real `gh` was on PATH.
+  - Unmeasured trust sources (implementation notes) are mitigated by the isolated home and by using no SDK or ACP host.
+- **opencode:**
+  - The rendered config denies every tool (`*`) and allows only read, glob, grep and list, at the top level and for the `intent-cli-reviewer` agent.
+  - `task` is denied because agent-level denials do not reach subagents: a reviewer delegated a file change to `general`.
+  - `external_directory` is denied, so a path that is lexically outside the workspace is refused. Measured 2026-09-18: that check compares lexically, so a symlink inside the workspace whose target is outside is still read. intent-cli refuses such a workspace before rendering; the runtime does not confine itself.
+  - `OPENCODE_DISABLE_PROJECT_CONFIG=1` and `--pure` stop a workspace's config, agents, plugins and MCP entries from overriding these rules or running code, and its `AGENTS.md` does not reach the model (measured with a canary).
+  - The isolated config directories and the two empty variables keep out the operator's global config and inherited overrides; each re-enabled writes when not isolated, and the full form held against all of them (measured).
+  - Data, state and cache stay the operator's (credentials); they were not probed as permission sources.
+
+**Trusted-folder warning.** Keep isolated clones outside every runtime's trusted
+folders. The copilot builder line uses a fresh, empty `COPILOT_HOME` and
+`XDG_CONFIG_HOME` per run so the operator's Copilot trust settings, hooks, and
+MCP servers never apply to it.
+
+### Relation rule
+
+`relation` is `same-runtime` exactly when the reviewer's `--runtime` equals the
+declared `conductor_runtime` (ordinal), and `cross-runtime` otherwise. The rule is
+by CLI runtime, not by model vendor or provider:
+
+| conductor ↓ / reviewer → | codex | claude | cursor | copilot | opencode |
+|---|---|---|---|---|---|
+| codex | same | cross | cross | cross | cross |
+| claude | cross | same | cross | cross | cross |
+| cursor | cross | cross | same | cross | cross |
+| copilot | cross | cross | cross | same | cross |
+| opencode | cross | cross | cross | cross | same |
+
+Advise a reviewer model from a different vendor and model family than the
+conductor's model; the gate does not check this.
+
+### `--model`, `--effort`, and provider config
+
+- **`--model` is required for `copilot` and `opencode`** on `request` and
+  `record` for both kinds. A missing value refuses
+  `cross-runtime-review-model-required`. `--model` stays optional for the other
+  three. copilot `auto` (any case) refuses `cross-runtime-review-model-invalid`.
+  opencode values must be `provider/model` with a valid provider id.
+- **Optional `--effort`.** copilot accepts exactly
+  `none|minimal|low|medium|high|xhigh|max` (rendered as `--reasoning-effort`).
+  opencode accepts any non-empty value passing character rules (rendered as
+  `--variant`). codex, claude, and cursor refuse `--effort` as
+  `cross-runtime-review-argument-invalid`.
+- **`--opencode-provider-config <file>`** (`request` only, `opencode` only,
+  optional). The file is UTF-8 JSON whose root has exactly one key, `provider`,
+  with an object value. The rendered `opencode-reviewer.json` inserts that
+  `provider` block after `$schema`. The request result names the file as
+  `opencode_provider_config` when given.
+
+`record` stores `effort` only when given, next to `model`. copilot envelopes
+carry an observed model and, when `--effort` is given, an observed effort that
+must match. OpenCode events carry no model id on this path; recorded `model` and
+`effort` for opencode are seat-reported and unchecked.
+
+### Verdict envelopes
+
+Both new runtimes use UTF-8 JSONL. A bare verdict object (no runtime `type` field)
+is refused. **copilot and opencode** accept a trailing fenced JSON block (````
+or ````json`) or an unfenced trailing object; narration before the opener or
+object is accepted. **cursor** is unchanged: a fenced verdict is refused.
+
+- **copilot:** The last event must be the only `type: "result"` with `exitCode` 0.
+  Exactly one `type: "assistant.message"` has `data.phase == "final_answer"` with
+  string `data.content` and absent or empty `data.toolRequests`. Observed model
+  must match `--model`; when `--effort` is given, every main-conversation entry
+  in every `session.usage_checkpoint` must carry the observed model's string
+  `reasoning_effort` equal to the flag, with at least one such entry.
+- **opencode:** Events follow a pinned state machine through T13. In `terminated`,
+  only a compaction reopen (`text` with `part.synthetic` and
+  `part.metadata.compaction_continue`) returns to `idle`; every other event is
+  refused. Terminal `step_finish` with `part.reason == "stop"` ends the answer
+  step. An `error` event refuses with `error.name` and `error.data.message`.
+  `record --runtime opencode` requires a regular `opencode-exit.txt` whose bytes
+  are exactly `0\n`.
+
+### Builder guidance
+
+`guide solo-conductor` adds a `builder` field and a **Builder invocations
+(guidance)** Markdown section. Step 6 points to it. The field holds a seven-item
+`contract`, five `invocations` (codex, claude, cursor, copilot, opencode) with
+`runtime`, `command`, `enforcement`, and `measured`, and `opencode_config` (the
+pinned builder config text). `--model` is required for the copilot and opencode
+builder lines; their `enforcement` texts begin with `The model is required.`
+The OpenCode builder runs with fresh, empty `XDG_CONFIG_HOME` and
+`OPENCODE_CONFIG_DIR` per run; the task file carries every repository instruction
+the builder needs because project config and `AGENTS.md` are not loaded.
+
+**Local-model rule.** A local model provider serves one seat at a time. Do not
+start a local-model builder or reviewer while another local-model seat runs;
+intent-cli does not check this.
+
+**Local-model context-window guidance (measured).** The initial prompt can fit,
+but accumulated conversation and tool output can later overflow the context
+window. Identical prompts can behave differently from run to run. Tool-heavy
+reviews may need a smaller packet, a larger context window, or retries.
+
+**Forward compatibility.** An intent-cli without G842 refuses
+`cross-runtime-review-runtime-invalid` for the two new runtimes and cannot read
+a stored record with `runtime: copilot` or `runtime: opencode` (`record-unreadable`,
+gate fails closed). Refresh every binary that reads the host before recording
+with copilot or opencode.
 
 ## Durable completion continuation chain (G695 — preview-through-1.x)
 

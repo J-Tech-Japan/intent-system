@@ -277,6 +277,7 @@ public sealed class G833SoloConductorTests : IDisposable
             {
                 "## Model", "## Per-unit loop", "## Independence rules (blocking)", "## Pacing", "## Operator questions",
                 "## Host discipline", "## Handoff durability", "## Limits", "## No-execution boundary",
+                "## Builder invocations (guidance)",
             })
             {
                 Assert.Contains(heading, markdown.ToString(), StringComparison.Ordinal);
@@ -339,6 +340,68 @@ public sealed class G833SoloConductorTests : IDisposable
     }
 
     [Fact]
+    public void Route_BuilderField_HasSevenContractItems_FiveInvocations_AndOpencodeConfig()
+    {
+        var guide = GuideSoloConductorCommand.BuildGuide();
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItems, guide.Builder.Contract);
+        Assert.Equal(CrossRuntimeReviewRuntimes.All, guide.Builder.Invocations.Select(invocation => invocation.Runtime));
+        Assert.Equal(GuideSoloConductorCommand.BuildBuilder().Invocations.Select(invocation => invocation.Command), guide.Builder.Invocations.Select(invocation => invocation.Command));
+        Assert.False(Assert.Single(guide.Builder.Invocations, invocation => invocation.Runtime == "codex").Measured);
+        Assert.All(guide.Builder.Invocations.Where(invocation => invocation.Runtime is not "codex"), invocation => Assert.True(invocation.Measured));
+        Assert.Equal(G842PinnedContractTexts.OpencodeBuilderConfigJson, guide.Builder.OpencodeConfig);
+        using var _ = JsonDocument.Parse(guide.Builder.OpencodeConfig);
+
+        var copilot = Assert.Single(guide.Builder.Invocations, invocation => invocation.Runtime == "copilot");
+        Assert.Equal(G842PinnedContractTexts.CopilotBuilderEnforcement, copilot.Enforcement);
+        Assert.Equal(G842PinnedContractTexts.CopilotBuilderCommand, copilot.Command);
+        var opencode = Assert.Single(guide.Builder.Invocations, invocation => invocation.Runtime == "opencode");
+        Assert.Equal(G842PinnedContractTexts.OpencodeBuilderEnforcement, opencode.Enforcement);
+        Assert.Equal(G842PinnedContractTexts.OpencodeBuilderCommand, opencode.Command);
+
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem2, guide.Builder.Contract[1]);
+
+        var step3 = guide.Loop.Single(step => step.Number == 3);
+        var step7 = guide.Loop.Single(step => step.Number == 7);
+        Assert.Contains(step3.Commands, command => command.Command.Contains("<codex|claude|cursor|copilot|opencode>", StringComparison.Ordinal));
+        Assert.Contains(step7.Commands, command => command.Command.Contains("<codex|claude|cursor|copilot|opencode>", StringComparison.Ordinal));
+        var step6 = guide.Loop.Single(step => step.Number == 6);
+        Assert.Contains("Builder invocations", step6.Instruction, StringComparison.Ordinal);
+        Assert.Contains(
+            "`--opencode-provider-config` must name a source outside the workspace and outside every operator-protected root.",
+            step7.Instruction,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "After `record --write` has stored the verdict, the seat deletes the out-dir, or keeps it under a directory only that user can read; intent-cli does not delete it.",
+            step7.Instruction,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Route_BuilderContract_PinsAllSevenItemsIndividually()
+    {
+        var contract = GuideSoloConductorCommand.BuildGuide().Builder.Contract;
+
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem1, contract[0]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem2, contract[1]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem3, contract[2]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem4, contract[3]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem5, contract[4]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem6, contract[5]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem7, contract[6]);
+    }
+
+    [Fact]
+    public void Route_BuilderSection_AppearsInMarkdown()
+    {
+        using var markdown = new StringWriter();
+        Assert.Equal(0, GuideSoloConductorCommand.Execute(CreateContext(), ["--format", "markdown"], markdown));
+        var text = markdown.ToString();
+        Assert.Contains("## Builder invocations (guidance)", text, StringComparison.Ordinal);
+        Assert.Contains("The model is required.", text, StringComparison.Ordinal);
+        Assert.Contains(G842PinnedContractTexts.OpencodeBuilderConfigJson.Trim(), text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Route_NeverClaimsIntentCliStartsOrManagesAnAgent()
     {
         using var writer = new StringWriter();
@@ -366,7 +429,7 @@ public sealed class G833SoloConductorTests : IDisposable
 
             var ledger = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "1.0-compatibility-ledger.md"));
             Assert.Contains("| `guide solo-conductor` |", ledger, StringComparison.Ordinal);
-            Assert.Contains("G833; `preview-through-1.x`", ledger, StringComparison.Ordinal);
+            Assert.Contains("G833/G842; `preview-through-1.x`", ledger, StringComparison.Ordinal);
             foreach (var document in new[] { orchestration, ledger })
             {
                 Assert.Contains("team-mode.json", document, StringComparison.Ordinal);

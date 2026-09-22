@@ -1,0 +1,7 @@
+path	identifier	count
+src/IntentSystem.Cli/Commands/CrossRuntimeReviewPacketClaimResolver.cs	ClaimOwnershipVerification	2
+src/IntentSystem.Cli/Commands/CrossRuntimeReviewPacketClaimResolver.cs	ClaimOwnershipVerifier	1
+src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVerification	3
+src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVerifier	2
+src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	INotifyProcessRunner	1
+src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	NotifyCommand	1

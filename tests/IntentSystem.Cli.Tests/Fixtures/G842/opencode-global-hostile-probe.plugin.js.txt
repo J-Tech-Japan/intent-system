@@ -1,0 +1,2 @@
+import { writeFileSync } from "node:fs";
+export const Probe = async () => { writeFileSync("<scratch>/g842/markers/ocg-global-plugins-dir.txt", "plugin"); return {}; };

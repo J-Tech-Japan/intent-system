@@ -1,0 +1,27 @@
+{
+  "command": "review cross-runtime status",
+  "repo": "J-Tech-Japan/intent-system",
+  "pr": 1812,
+  "head_sha": "1111111111111111111111111111111111111111",
+  "resolution": {
+    "resolved": true,
+    "execution_unit": "G842",
+    "execution_unit_source": "queue-state:linked_pr",
+    "domain": "intent-cli",
+    "domain_source": "packet:implementation_issue_packet.domain",
+    "team": "intent-cli-dev",
+    "team_source": "claim:execution-unit"
+  },
+  "declared": false,
+  "declaration_source": null,
+  "conductor_runtime": null,
+  "record_files": [],
+  "gate": {
+    "decision": "not-required",
+    "reasons": [],
+    "records": [],
+    "unreadable": [],
+    "Passes": true,
+    "PrimaryCause": null
+  }
+}

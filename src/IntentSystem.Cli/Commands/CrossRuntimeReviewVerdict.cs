@@ -85,8 +85,30 @@ internal static class CrossRuntimeReviewVerdict
         string runtime,
         string content,
         out CrossRuntimeReviewDesignVerdictValue verdict,
-        out string error) =>
-        TryParseKeyed(runtime, content, TryValidateDesign, out verdict, out error);
+        out string error)
+    {
+        if (runtime == CrossRuntimeReviewRuntimes.Copilot)
+        {
+            return CrossRuntimeReviewJsonlVerdict.TryParseCopilot(
+                content,
+                TryValidateDesign,
+                out verdict,
+                out _,
+                out error);
+        }
+
+        if (runtime == CrossRuntimeReviewRuntimes.Opencode)
+        {
+            return CrossRuntimeReviewJsonlVerdict.TryParseOpencode(
+                content,
+                TryValidateDesign,
+                out verdict,
+                out _,
+                out error);
+        }
+
+        return TryParseKeyed(runtime, content, TryValidateDesign, out verdict, out error);
+    }
 
     /// <summary>
     /// Extracts the verdict object from what <paramref name="runtime"/> wrote.
@@ -101,7 +123,35 @@ internal static class CrossRuntimeReviewVerdict
         string content,
         out CrossRuntimeReviewVerdictValue verdict,
         out string error) =>
-        TryParseKeyed(runtime, content, TryValidate, out verdict, out error);
+        TryParse(runtime, content, out verdict, out _, out error);
+
+    public static bool TryParse(
+        string runtime,
+        string content,
+        out CrossRuntimeReviewVerdictValue verdict,
+        out string? observedModel,
+        out string error)
+    {
+        observedModel = null;
+        if (runtime == CrossRuntimeReviewRuntimes.Copilot)
+        {
+            return CrossRuntimeReviewJsonlVerdict.TryParseCopilot(content, TryValidate, out verdict, out observedModel, out error);
+        }
+
+        if (runtime == CrossRuntimeReviewRuntimes.Opencode)
+        {
+            return CrossRuntimeReviewJsonlVerdict.TryParseOpencode(
+                content,
+                TryValidate,
+                out verdict,
+                out _,
+                out error);
+        }
+
+        return TryParseKeyed(runtime, content, TryValidate, out verdict, out error);
+    }
+
+    internal delegate bool TryValidateDelegate<TVerdict>(JsonElement element, out TVerdict verdict, out string error);
 
     private static bool TryParseKeyed<TVerdict>(
         string runtime,
@@ -184,14 +234,17 @@ internal static class CrossRuntimeReviewVerdict
                     }
                 }
 
+                case CrossRuntimeReviewRuntimes.Copilot:
+                case CrossRuntimeReviewRuntimes.Opencode:
+                    error = $"runtime '{runtime}' must use the JSONL envelope parser.";
+                    return false;
+
                 default:
                     error = $"runtime '{runtime}' is not supported ({CrossRuntimeReviewRuntimes.Describe()}).";
                     return false;
             }
         }
     }
-
-    private delegate bool TryValidateDelegate<TVerdict>(JsonElement element, out TVerdict verdict, out string error);
 
     /// <summary>
     /// cursor-agent 2026.09.10 has no schema flag, and its measured
@@ -229,6 +282,110 @@ internal static class CrossRuntimeReviewVerdict
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// G842: copilot and opencode accept one trailing fenced JSON object or an
+    /// unfenced trailing object. Cursor keeps <see cref="TryParseTrailingObject"/>
+    /// only and refuses fences byte-for-byte on the merge base.
+    /// </summary>
+    internal static bool TryParseVerdictText(string text, out JsonDocument document, out string error)
+    {
+        document = null!;
+        error = string.Empty;
+        var trimmedText = text.TrimEnd();
+        if (trimmedText.Length == 0)
+        {
+            error = "verdict-invalid: verdict text is empty.";
+            return false;
+        }
+
+        var lines = trimmedText.Split('\n');
+        var trimmedLines = lines.Select(line => line.TrimEnd()).ToArray();
+        if (trimmedLines[^1] == "```")
+        {
+            var fenceLineIndexes = new List<int>();
+            for (var index = 0; index < trimmedLines.Length; index++)
+            {
+                if (IsFenceLine(trimmedLines[index]))
+                {
+                    fenceLineIndexes.Add(index);
+                }
+            }
+
+            if (fenceLineIndexes.Count != 2)
+            {
+                error = "verdict-invalid: verdict text must contain exactly one fenced block.";
+                return false;
+            }
+
+            var opener = trimmedLines[fenceLineIndexes[0]].TrimStart();
+            if (opener is not "```" and not "```json")
+            {
+                error = "verdict-invalid: fenced verdict opener must be ``` or ```json.";
+                return false;
+            }
+
+            var inner = string.Join(
+                '\n',
+                trimmedLines.Skip(fenceLineIndexes[0] + 1).Take(fenceLineIndexes[1] - fenceLineIndexes[0] - 1));
+            if (!TryParseExactObject(inner.Trim(), out document, out error))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        foreach (var line in trimmedLines)
+        {
+            if (IsFenceLine(line))
+            {
+                error = "verdict-invalid: verdict text must not contain a Markdown fence outside the trailing fenced form.";
+                return false;
+            }
+        }
+
+        if (!TryParseTrailingObject(text, out document))
+        {
+            error = "verdict-invalid: verdict text does not end with a verdict JSON object.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsFenceLine(string line) =>
+        line.TrimStart().StartsWith("```", StringComparison.Ordinal);
+
+    private static bool TryParseExactObject(string inner, out JsonDocument document, out string error)
+    {
+        document = null!;
+        error = string.Empty;
+        if (inner.Length == 0)
+        {
+            error = "verdict-invalid: fenced block is empty.";
+            return false;
+        }
+
+        try
+        {
+            document = JsonDocument.Parse(inner);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                document.Dispose();
+                document = null!;
+                error = "verdict-invalid: fenced block must hold exactly one JSON object.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException exception)
+        {
+            error = $"verdict-invalid: invalid JSON in fenced block: {exception.Message}";
+            return false;
+        }
     }
 
     private static bool TryReadResultEnvelope(JsonElement root, string runtime, out string error)

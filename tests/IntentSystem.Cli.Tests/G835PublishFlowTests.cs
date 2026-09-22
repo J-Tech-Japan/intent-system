@@ -44,6 +44,16 @@ public sealed class G835PublishFlowTests : IDisposable
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = null;
     }
 
+    internal static void ConfigureG842PublishFlowSeams(
+        Func<IIssueCreator>? creatorFactory,
+        Func<IGitHubExistingIssueChecker>? existingIssueCheckerFactory,
+        Func<DateTimeOffset>? utcNowFactory)
+    {
+        IssuePublishFlowCommand.CreatorFactory = creatorFactory;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = existingIssueCheckerFactory;
+        IssuePublishFlowCommand.UtcNowFactory = utcNowFactory;
+    }
+
     // ── byte identity ──────────────────────────────────────────────────
 
     [Theory]

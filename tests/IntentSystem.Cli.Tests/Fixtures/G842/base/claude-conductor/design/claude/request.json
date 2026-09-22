@@ -1,0 +1,21 @@
+{
+  "command": "review cross-runtime request",
+  "outcome": "rendered",
+  "kind": "design",
+  "packet_digest": "2fb5a6518521c25503243e0611b447f16784251d25077888fca55f0ff406624c",
+  "execution_unit": "G842",
+  "runtime": "claude",
+  "out_dir": "{{G842_WORKSPACE_ROOT}}/request-json",
+  "workspace": "{{G842_WORKSPACE_ROOT}}/request-json",
+  "files": [
+    "{{G842_WORKSPACE_ROOT}}/request-json/prompt.md",
+    "{{G842_WORKSPACE_ROOT}}/request-json/verdict.schema.json",
+    "{{G842_WORKSPACE_ROOT}}/request-json/invocation.txt"
+  ],
+  "invocation": "# run by the seat (claude); intent-cli renders this text and never runs it\ncd \u0027{{G842_WORKSPACE_ROOT}}/request-json\u0027 \u0026\u0026 claude -p --permission-mode plan --disallowedTools Edit,Write,NotebookEdit --output-format json --json-schema \u0022$(cat \u0027{{G842_WORKSPACE_ROOT}}/request-json/verdict.schema.json\u0027)\u0022 \u003C \u0027{{G842_WORKSPACE_ROOT}}/request-json/prompt.md\u0027 \u003E \u0027{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json\u0027",
+  "run_by": "seat",
+  "raw_verdict_file": "{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json",
+  "read_only_enforcement": "claude \u0060--permission-mode plan --disallowedTools Edit,Write,NotebookEdit\u0060 removes the file-writing tools only. Command execution (for example building and running tests) is allowed, and writes made through shell commands are not sandbox-enforced.",
+  "no_execution_boundary": "intent-cli renders text and records evidence only; the seat runs the reviewer and posts with gh. intent-cli does not start, launch, or manage any agent or provider process.",
+  "terms": "Confirming each vendor\u0027s automation terms for headless reviewer runs is the operator\u0027s responsibility; intent-cli does not assert that any use is permitted."
+}

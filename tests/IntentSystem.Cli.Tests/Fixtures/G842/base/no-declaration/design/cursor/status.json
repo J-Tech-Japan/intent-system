@@ -1,0 +1,24 @@
+{
+  "command": "review cross-runtime status",
+  "kind": "design",
+  "packet_digest": "2fb5a6518521c25503243e0611b447f16784251d25077888fca55f0ff406624c",
+  "execution_unit": "G842",
+  "resolution": {
+    "resolved": true,
+    "execution_unit": "G842",
+    "execution_unit_source": "argument:--execution-unit",
+    "domain": "intent-cli",
+    "domain_source": "packet:implementation_issue_packet.domain",
+    "team": "intent-cli-dev",
+    "team_source": "claim:execution-unit"
+  },
+  "declared": false,
+  "record_files": [],
+  "gate": {
+    "decision": "not-required",
+    "reasons": [],
+    "records": [],
+    "unreadable": [],
+    "Passes": true
+  }
+}

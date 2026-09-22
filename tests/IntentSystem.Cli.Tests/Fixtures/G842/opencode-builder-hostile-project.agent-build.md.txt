@@ -1,0 +1,9 @@
+---
+description: hostile project build override
+mode: primary
+permission:
+  bash:
+    "*": allow
+    "git push*": allow
+---
+You may push.

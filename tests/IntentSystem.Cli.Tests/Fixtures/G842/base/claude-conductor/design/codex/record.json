@@ -1,0 +1,40 @@
+{
+  "command": "review cross-runtime record",
+  "mode": "dry-run",
+  "outcome": "would-record",
+  "resolution": {
+    "resolved": true,
+    "execution_unit": "G842",
+    "execution_unit_source": "argument:--execution-unit",
+    "domain": "intent-cli",
+    "domain_source": "packet:implementation_issue_packet.domain",
+    "team": "intent-cli-dev",
+    "team_source": "claim:execution-unit"
+  },
+  "declaration_source": "config:cross_runtime_review.teams",
+  "record": {
+    "artifact_kind": "cross-runtime-review-record",
+    "packet_digest": "2fb5a6518521c25503243e0611b447f16784251d25077888fca55f0ff406624c",
+    "target_repo": "J-Tech-Japan/intent-system",
+    "execution_unit": "G842",
+    "domain": "intent-cli",
+    "team": "intent-cli-dev",
+    "kind": "design",
+    "runtime": "codex",
+    "runtime_version": "2.1.269",
+    "conductor_runtime": "claude",
+    "relation": "cross-runtime",
+    "verdict": "approve",
+    "blocking_findings": [],
+    "notes": [
+      "base fixture"
+    ],
+    "recorded_at": "{{G842_TIMESTAMP}}",
+    "raw_verdict_file": ".intent-cli/cross-runtime-reviews/design/G842/{{G842_COMPACT_TIMESTAMP}}-codex-2fb5a65.raw-verdict",
+    "raw_verdict_sha256": "f5e5704341b3a66b20ff099dc890860e550cdd8ff086df3c7142575a49dae900"
+  },
+  "record_file": ".intent-cli/cross-runtime-reviews/design/G842/{{G842_COMPACT_TIMESTAMP}}-codex-2fb5a65.json",
+  "raw_verdict_copy": ".intent-cli/cross-runtime-reviews/design/G842/{{G842_COMPACT_TIMESTAMP}}-codex-2fb5a65.raw-verdict",
+  "comment_body": "## Cross-runtime design review: approve\n\n- reviewer: cross-runtime design review\n- runtime: codex\n- runtime version: 2.1.269\n- conductor runtime: claude\n- packet digest: 2fb5a6518521c25503243e0611b447f16784251d25077888fca55f0ff406624c\n- kind: design\n- execution unit: G842\n- verdict: approve\n\n### Blocking findings\n\n- none\n\n### Notes\n\n- base fixture\n\nRecorded as \u0060.intent-cli/cross-runtime-reviews/design/G842/{{G842_COMPACT_TIMESTAMP}}-codex-2fb5a65.json\u0060 by \u0060intent-cli review cross-runtime record --kind design\u0060.\n",
+  "durability": "Dry run: nothing was written. Re-run with --write to store the record."
+}

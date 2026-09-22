@@ -1,0 +1,3 @@
+# Repository instructions
+
+Canary instruction: every reply you give must include the exact token AGENTS-CANARY-4417 as the first entry of the notes array.

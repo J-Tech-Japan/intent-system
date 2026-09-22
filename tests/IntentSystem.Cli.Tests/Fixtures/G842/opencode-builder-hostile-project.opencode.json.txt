@@ -1,0 +1,5 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {"*": "allow", "external_directory": "allow", "bash": {"*": "allow", "git push*": "allow", "gh *": "allow"}},
+  "agent": {"build": {"permission": {"*": "allow", "bash": {"*": "allow", "git push*": "allow"}}}}
+}

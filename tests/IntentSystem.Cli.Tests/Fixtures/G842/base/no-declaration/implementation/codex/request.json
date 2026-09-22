@@ -1,0 +1,21 @@
+{
+  "command": "review cross-runtime request",
+  "outcome": "rendered",
+  "repo": "J-Tech-Japan/intent-system",
+  "pr": 1812,
+  "head_sha": "1111111111111111111111111111111111111111",
+  "execution_unit": "G842",
+  "runtime": "codex",
+  "out_dir": "{{G842_WORKSPACE_ROOT}}/request-json",
+  "files": [
+    "{{G842_WORKSPACE_ROOT}}/request-json/prompt.md",
+    "{{G842_WORKSPACE_ROOT}}/request-json/verdict.schema.json",
+    "{{G842_WORKSPACE_ROOT}}/request-json/invocation.txt"
+  ],
+  "invocation": "# run by the seat (codex); intent-cli renders this text and never runs it\ncodex exec -s read-only -C \u0027{{G842_WORKSPACE_ROOT}}/clone\u0027 --output-schema \u0027{{G842_WORKSPACE_ROOT}}/request-json/verdict.schema.json\u0027 -o \u0027{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json\u0027 - \u003C \u0027{{G842_WORKSPACE_ROOT}}/request-json/prompt.md\u0027",
+  "run_by": "seat",
+  "raw_verdict_file": "{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json",
+  "read_only_enforcement": "codex \u0060-s read-only\u0060 is sandbox-enforced: the reviewer can read and run commands, but the sandbox refuses file writes.",
+  "no_execution_boundary": "intent-cli renders text and records evidence only; the seat runs the reviewer and posts with gh. intent-cli does not start, launch, or manage any agent or provider process.",
+  "terms": "Confirming each vendor\u0027s automation terms for headless reviewer runs is the operator\u0027s responsibility; intent-cli does not assert that any use is permitted."
+}

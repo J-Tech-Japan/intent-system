@@ -1,0 +1,2 @@
+# run by the seat (cursor); intent-cli renders this text and never runs it
+cursor-agent -p --mode ask --sandbox enabled --trust --workspace '{{G842_WORKSPACE_ROOT}}/clone' --output-format json "$(cat '{{G842_WORKSPACE_ROOT}}/request-json/prompt.md')" > '{{G842_WORKSPACE_ROOT}}/request-json/verdict.raw.json'

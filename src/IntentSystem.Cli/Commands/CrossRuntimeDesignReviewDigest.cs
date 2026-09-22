@@ -85,6 +85,79 @@ internal static class CrossRuntimeDesignReviewDigest
         return true;
     }
 
+    public static bool TryReadFromDirectory(
+        string packetDirectory,
+        out PacketBytes packet,
+        out string? missingPath,
+        out string? unreadableFileName,
+        out string? unreadableError)
+    {
+        packet = null!;
+        missingPath = null;
+        unreadableFileName = null;
+        unreadableError = null;
+        byte[] packetYaml;
+        byte[] githubBody;
+        byte[] reviewContext;
+        byte[] implementation;
+        foreach (var fileName in PacketFileNames)
+        {
+            var path = Path.Combine(packetDirectory, fileName);
+            if (!File.Exists(path))
+            {
+                missingPath = path;
+                return false;
+            }
+        }
+
+        if (!TryReadPacketFile(packetDirectory, PacketFileNames[0], out packetYaml, out unreadableError))
+        {
+            unreadableFileName = PacketFileNames[0];
+            return false;
+        }
+
+        if (!TryReadPacketFile(packetDirectory, PacketFileNames[1], out githubBody, out unreadableError))
+        {
+            unreadableFileName = PacketFileNames[1];
+            return false;
+        }
+
+        if (!TryReadPacketFile(packetDirectory, PacketFileNames[2], out reviewContext, out unreadableError))
+        {
+            unreadableFileName = PacketFileNames[2];
+            return false;
+        }
+
+        if (!TryReadPacketFile(packetDirectory, PacketFileNames[3], out implementation, out unreadableError))
+        {
+            unreadableFileName = PacketFileNames[3];
+            return false;
+        }
+
+        packet = new PacketBytes(packetYaml, githubBody, reviewContext, implementation);
+        return true;
+    }
+
+    private static bool TryReadPacketFile(
+        string packetDirectory,
+        string fileName,
+        out byte[] bytes,
+        out string? error)
+    {
+        try
+        {
+            bytes = File.ReadAllBytes(Path.Combine(packetDirectory, fileName));
+            error = null;
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            bytes = [];
+            error = exception.Message;
+            return false;
+        }
+    }
+
     public static string ComputeFromDirectory(string packetDirectory)
     {
         if (!TryReadFromDirectory(packetDirectory, out var packet, out var missing))
