@@ -1,9 +1,11 @@
+using IntentSystem.Cli.Commands;
+
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>G842: generated solely from the pinned implementation notes.</summary>
 internal static class G842PinnedContractTexts
 {
-    internal const string BuilderContractItem1 = "The conductor runs one builder at a time in the unit's isolated clone (step 6), outside every runtime's trusted folders. The copilot line uses a fresh, empty `COPILOT_HOME` and `XDG_CONFIG_HOME` per run (`mktemp -d`, removed after). Copilot itself runs `gh auth token` for credentials, so a signed-in real `gh` must be on PATH; item 3's no-`gh` rule covers the builder's own commands.";
+    internal const string BuilderContractItem1 = "The conductor runs one builder at a time in the unit's isolated clone (step 6), outside every runtime's trusted folders. The copilot line uses a fresh, empty `COPILOT_HOME` and `XDG_CONFIG_HOME` per run (`mktemp -d`, removed after), and carries `GH_CONFIG_DIR=<operator-gh-config-root>`; replace that placeholder with gh's config root found in gh's documented order so `gh auth token` can find a `hosts.yml` token. Copilot itself runs `gh auth token` for credentials, so a signed-in real `gh` must be on PATH; item 3's no-`gh` rule covers the builder's own commands.";
     internal const string BuilderContractItem2 = "The task prompt is a file the conductor writes and passes on stdin, except cursor, which takes it as an argument. Any OpenCode command shown without a prompt file carries `< /dev/null`, because with stdin open `opencode run` waits silently (measured), including in the background.";
     internal const string BuilderContractItem3 = "The builder may edit and commit inside the clone and never pushes, opens a PR or runs `gh`; the conductor pushes, opens the PR and owns claims and transitions.";
     internal const string BuilderContractItem4 = "What bounds the builder differs by runtime, and no measured invocation sandboxes shell commands, so the conductor reviews the clone's diff before pushing.";
@@ -24,7 +26,7 @@ internal static class G842PinnedContractTexts
     internal const string CodexBuilderCommand = "codex exec -s workspace-write -C <isolated-clone> [-m <model>] - < <task-file>";
     internal const string ClaudeBuilderCommand = "cd <isolated-clone> && claude -p --permission-mode acceptEdits --allowedTools Bash --disallowedTools 'Bash(git push:*)' 'Bash(gh:*)' [--model <model>] < <task-file>";
     internal const string CursorBuilderCommand = "cursor-agent -p --force --sandbox enabled --trust --workspace <isolated-clone> [--model <model>] --output-format json \"$(cat <task-file>)\"";
-    internal const string CopilotBuilderCommand = "COPILOT_ALLOW_ALL= COPILOT_HOME=<fresh-empty-copilot-home> XDG_CONFIG_HOME=<fresh-empty-xdg-dir> copilot -C <isolated-clone> --model <model> [--reasoning-effort <effort>] --allow-all-tools --deny-tool 'shell(git push)' --deny-tool 'shell(gh)' --disable-builtin-mcps --no-ask-user --stream off --output-format json < <task-file>";
+    internal const string CopilotBuilderCommand = "COPILOT_ALLOW_ALL= COPILOT_HOME=<fresh-empty-copilot-home> XDG_CONFIG_HOME=<fresh-empty-xdg-dir> GH_CONFIG_DIR=<operator-gh-config-root> copilot -C <isolated-clone> --model <model> [--reasoning-effort <effort>] --allow-all-tools --deny-tool 'shell(git push)' --deny-tool 'shell(gh)' --disable-builtin-mcps --no-ask-user --stream off --output-format json < <task-file>";
     internal const string OpencodeBuilderCommand = "OPENCODE_PERMISSION= OPENCODE_CONFIG_CONTENT= XDG_CONFIG_HOME=<fresh-empty-dir> OPENCODE_CONFIG_DIR=<fresh-empty-dir-2> OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG=<builder-config-file> opencode run --pure --dir <isolated-clone> -m <provider/model> [--variant <effort>] --auto --format json < <task-file>";
 
     internal const string CodexBuilderEnforcement = "not measured.";
@@ -111,6 +113,7 @@ internal static class G842PinnedContractTexts
         "COPILOT_ALLOW_ALL=",
         "COPILOT_HOME=<quoted path>",
         "XDG_CONFIG_HOME=<quoted path>",
+        "GH_CONFIG_DIR=<quoted path>",
     ];
 
     internal static readonly IReadOnlyList<string> OpencodeDenyFlags =
@@ -165,6 +168,7 @@ internal static class G842PinnedContractTexts
             "copilot" =>
                 $"COPILOT_ALLOW_ALL= COPILOT_HOME={PosixSingleQuote(Path.Combine(outDir, "copilot-home"))} "
                 + $"XDG_CONFIG_HOME={PosixSingleQuote(Path.Combine(outDir, "copilot-xdg"))} "
+                + $"GH_CONFIG_DIR={PosixSingleQuote(CrossRuntimeReviewHomeAccessGuard.ResolveGhConfigDir())} "
                 + $"copilot -C {quotedWorkspace} --model {quotedModel}{effortFlag} "
                 + "--available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json "
                 + $"< {PosixSingleQuote(Path.Combine(outDir, "prompt.md"))} > {PosixSingleQuote(Path.Combine(outDir, "verdict.raw.json"))}",
