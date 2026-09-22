@@ -53,17 +53,17 @@ internal static class CrossRuntimeReviewRuntimes
             [Copilot] =
             [
                 "COPILOT_ALLOW_ALL=",
-                CrossRuntimeReviewFiles.CopilotHome,
-                CrossRuntimeReviewFiles.CopilotXdg,
+                "COPILOT_HOME=<quoted path>",
+                "XDG_CONFIG_HOME=<quoted path>",
             ],
             [Opencode] =
             [
                 "OPENCODE_PERMISSION=",
                 "OPENCODE_CONFIG_CONTENT=",
-                CrossRuntimeReviewFiles.OpencodeXdg,
-                CrossRuntimeReviewFiles.OpencodeConfigDir,
+                "XDG_CONFIG_HOME=<quoted path>",
+                "OPENCODE_CONFIG_DIR=<quoted path>",
                 "OPENCODE_DISABLE_PROJECT_CONFIG=1",
-                CrossRuntimeReviewFiles.OpencodeReviewerConfig,
+                "OPENCODE_CONFIG=<quoted path>",
             ],
         };
 
@@ -113,14 +113,34 @@ internal static class CrossRuntimeReviewRuntimes
             ],
         };
 
+    private static readonly string[] CopilotReadOnlyEnforcementStatements =
+    [
+        "`--available-tools view rg glob` leaves only those three tools, so the reviewer reads but cannot write or run commands, and path verification refuses reads outside the workspace.",
+        "`--disable-builtin-mcps` disables the GitHub MCP server, and with the isolated home the operator's user MCP servers do not start (measured); another server's tools would not be exposed anyway.",
+        "`--no-custom-instructions` stops the reviewed workspace from instructing the reviewer through `AGENTS.md` or `.github/copilot-instructions.md`, which matters most for the implementation kind, where the workspace is the clone of the PR head (canary-measured 2026-09-18 both ways; fixtures `copilot-instruction-canary-without-flag.jsonl` and `copilot-instruction-canary-with-flag.jsonl`).",
+        "`COPILOT_ALLOW_ALL=` stops the variable from trusting the workspace, and `COPILOT_HOME` and `XDG_CONFIG_HOME` point at empty directories created under the out-dir, so the operator's `trustedFolders`, IDE lock files, user hooks and user MCP servers are not read.",
+        "**Credentials.** The isolated home holds no token, so Copilot runs `gh auth token --hostname github.com` itself (measured 2026-09-17: with a fake `gh` first on PATH it exits 1, \"No authentication information found\"); a signed-in real `gh` must therefore be first on PATH, and intent-cli never launches it. The earlier note that authentication is unaffected by `COPILOT_HOME` (2026-09-16) is superseded: it held only because the real `gh` was on PATH.",
+        "Unmeasured trust sources (implementation notes) are mitigated by the isolated home and by using no SDK or ACP host.",
+    ];
+
+    private static readonly string[] OpencodeReadOnlyEnforcementStatements =
+    [
+        "The rendered config denies every tool (`*`) and allows only read, glob, grep and list, at the top level and for the `intent-cli-reviewer` agent.",
+        "`task` is denied because agent-level denials do not reach subagents: a reviewer delegated a file change to `general`.",
+        "`external_directory` is denied, so a path that is lexically outside the workspace is refused. Measured 2026-09-18: that check compares lexically, so a symlink inside the workspace whose target is outside is still read. intent-cli refuses such a workspace before rendering; the runtime does not confine itself.",
+        "`OPENCODE_DISABLE_PROJECT_CONFIG=1` and `--pure` stop a workspace's config, agents, plugins and MCP entries from overriding these rules or running code, and its `AGENTS.md` does not reach the model (measured with a canary).",
+        "The isolated config directories and the two empty variables keep out the operator's global config and inherited overrides; each re-enabled writes when not isolated, and the full form held against all of them (measured).",
+        "Data, state and cache stay the operator's (credentials); they were not probed as permission sources.",
+    ];
+
     public static readonly IReadOnlyDictionary<string, string> ReadOnlyEnforcement =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [Codex] = "codex `-s read-only` is sandbox-enforced: the reviewer can read and run commands, but the sandbox refuses file writes.",
             [Claude] = "claude `--permission-mode plan --disallowedTools Edit,Write,NotebookEdit` removes the file-writing tools only. Command execution (for example building and running tests) is allowed, and writes made through shell commands are not sandbox-enforced.",
             [Cursor] = "cursor `--mode ask` refuses every non-read-only tool, including all shell commands, so the reviewer reads files but cannot run git or tests; the head it echoes is read from files such as `.git/HEAD`, not checked with git. `--mode plan` was not used because a measured plan-mode run switched itself to agent mode and wrote files inside and outside the workspace; `--sandbox enabled` did not stop those writes.",
-            [Copilot] = "--available-tools view rg glob leaves only those three tools, so the reviewer reads but cannot write or run commands, and path verification refuses reads outside the workspace. --disable-builtin-mcps disables the GitHub MCP server, and with the isolated home the operator's user MCP servers do not start (measured); another server's tools would not be exposed anyway. --no-custom-instructions stops the reviewed workspace from instructing the reviewer through AGENTS.md or .github/copilot-instructions.md, which matters most for the implementation kind, where the workspace is the clone of the PR head (canary-measured 2026-09-18 both ways; fixtures copilot-instruction-canary-*.jsonl). COPILOT_ALLOW_ALL= stops the variable from trusting the workspace, and COPILOT_HOME and XDG_CONFIG_HOME point at empty directories created under the out-dir, so the operator's trustedFolders, IDE lock files, user hooks and user MCP servers are not read. Credentials: the isolated home holds no token, so Copilot runs gh auth token --hostname github.com itself (measured 2026-09-17: with a fake gh first on PATH it exits 1, \"No authentication information found\"); a signed-in real gh must therefore be first on PATH, and intent-cli never launches it. The earlier note that authentication is unaffected by COPILOT_HOME (2026-09-16) is superseded: it held only because the real gh was on PATH. Unmeasured trust sources (implementation notes) are mitigated by the isolated home and by using no SDK or ACP host.",
-            [Opencode] = "The rendered config denies every tool (`*`) and allows only read, glob, grep and list, at the top level and for the intent-cli-reviewer agent. task is denied because agent-level denials do not reach subagents: a reviewer delegated a file change to general. external_directory is denied, so a path that is lexically outside the workspace is refused. Measured 2026-09-18: that check compares lexically, so a symlink inside the workspace whose target is outside is still read. intent-cli refuses such a workspace before rendering; the runtime does not confine itself. OPENCODE_DISABLE_PROJECT_CONFIG=1 and --pure stop the reviewed workspace's opencode.json, .opencode agents, plugins and MCP entries from overriding these rules or running code, and its AGENTS.md does not reach the model (measured with a canary). The isolated config directories and the two empty variables keep out the operator's global config and inherited overrides; each re-enabled writes when not isolated, and the full form held against all of them (measured). Data, state and cache stay the operator's (credentials); they were not probed as permission sources.",
+            [Copilot] = string.Join(" ", CopilotReadOnlyEnforcementStatements),
+            [Opencode] = string.Join(" ", OpencodeReadOnlyEnforcementStatements),
         };
 
     public static string InvocationLabel(string runtime) =>

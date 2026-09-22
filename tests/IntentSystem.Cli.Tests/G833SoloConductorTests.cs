@@ -343,8 +343,7 @@ public sealed class G833SoloConductorTests : IDisposable
     public void Route_BuilderField_HasSevenContractItems_FiveInvocations_AndOpencodeConfig()
     {
         var guide = GuideSoloConductorCommand.BuildGuide();
-        string[] expectedContract = GuideSoloConductorCommand.BuildBuilder().Contract.ToArray();
-        Assert.Equal(expectedContract, guide.Builder.Contract);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItems, guide.Builder.Contract);
         Assert.Equal(CrossRuntimeReviewRuntimes.All, guide.Builder.Invocations.Select(invocation => invocation.Runtime));
         Assert.Equal(GuideSoloConductorCommand.BuildBuilder().Invocations.Select(invocation => invocation.Command), guide.Builder.Invocations.Select(invocation => invocation.Command));
         Assert.False(Assert.Single(guide.Builder.Invocations, invocation => invocation.Runtime == "codex").Measured);
@@ -359,9 +358,7 @@ public sealed class G833SoloConductorTests : IDisposable
         Assert.Equal(G842PinnedContractTexts.OpencodeBuilderEnforcement, opencode.Enforcement);
         Assert.Equal(G842PinnedContractTexts.OpencodeBuilderCommand, opencode.Command);
 
-        Assert.Equal(
-            "The task prompt is a file the conductor writes and passes on stdin, except cursor, which takes it as an argument. Any OpenCode command shown without a prompt file carries `< /dev/null`, because with stdin open `opencode run` waits silently (measured), including in the background.",
-            guide.Builder.Contract[1]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem2, guide.Builder.Contract[1]);
 
         var step3 = guide.Loop.Single(step => step.Number == 3);
         var step7 = guide.Loop.Single(step => step.Number == 7);
@@ -377,6 +374,20 @@ public sealed class G833SoloConductorTests : IDisposable
             "After `record --write` has stored the verdict, the seat deletes the out-dir, or keeps it under a directory only that user can read; intent-cli does not delete it.",
             step7.Instruction,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Route_BuilderContract_PinsAllSevenItemsIndividually()
+    {
+        var contract = GuideSoloConductorCommand.BuildGuide().Builder.Contract;
+
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem1, contract[0]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem2, contract[1]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem3, contract[2]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem4, contract[3]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem5, contract[4]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem6, contract[5]);
+        Assert.Equal(G842PinnedContractTexts.BuilderContractItem7, contract[6]);
     }
 
     [Fact]

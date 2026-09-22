@@ -823,8 +823,11 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal(0, exit);
         using var requestResult = JsonDocument.Parse(output);
         Assert.Equal(
-            CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime],
+            G842PinnedContractTexts.ExpectedReadOnlyEnforcement[runtime],
             requestResult.RootElement.GetProperty("read_only_enforcement").GetString());
+        Assert.Equal(
+            G842PinnedContractTexts.ExpectedReadOnlyEnforcement[runtime],
+            CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime]);
 
         var expected = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
             + G842PinnedContractTexts.ExpectedReviewerInvocation(runtime, workspace, outDir, model, effort) + "\n";
@@ -842,13 +845,30 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
             invocationBody = command[rmPrefix.Length..^printfSuffix.Length];
         }
 
-        foreach (var assignment in CrossRuntimeReviewRuntimes.EnvAssignments[runtime])
+        var renderedAssignments = runtime == "copilot"
+            ? new[]
+            {
+                "COPILOT_ALLOW_ALL=",
+                $"COPILOT_HOME={CrossRuntimeReviewPaths.ShellQuote(Path.Combine(outDir, CrossRuntimeReviewFiles.CopilotHome))}",
+                $"XDG_CONFIG_HOME={CrossRuntimeReviewPaths.ShellQuote(Path.Combine(outDir, CrossRuntimeReviewFiles.CopilotXdg))}",
+            }
+            : new[]
+            {
+                "OPENCODE_PERMISSION=",
+                "OPENCODE_CONFIG_CONTENT=",
+                $"XDG_CONFIG_HOME={CrossRuntimeReviewPaths.ShellQuote(Path.Combine(outDir, CrossRuntimeReviewFiles.OpencodeXdg))}",
+                $"OPENCODE_CONFIG_DIR={CrossRuntimeReviewPaths.ShellQuote(Path.Combine(outDir, CrossRuntimeReviewFiles.OpencodeConfigDir))}",
+                "OPENCODE_DISABLE_PROJECT_CONFIG=1",
+                $"OPENCODE_CONFIG={CrossRuntimeReviewPaths.ShellQuote(Path.Combine(outDir, CrossRuntimeReviewFiles.OpencodeReviewerConfig))}",
+            };
+
+        foreach (var assignment in renderedAssignments)
         {
             Assert.Contains(assignment, invocationBody, StringComparison.Ordinal);
         }
 
         var previousIndex = -1;
-        foreach (var assignment in CrossRuntimeReviewRuntimes.EnvAssignments[runtime])
+        foreach (var assignment in renderedAssignments)
         {
             var index = invocationBody.IndexOf(assignment, StringComparison.Ordinal);
             Assert.True(index > previousIndex, assignment);
@@ -958,6 +978,34 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal(G842PinnedContractTexts.CopilotBuilderEnforcement, builder.Invocations[3].Enforcement);
         Assert.Equal(G842PinnedContractTexts.OpencodeBuilderEnforcement, builder.Invocations[4].Enforcement);
         Assert.Equal(G842PinnedContractTexts.OpencodeBuilderConfigJson, builder.OpencodeConfig);
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("opencode")]
+    public void ReadOnlyEnforcement_StatementsPerRuntime_MatchPinnedRequestText(string runtime)
+    {
+        Assert.Equal(
+            G842PinnedContractTexts.ExpectedReadOnlyEnforcement[runtime],
+            string.Join(" ", G842PinnedContractTexts.ReadOnlyEnforcementStatements[runtime]));
+        Assert.Equal(
+            G842PinnedContractTexts.ExpectedReadOnlyEnforcement[runtime],
+            CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime]);
+    }
+
+    [Fact]
+    public void RuntimePolicyLists_MatchPinnedEntries()
+    {
+        Assert.Equal(G842PinnedContractTexts.CopilotAllowedFlags, CrossRuntimeReviewRuntimes.AllowedFlags["copilot"]);
+        Assert.Equal(G842PinnedContractTexts.OpencodeAllowedFlags, CrossRuntimeReviewRuntimes.AllowedFlags["opencode"]);
+        Assert.Equal(G842PinnedContractTexts.CopilotEnvAssignments, CrossRuntimeReviewRuntimes.EnvAssignments["copilot"]);
+        Assert.Equal(G842PinnedContractTexts.OpencodeEnvAssignments, CrossRuntimeReviewRuntimes.EnvAssignments["opencode"]);
+        Assert.Equal(
+            G842PinnedContractTexts.CopilotDenyFlags,
+            CrossRuntimeReviewRuntimes.DenyFlags["copilot"].TakeLast(G842PinnedContractTexts.CopilotDenyFlags.Count));
+        Assert.Equal(
+            G842PinnedContractTexts.OpencodeDenyFlags,
+            CrossRuntimeReviewRuntimes.DenyFlags["opencode"].TakeLast(G842PinnedContractTexts.OpencodeDenyFlags.Count));
     }
 
     // ── OpenCode config ────────────────────────────────────────────────

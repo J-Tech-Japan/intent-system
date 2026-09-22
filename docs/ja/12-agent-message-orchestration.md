@@ -298,27 +298,26 @@ provider secret は `opencode-reviewer.json` だけにコピーされ、prompt�
 result、refusal、log には出ません。isolated copilot home では Copilot 自身が
 `gh auth token` を実行するため、PATH 先頭にサインイン済みの実 `gh` が必要です。
 
-read-only enforcement（実測）:
+read-only enforcement（実測、pinned statement）:
 
-- **copilot:** `--available-tools view rg glob` はその 3 tool だけを残すため、reviewer は
-  ファイルを読めますが書き込みやコマンド実行はできません。path verification は workspace
-  外の読み取りを拒否します。`--disable-builtin-mcps` は GitHub MCP server を無効にします。
-  isolated home では operator の user MCP server は起動しません（実測）。`--no-custom-instructions` は
-  reviewed workspace の `AGENTS.md` と `.github/copilot-instructions.md` を instruction source
-  にしません。`COPILOT_ALLOW_ALL=`
-  は環境変数による workspace trust を止めます。`COPILOT_HOME` と `XDG_CONFIG_HOME` は
-  intent-cli が out-dir 下に作った空 directory を指すため、operator の `trustedFolders`、
-  IDE lock file、user hook、user MCP server は読まれません。
-- **opencode:** 出力された config はすべての tool（`*`）を拒否し、top level と
-  `intent-cli-reviewer` agent では read、glob、grep、list だけを許可します。`task` は
-  agent レベルの拒否が subagent に届かないため拒否します。`external_directory` は拒否
-  のため、レビュー実行前の pre-render path scan は escaping symlink を含む workspace を拒否します。
-  ただし実行時に OpenCode 自身の permission rule は、workspace 内に見える symlink を経由した読み取りを
-  制限しないため、リンク先の workspace 外 target は読めます。`OPENCODE_DISABLE_PROJECT_CONFIG=1` と
-  `--pure` は査読対象 workspace の `opencode.json`、`.opencode` agent、plugin、MCP entry が
-  これらの rule を上書きしたり code を実行したりするのを止めます。`XDG_CONFIG_HOME` と
-  `OPENCODE_CONFIG_DIR` は intent-cli が作った空 directory を指し、2 つの空 variable は
-  継承された inline config や permission を消します。
+以下は implementation notes の固定文をそのまま掲載します。
+
+```text
+copilot:
+`--available-tools view rg glob` leaves only those three tools, so the reviewer reads but cannot write or run commands, and path verification refuses reads outside the workspace.
+`--disable-builtin-mcps` disables the GitHub MCP server, and with the isolated home the operator's user MCP servers do not start (measured); another server's tools would not be exposed anyway.
+`--no-custom-instructions` stops the reviewed workspace from instructing the reviewer through `AGENTS.md` or `.github/copilot-instructions.md`, which matters most for the implementation kind, where the workspace is the clone of the PR head (canary-measured 2026-09-18 both ways; fixtures `copilot-instruction-canary-without-flag.jsonl` and `copilot-instruction-canary-with-flag.jsonl`).
+`COPILOT_ALLOW_ALL=` stops the variable from trusting the workspace, and `COPILOT_HOME` and `XDG_CONFIG_HOME` point at empty directories created under the out-dir, so the operator's `trustedFolders`, IDE lock files, user hooks and user MCP servers are not read.
+**Credentials.** The isolated home holds no token, so Copilot runs `gh auth token --hostname github.com` itself (measured 2026-09-17: with a fake `gh` first on PATH it exits 1, "No authentication information found"); a signed-in real `gh` must therefore be first on PATH, and intent-cli never launches it. The earlier note that authentication is unaffected by `COPILOT_HOME` (2026-09-16) is superseded: it held only because the real `gh` was on PATH.
+Unmeasured trust sources (implementation notes) are mitigated by the isolated home and by using no SDK or ACP host.
+opencode:
+The rendered config denies every tool (`*`) and allows only read, glob, grep and list, at the top level and for the `intent-cli-reviewer` agent.
+`task` is denied because agent-level denials do not reach subagents: a reviewer delegated a file change to `general`.
+`external_directory` is denied, so a path that is lexically outside the workspace is refused. Measured 2026-09-18: that check compares lexically, so a symlink inside the workspace whose target is outside is still read. intent-cli refuses such a workspace before rendering; the runtime does not confine itself.
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` and `--pure` stop a workspace's config, agents, plugins and MCP entries from overriding these rules or running code, and its `AGENTS.md` does not reach the model (measured with a canary).
+The isolated config directories and the two empty variables keep out the operator's global config and inherited overrides; each re-enabled writes when not isolated, and the full form held against all of them (measured).
+Data, state and cache stay the operator's (credentials); they were not probed as permission sources.
+```
 
 **trusted-folder 警告。** isolated clone はすべての runtime の trusted folder の外に置きます。
 copilot builder 行は run ごとに新しい空の `COPILOT_HOME` と `XDG_CONFIG_HOME` を使うため、
