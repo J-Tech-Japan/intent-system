@@ -93,6 +93,37 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal("codex, claude, cursor, copilot, or opencode", CrossRuntimeReviewRuntimes.Describe());
     }
 
+    [Fact]
+    public void GuideSurfaces_RenderModelOnEveryCrossRuntimeRequestAndRecord_G842()
+    {
+        Assert.Equal(
+            "From the host root, render the request: `intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <head-sha> --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --clone <read-only-clone> --out-dir <dir> [--model <model>] [--effort <level>] [--opencode-provider-config <file>]`. The seat runs the rendered `invocation.txt` itself in a read-only clone; intent-cli never runs it.",
+            GuideReviewCommand.CrossRuntimeReviewRules[1]);
+        Assert.Equal(
+            "Record both verdicts on the same head — the same-runtime review (a request rendered for the declared conductor runtime and run by the seat, since claude and cursor verdicts must be the pinned invocation envelope) and the cross-runtime review — with `intent-cli review cross-runtime record ... --kind implementation --runtime <runtime> --runtime-version <version> --verdict-file <file> [--model <model>] [--effort <level>] --write`, then post each rendered comment with `gh pr review <n> --comment --body-file <file>`.",
+            GuideReviewCommand.CrossRuntimeReviewRules[2]);
+
+        var soloCommands = GuideSoloConductorCommand.BuildGuide().Loop
+            .SelectMany(step => step.Commands)
+            .Where(command => command.Command.Contains("review cross-runtime request", StringComparison.Ordinal)
+                || command.Command.Contains("review cross-runtime record", StringComparison.Ordinal))
+            .Select(command => command.Command)
+            .ToArray();
+        Assert.Equal(4, soloCommands.Length);
+        Assert.All(soloCommands, command => Assert.Contains("[--model <model>]", command, StringComparison.Ordinal));
+
+        var guideWords = string.Join("\n", GuideReviewCommand.CrossRuntimeReviewRules)
+            + "\n"
+            + string.Join("\n", GuideSoloConductorCommand.BuildGuide().Loop.Select(step => step.Instruction));
+        Assert.Contains("`--model` is required for `copilot` and `opencode`", guideWords, StringComparison.Ordinal);
+        Assert.Contains("optional for `codex`, `claude`, and `cursor`", guideWords, StringComparison.Ordinal);
+        Assert.Contains("`--effort` is supported by `copilot` and `opencode`", guideWords, StringComparison.Ordinal);
+        Assert.Contains("request-only `--opencode-provider-config` is supported by `opencode`", guideWords, StringComparison.Ordinal);
+
+        Assert.Contains("[--model <name>] [--effort <level>] [--opencode-provider-config <file>]", ReviewCrossRuntimeCommand.RequestUsage, StringComparison.Ordinal);
+        Assert.Contains("[--model <name>] [--effort <level>]", ReviewCrossRuntimeCommand.RecordUsage, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("copilot")]
     [InlineData("opencode")]
@@ -2325,6 +2356,14 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
             Assert.Contains("copilot", orchestration, StringComparison.Ordinal);
             Assert.Contains("opencode", orchestration, StringComparison.Ordinal);
             Assert.Contains(
+                "intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --clone <read-only-clone> --out-dir <dir> [--model <name>] [--effort <level>] [--opencode-provider-config <file>]",
+                orchestration,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--comment-out <file>] --write",
+                orchestration,
+                StringComparison.Ordinal);
+            Assert.Contains(
                 "intent-cli review cross-runtime request --kind design --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --out-dir <dir> [--clone <read-only-clone>] [--model <name>] [--effort <level>] [--opencode-provider-config <file>]",
                 orchestration,
                 StringComparison.Ordinal);
@@ -2332,6 +2371,9 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
                 "intent-cli review cross-runtime record --kind design --execution-unit <unit> --packet-digest <sha256> --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--write]",
                 orchestration,
                 StringComparison.Ordinal);
+            Assert.Contains("--model", orchestration, StringComparison.Ordinal);
+            Assert.Contains("--effort", orchestration, StringComparison.Ordinal);
+            Assert.Contains("--opencode-provider-config", orchestration, StringComparison.Ordinal);
 
             var ledger = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "1.0-compatibility-ledger.md"));
             foreach (var row in new[] { "| `review cross-runtime request` |", "| `review cross-runtime record` |", "| `review cross-runtime status` |", "| cross-runtime review declaration |" })

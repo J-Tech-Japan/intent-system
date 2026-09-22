@@ -239,7 +239,7 @@ internal static class GuideHelpCommand
         new GuideSubcommandEntry
         {
             Name = "review",
-            Purpose = "Review-side prompts. Subcommand: run (G316 packet/intent-aware review). For declared teams (G834/G835) it names `intent-cli review cross-runtime request`, `intent-cli review cross-runtime record`, and `intent-cli review cross-runtime status` for implementation review and `--kind design` for packet-digest design review before publish.",
+            Purpose = "Review-side prompts. Subcommand: run (G316 packet/intent-aware review). For declared teams (G834/G835) it names `intent-cli review cross-runtime request`, `intent-cli review cross-runtime record`, and `intent-cli review cross-runtime status` for implementation review and `--kind design` for packet-digest design review before publish. `--model` is required for `copilot` and `opencode` and optional for `codex`, `claude`, and `cursor`; `--effort` is supported by `copilot` and `opencode`, and request-only `--opencode-provider-config` is supported by `opencode`.",
             Example = "intent-cli guide review --pr <n> --repo <owner/repo> --domain <d> --format json"
         },
         // G696: per-kind command-form guidance is an installed, read-only

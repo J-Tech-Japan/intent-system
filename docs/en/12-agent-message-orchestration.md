@@ -160,8 +160,8 @@ with `worker complete ... --pr <n>`, pass `--execution-unit <unit>`, or acquire 
 claim with `--team`).
 
 ```text
-intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --clone <read-only-clone> --out-dir <dir>
-intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--comment-out <file>] --write
+intent-cli review cross-runtime request --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --runtime codex|claude|cursor|copilot|opencode --clone <read-only-clone> --out-dir <dir> [--model <name>] [--effort <level>] [--opencode-provider-config <file>]
+intent-cli review cross-runtime record --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <text> --verdict-file <file> [--model <name>] [--effort <level>] [--comment-out <file>] --write
 intent-cli review cross-runtime status --repo <owner/repo> --pr <n> --head-sha <sha> --execution-unit <unit>
 intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition approved --head-sha <sha> --write
 ```
