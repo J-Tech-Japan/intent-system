@@ -11,7 +11,7 @@ namespace IntentSystem.Cli.Tests;
 
 /// <summary>
 /// G842: byte identity for the legacy codex/claude/cursor request, record, and
-/// status surfaces against merge base cbe54759. The capture host is entirely
+/// status surfaces against merge base a24cf8ab. The capture host is entirely
 /// synthetic; only the temporary host root is normalized.
 /// </summary>
 [Collection(AutomationPrTransitionSharedStateCollection.Name)]
@@ -40,7 +40,7 @@ public sealed class G842BackCompatGoldenTests
         }
     }
 
-    [Fact(Skip = "Run only in detached merge-base cbe54759; never capture on head.")]
+    [Fact(Skip = "Run only in detached merge-base a24cf8ab; never capture on head.")]
     public void CaptureMergeBaseGoldens()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("G842_CAPTURE"), "1", StringComparison.Ordinal))

@@ -30,7 +30,7 @@ public sealed class G842Ac13GoldenTests
         Assert.Equal(File.ReadAllText(Path.Combine(FixtureRoot, "pr-transition-dry-run.json")), actual);
     }
 
-    [Fact(Skip = "Run only in detached merge-base cbe54759; never capture on head.")]
+    [Fact(Skip = "Run only in detached merge-base a24cf8ab; never capture on head.")]
     public void CaptureMergeBaseAc13Goldens()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("G842_CAPTURE"), "1", StringComparison.Ordinal))

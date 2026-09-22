@@ -153,10 +153,12 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal(0, Route(["review", "cross-runtime", .. args, "--format", "json"]).ExitCode);
     }
 
-    [Fact]
-    public void Status_AcceptsDeclaredTeam_ForCopilotAndOpencodeRecords()
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("opencode")]
+    public void Status_AcceptsDeclaredTeam_ForCopilotAndOpencodeRecords(string runtime)
     {
-        RecordVerdict("copilot", "approve", H1);
+        RecordVerdict(runtime, "approve", H1);
         Assert.Equal(0, Route(["review", "cross-runtime", .. StatusArgs(H1), "--format", "json"]).ExitCode);
     }
 
@@ -388,10 +390,33 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     }
 
     [Theory]
+    [InlineData("implementation")]
+    [InlineData("design")]
+    public void Record_RefusesCopilotAutoModel_ForBothKinds(string kind)
+    {
+        var digest = CurrentDigest();
+        var file = WriteVerdictFile("copilot", kind == CrossRuntimeReviewRecord.KindDesign
+            ? CopilotDesignEnvelope("approve", digest)
+            : CopilotImplementationEnvelope("approve", H1));
+        var args = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRecordArgs("copilot", file, digest, write: false, model: "AUTO")
+            : RecordArgs("copilot", file, H1, write: false, model: "AUTO");
+        var (exit, output) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.ModelInvalid, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(
+            "copilot refuses model 'auto' because the model that reviews would be unknown until the run ends.",
+            refusal.RootElement.GetProperty("detail").GetString());
+    }
+
+    [Theory]
     [InlineData("gpt-5.6-sol")]
     [InlineData("github-copilot/")]
     [InlineData("/gpt-5.6-sol")]
     [InlineData("_bad/gpt-5.6-sol")]
+    [InlineData("provider id/gpt-5.6-sol")]
+    [InlineData("provider\nid/gpt-5.6-sol")]
     public void Request_RefusesInvalidOpencodeModels(string model)
     {
         var outDir = Path.Combine(root, "bad-opencode-model");
@@ -400,17 +425,83 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         using var refusal = JsonDocument.Parse(output);
         Assert.Equal(CrossRuntimeReviewCauses.ModelInvalid, refusal.RootElement.GetProperty("cause").GetString());
         Assert.Equal(
-            model.StartsWith('_') ? "opencode provider id must match ^[A-Za-z0-9][A-Za-z0-9._-]*$." : "opencode model must be a provider id, then '/', then a non-empty remainder.",
+            model.Contains('\n', StringComparison.Ordinal)
+                ? "model must not contain Unicode control characters."
+                : model.StartsWith('_') || model.Contains(' ')
+                    ? "opencode provider id must match ^[A-Za-z0-9][A-Za-z0-9._-]*$."
+                    : "opencode model must be a provider id, then '/', then a non-empty remainder.",
+            refusal.RootElement.GetProperty("detail").GetString());
+    }
+
+    [Theory]
+    [InlineData("implementation", "gpt-5.6-sol")]
+    [InlineData("implementation", "github-copilot/")]
+    [InlineData("implementation", "/gpt-5.6-sol")]
+    [InlineData("implementation", "_bad/gpt-5.6-sol")]
+    [InlineData("implementation", "provider id/gpt-5.6-sol")]
+    [InlineData("implementation", "provider\nid/gpt-5.6-sol")]
+    [InlineData("design", "gpt-5.6-sol")]
+    [InlineData("design", "github-copilot/")]
+    [InlineData("design", "/gpt-5.6-sol")]
+    [InlineData("design", "_bad/gpt-5.6-sol")]
+    [InlineData("design", "provider id/gpt-5.6-sol")]
+    [InlineData("design", "provider\nid/gpt-5.6-sol")]
+    public void Record_RefusesInvalidOpencodeModels_ForBothKinds(string kind, string model)
+    {
+        var digest = CurrentDigest();
+        var file = WriteVerdictFile("opencode", kind == CrossRuntimeReviewRecord.KindDesign
+            ? OpencodeDesignEnvelope("approve", digest)
+            : OpencodeImplementationEnvelope("approve", H1));
+        var args = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRecordArgs("opencode", file, digest, write: false, model: model)
+            : RecordArgs("opencode", file, H1, write: false, model: model);
+        var (exit, output) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.ModelInvalid, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(
+            model.Contains('\n', StringComparison.Ordinal)
+                ? "model must not contain Unicode control characters."
+                : model.StartsWith('_') || model.Contains(' ')
+                    ? "opencode provider id must match ^[A-Za-z0-9][A-Za-z0-9._-]*$."
+                    : "opencode model must be a provider id, then '/', then a non-empty remainder.",
             refusal.RootElement.GetProperty("detail").GetString());
     }
 
     [Theory]
     [InlineData("github-copilot/gpt-5.6-sol")]
+    [InlineData("opencode/big-pickle")]
     [InlineData("omlx070/Qwen3.8-Flash-Next-oQ4e-mtp")]
     public void Request_AcceptsValidOpencodeModelsVerbatim(string model)
     {
         var outDir = Path.Combine(root, "valid-opencode-" + model.Replace('/', '-'));
-        Assert.Equal(0, Route(["review", "cross-runtime", .. RequestArgs("opencode", Path.Combine(root, "clone"), outDir, model), "--format", "json"]).ExitCode);
+        var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs("opencode", Path.Combine(root, "clone"), outDir, model), "--format", "json"]);
+        Assert.Equal(0, exit);
+        using var request = JsonDocument.Parse(output);
+        Assert.Equal(model, request.RootElement.GetProperty("model").GetString());
+        Assert.Contains(CrossRuntimeReviewPaths.ShellQuote(model), File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation)), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("implementation", "github-copilot/gpt-5.6-sol")]
+    [InlineData("implementation", "opencode/big-pickle")]
+    [InlineData("implementation", "omlx070/Qwen3.8-Flash-Next-oQ4e-mtp")]
+    [InlineData("design", "github-copilot/gpt-5.6-sol")]
+    [InlineData("design", "opencode/big-pickle")]
+    [InlineData("design", "omlx070/Qwen3.8-Flash-Next-oQ4e-mtp")]
+    public void Record_AcceptsAndStoresOpencodeModelsVerbatim(string kind, string model)
+    {
+        var digest = CurrentDigest();
+        var file = WriteVerdictFile("opencode", kind == CrossRuntimeReviewRecord.KindDesign
+            ? OpencodeDesignEnvelope("approve", digest)
+            : OpencodeImplementationEnvelope("approve", H1));
+        var args = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRecordArgs("opencode", file, digest, write: false, model: model)
+            : RecordArgs("opencode", file, H1, write: false, model: model);
+        var (exit, output) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+        Assert.True(exit == 0, output);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal(model, result.RootElement.GetProperty("record").GetProperty("model").GetString());
     }
 
     [Theory]
@@ -451,6 +542,81 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     }
 
     [Theory]
+    [InlineData("copilot", "-fast")]
+    [InlineData("opencode", "\n")]
+    public void Request_AndRecord_RefuseEffortWithInvalidModelCharacters(string runtime, string effort)
+    {
+        var model = runtime == "copilot" ? CopilotModel : OpencodeModel;
+        var outDir = Path.Combine(root, "invalid-effort-characters-" + runtime);
+        var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs(runtime, Path.Combine(root, "clone"), outDir, model, effort), "--format", "json"]);
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("must not", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+
+        var verdict = WriteVerdictFile(runtime, runtime == "copilot"
+            ? CopilotImplementationEnvelope("approve", H1)
+            : OpencodeImplementationEnvelope("approve", H1));
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. RecordArgs(runtime, verdict, H1, write: false, model: model, effort: effort), "--format", "json"]);
+        Assert.Equal(1, recordExit);
+        using var recordRefusal = JsonDocument.Parse(recordOutput);
+        Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, recordRefusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("must not", recordRefusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("copilot", "-fast")]
+    [InlineData("opencode", "\n")]
+    public void DesignRequest_AndRecord_RefuseEffortWithInvalidModelCharacters(string runtime, string effort)
+    {
+        var model = runtime == "copilot" ? CopilotModel : OpencodeModel;
+        var outDir = Path.Combine(root, "invalid-design-effort-characters-" + runtime);
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs(runtime, outDir, model, effort), "--format", "json"]);
+        Assert.Equal(1, requestExit);
+        using (var requestRefusal = JsonDocument.Parse(requestOutput))
+        {
+            Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, requestRefusal.RootElement.GetProperty("cause").GetString());
+            Assert.Contains("must not", requestRefusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile(runtime, runtime == "copilot"
+            ? CopilotDesignEnvelope("approve", digest)
+            : OpencodeDesignEnvelope("approve", digest));
+        var args = DesignRecordArgs(runtime, verdict, digest, write: false, model: model, effort: effort);
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+        Assert.Equal(1, recordExit);
+        using var recordRefusal = JsonDocument.Parse(recordOutput);
+        Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, recordRefusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("must not", recordRefusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("implementation")]
+    [InlineData("design")]
+    public void RequestAndRecord_RefuseInvalidCopilotEffort_ForBothKinds(string kind)
+    {
+        var digest = CurrentDigest();
+        var model = CopilotModel;
+        var requestArgs = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRequestArgs("copilot", Path.Combine(root, "bad-design-effort"), model, "turbo")
+            : RequestArgs("copilot", Path.Combine(root, "clone"), Path.Combine(root, "bad-effort"), model, "turbo");
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. requestArgs, "--format", "json"]);
+        Assert.Equal(1, requestExit);
+        Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, JsonDocument.Parse(requestOutput).RootElement.GetProperty("cause").GetString());
+
+        var file = WriteVerdictFile("copilot", kind == CrossRuntimeReviewRecord.KindDesign
+            ? CopilotDesignEnvelope("approve", digest)
+            : CopilotImplementationEnvelope("approve", H1));
+        var recordArgs = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRecordArgs("copilot", file, digest, write: false, model: model, effort: "turbo")
+            : RecordArgs("copilot", file, H1, write: false, model: model, effort: "turbo");
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. recordArgs, "--format", "json"]);
+        Assert.Equal(1, recordExit);
+        Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, JsonDocument.Parse(recordOutput).RootElement.GetProperty("cause").GetString());
+    }
+
+    [Theory]
     [InlineData("copilot")]
     [InlineData("opencode")]
     public void Request_AndRecord_RefuseExplicitlyEmptyEffort(string runtime)
@@ -476,6 +642,33 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Contains("empty", recordRefusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("opencode")]
+    public void DesignRequest_AndRecord_RefuseExplicitlyEmptyEffort(string runtime)
+    {
+        var model = runtime == "copilot" ? CopilotModel : OpencodeModel;
+        var outDir = Path.Combine(root, "empty-design-effort-" + runtime);
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs(runtime, outDir, model, string.Empty), "--format", "json"]);
+        Assert.Equal(1, requestExit);
+        using (var requestRefusal = JsonDocument.Parse(requestOutput))
+        {
+            Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, requestRefusal.RootElement.GetProperty("cause").GetString());
+            Assert.Contains("empty", requestRefusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+
+        var digest = CurrentDigest();
+        var file = WriteVerdictFile(runtime, runtime == "copilot"
+            ? CopilotDesignEnvelope("approve", digest)
+            : OpencodeDesignEnvelope("approve", digest));
+        var args = DesignRecordArgs(runtime, file, digest, write: false, model: model, effort: string.Empty);
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+        Assert.Equal(1, recordExit);
+        using var recordRefusal = JsonDocument.Parse(recordOutput);
+        Assert.Equal(CrossRuntimeReviewCauses.EffortInvalid, recordRefusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("empty", recordRefusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Request_OpencodeProviderConfig_IsAcceptedOnlyForOpencode()
     {
@@ -494,16 +687,44 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         }
 
         var opencodeOut = Path.Combine(root, "provider-opencode");
-        Assert.Equal(0, Route([
+        var (opencodeExit, opencodeOutput) = Route([
             "review", "cross-runtime", .. RequestArgs("opencode", Path.Combine(root, "clone"), opencodeOut, OpencodeModel),
             "--opencode-provider-config", provider, "--format", "json",
-        ]).ExitCode);
+        ]);
+        Assert.Equal(0, opencodeExit);
+        using var requestResult = JsonDocument.Parse(opencodeOutput);
+        Assert.Equal(provider, requestResult.RootElement.GetProperty("opencode_provider_config").GetString());
+    }
+
+    [Theory]
+    [InlineData("codex")]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    [InlineData("copilot")]
+    public void Request_OpencodeProviderConfig_IsRefusedForEveryOtherRuntime(string runtime)
+    {
+        var provider = Path.Combine(root, "provider-other.json");
+        File.Copy(Fixture("opencode-provider-omlx070.input.json"), provider);
+        var model = runtime == "copilot" ? CopilotModel : null;
+        var outDir = Path.Combine(root, "provider-other-" + runtime);
+        var args = RequestArgs(runtime, Path.Combine(root, "clone-" + runtime), outDir, model);
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. args,
+            "--opencode-provider-config", provider, "--format", "json",
+        ]);
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.ArgumentInvalid, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal("--opencode-provider-config is accepted only for runtime opencode.", refusal.RootElement.GetProperty("detail").GetString());
     }
 
     [Theory]
     [InlineData("not-json", "is not valid JSON")]
     [InlineData("{\"extra\":1,\"provider\":{}}", "must have exactly one top-level key 'provider'")]
+    [InlineData("{\"permission\":{}}", "must have exactly one top-level key 'provider'")]
+    [InlineData("{\"$schema\":\"https://opencode.ai/config.json\"}", "must have exactly one top-level key 'provider'")]
     [InlineData("{\"provider\":\"x\"}", "key 'provider' must be a JSON object")]
+    [InlineData("[]", "root must be a JSON object")]
     public void Request_RefusesInvalidOpencodeProviderConfig(string body, string expectedFragment)
     {
         var path = Path.Combine(root, "bad-provider.json");
@@ -519,12 +740,40 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Contains(expectedFragment, refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Request_RefusesMissingOpencodeProviderConfig()
+    {
+        var path = Path.Combine(root, "missing-provider.json");
+        var outDir = Path.Combine(root, "missing-provider-out");
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. RequestArgs("opencode", Path.Combine(root, "clone"), outDir, OpencodeModel),
+            "--opencode-provider-config", path, "--format", "json",
+        ]);
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.OpencodeProviderConfigInvalid, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("could not be read", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("copilot", "it's", "medium")]
+    [InlineData("copilot", "$HOME", "medium")]
+    [InlineData("copilot", "a;rm -rf x", "medium")]
+    [InlineData("copilot", "model with space", "medium")]
+    [InlineData("copilot", "`whoami`", "medium")]
     [InlineData("opencode", "it's", "fast")]
+    [InlineData("opencode", "$HOME", "fast")]
+    [InlineData("opencode", "a;rm -rf x", "fast")]
+    [InlineData("opencode", "model with space", "fast")]
+    [InlineData("opencode", "`whoami`", "fast")]
+    [InlineData("opencode", "omlx070/model-tail", "$fast")]
+    [InlineData("opencode", "omlx070/model-tail", "a;fast")]
+    [InlineData("opencode", "omlx070/model-tail", "fast value")]
+    [InlineData("opencode", "omlx070/model-tail", "`fast`")]
+    [InlineData("opencode", "omlx070/model-tail", "it's")]
     public void Request_ModelAndEffort_ShellMetacharacters_AreQuoted(string runtime, string value, string effortKind)
     {
-        var model = runtime == "copilot" ? value : $"omlx070/{value}-tail";
+        var model = runtime == "copilot" || value.Contains('/', StringComparison.Ordinal) ? value : $"omlx070/{value}-tail";
         var effort = effortKind;
         var outDir = Path.Combine(root, "meta-" + runtime);
         Assert.Equal(0, Route(["review", "cross-runtime", .. RequestArgs(runtime, Path.Combine(root, "clone"), outDir, model, effort), "--format", "json"]).ExitCode);
@@ -539,18 +788,25 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     // ── invocations ────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("copilot", "implementation", null)]
-    [InlineData("copilot", "implementation", "medium")]
-    [InlineData("copilot", "design", null)]
-    [InlineData("copilot", "design", "high")]
-    [InlineData("opencode", "implementation", null)]
-    [InlineData("opencode", "implementation", "fast")]
-    [InlineData("opencode", "design", null)]
-    [InlineData("opencode", "design", "fast")]
-    public void Request_RenderInvocation_MatchesPinnedText(string runtime, string kind, string? effort)
+    [InlineData("copilot", "implementation", null, false)]
+    [InlineData("copilot", "implementation", "medium", false)]
+    [InlineData("copilot", "design", null, false)]
+    [InlineData("copilot", "design", "high", false)]
+    [InlineData("copilot", "design", null, true)]
+    [InlineData("copilot", "design", "high", true)]
+    [InlineData("opencode", "implementation", null, false)]
+    [InlineData("opencode", "implementation", "fast", false)]
+    [InlineData("opencode", "design", null, false)]
+    [InlineData("opencode", "design", "fast", false)]
+    [InlineData("opencode", "design", null, true)]
+    [InlineData("opencode", "design", "fast", true)]
+    public void Request_RenderInvocation_MatchesPinnedText(string runtime, string kind, string? effort, bool designWithoutClone)
     {
         var outDir = Path.Combine(root, "inv-" + runtime + "-" + kind + "-" + (effort ?? "none"));
-        var designWithoutClone = kind == "design" && effort is null;
+        if (kind != "design")
+        {
+            designWithoutClone = false;
+        }
         var workspace = designWithoutClone && (runtime is "copilot" or "opencode")
             ? Path.Combine(outDir, CrossRuntimeReviewFiles.Workspace)
             : designWithoutClone ? outDir : Path.Combine(root, "clone-" + kind);
@@ -563,7 +819,12 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         var args = kind == "design"
             ? DesignRequestArgs(runtime, outDir, model, effort, designWithoutClone ? null : workspace)
             : RequestArgs(runtime, workspace, outDir, model, effort);
-        Assert.Equal(0, Route(["review", "cross-runtime", .. args, "--format", "json"]).ExitCode);
+        var (exit, output) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+        Assert.Equal(0, exit);
+        using var requestResult = JsonDocument.Parse(output);
+        Assert.Equal(
+            CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime],
+            requestResult.RootElement.GetProperty("read_only_enforcement").GetString());
 
         var expected = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
             + G842PinnedContractTexts.ExpectedReviewerInvocation(runtime, workspace, outDir, model, effort) + "\n";
@@ -614,6 +875,18 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
             Assert.Equal("intent-cli-reviewer", tokens[tokens.IndexOf("--agent") + 1]);
             Assert.Equal("json", tokens[tokens.IndexOf("--format") + 1]);
         }
+    }
+
+    [Theory]
+    [InlineData("copilot", "high")]
+    [InlineData("opencode", "fast")]
+    public void DesignRequest_MarkdownNamesEffort(string runtime, string effort)
+    {
+        var model = runtime == "copilot" ? CopilotModel : OpencodeModel;
+        var outDir = Path.Combine(root, "design-markdown-effort-" + runtime);
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs(runtime, outDir, model, effort), "--format", "markdown"]);
+        Assert.Equal(0, exit);
+        Assert.Contains($"- effort: {effort}", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1641,16 +1914,30 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.DoesNotContain("### github-body.md", prompt, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Request_RefusesNonUtf8PacketBytes()
+    [Theory]
+    [InlineData("copilot", "implementation")]
+    [InlineData("opencode", "implementation")]
+    [InlineData("copilot", "design")]
+    [InlineData("opencode", "design")]
+    public void Request_RefusesNonUtf8PacketBytes(string runtime, string kind)
     {
         var bodyPath = Path.Combine(root, ".intent-cli", "issues", Unit, "github-body.md");
         File.WriteAllBytes(bodyPath, [0xFF, 0xFE, 0x00]);
-        var outDir = Path.Combine(root, "bad-packet");
-        var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs("copilot", Path.Combine(root, "clone"), outDir, CopilotModel), "--format", "json"]);
-        Assert.Equal(1, exit);
-        Assert.Equal(CrossRuntimeReviewCauses.PacketInvalid, JsonDocument.Parse(output).RootElement.GetProperty("cause").GetString());
-        WritePacket(Unit, Domain);
+        try
+        {
+            var outDir = Path.Combine(root, "bad-packet-" + runtime + "-" + kind);
+            var model = runtime == "copilot" ? CopilotModel : OpencodeModel;
+            var args = kind == CrossRuntimeReviewRecord.KindDesign
+                ? DesignRequestArgs(runtime, outDir, model)
+                : RequestArgs(runtime, Path.Combine(root, "clone"), outDir, model);
+            var (exit, output) = Route(["review", "cross-runtime", .. args, "--format", "json"]);
+            Assert.Equal(1, exit);
+            Assert.Equal(CrossRuntimeReviewCauses.PacketInvalid, JsonDocument.Parse(output).RootElement.GetProperty("cause").GetString());
+        }
+        finally
+        {
+            WritePacket(Unit, Domain);
+        }
     }
 
     [Fact]
@@ -1745,6 +2032,20 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         using var refusal = JsonDocument.Parse(output);
         Assert.Equal(CrossRuntimeReviewCauses.ExitStatusNonzero, refusal.RootElement.GetProperty("cause").GetString());
         Assert.Contains("exactly 0\\n is required", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Record_OpencodeContextOverflowExitStatus_RefusesBeforeEnvelope()
+    {
+        var file = WriteVerdictFile("opencode", File.ReadAllText(Fixture("opencode-implementation-local-context-overflow.jsonl")));
+        File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(file)!, CrossRuntimeReviewFiles.OpencodeExit), "1\n"u8.ToArray());
+
+        var (exit, output) = Route(["review", "cross-runtime", .. RecordArgs("opencode", file, H1, write: false), "--format", "json"]);
+
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal(CrossRuntimeReviewCauses.ExitStatusNonzero, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("\\x31\\x0a", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -1867,6 +2168,59 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Contains("- effort: high", body, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("implementation")]
+    [InlineData("design")]
+    public void OpencodeRecord_Write_StoresModelEffort_AndCommentBody(string kind)
+    {
+        var digest = CurrentDigest();
+        var file = WriteVerdictFile("opencode", kind == CrossRuntimeReviewRecord.KindDesign
+            ? OpencodeDesignEnvelope("approve", digest)
+            : OpencodeImplementationEnvelope("approve", H1));
+        var commentOut = Path.Combine(root, "comments", "opencode-" + kind + ".md");
+        var args = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRecordArgs("opencode", file, digest, write: true, effort: "fast")
+            : RecordArgs("opencode", file, H1, write: true, effort: "fast");
+        var (exit, output) = Route(["review", "cross-runtime", .. args, "--comment-out", commentOut, "--format", "json"]);
+        Assert.Equal(0, exit);
+        using var result = JsonDocument.Parse(output);
+        var record = result.RootElement.GetProperty("record");
+        Assert.Equal(OpencodeModel, record.GetProperty("model").GetString());
+        Assert.Equal("fast", record.GetProperty("effort").GetString());
+        var body = File.ReadAllText(commentOut);
+        Assert.Contains("- model: github-copilot/gpt-5.6-sol", body, StringComparison.Ordinal);
+        Assert.Contains("- effort: fast", body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("implementation")]
+    [InlineData("design")]
+    public void RequestAndRecord_WithoutEffort_OmitEffortProperty(string kind)
+    {
+        var digest = CurrentDigest();
+        var outDir = Path.Combine(root, "without-effort-" + kind);
+        var requestArgs = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRequestArgs("opencode", outDir, OpencodeModel)
+            : RequestArgs("opencode", Path.Combine(root, "clone"), outDir, OpencodeModel);
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. requestArgs, "--format", "json"]);
+        Assert.True(requestExit == 0, requestOutput);
+        using (var request = JsonDocument.Parse(requestOutput))
+        {
+            Assert.False(request.RootElement.TryGetProperty("effort", out _));
+        }
+
+        var file = WriteVerdictFile("opencode", kind == CrossRuntimeReviewRecord.KindDesign
+            ? OpencodeDesignEnvelope("approve", digest)
+            : OpencodeImplementationEnvelope("approve", H1));
+        var recordArgs = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRecordArgs("opencode", file, digest, write: false)
+            : RecordArgs("opencode", file, H1, write: false);
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. recordArgs, "--format", "json"]);
+        Assert.True(recordExit == 0, recordOutput);
+        using var record = JsonDocument.Parse(recordOutput);
+        Assert.False(record.RootElement.GetProperty("record").TryGetProperty("effort", out _));
+    }
+
     // ── no-launch seam ─────────────────────────────────────────────────
 
     [Fact]
@@ -1936,6 +2290,13 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
             {
                 var line = Assert.Single(ledger.Split('\n'), candidate => candidate.StartsWith(row, StringComparison.Ordinal));
                 Assert.Contains("G842", line, StringComparison.Ordinal);
+            }
+
+            if (language == "ja")
+            {
+                var g613 = new Regex(@"[A-Za-z]+(?:し|します|した|して|され|せず|しない)");
+                Assert.DoesNotMatch(g613, orchestration);
+                Assert.DoesNotMatch(g613, ledger);
             }
         }
     }
@@ -2045,7 +2406,7 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         return args.ToArray();
     }
 
-    private string[] DesignRecordArgs(string runtime, string verdictFile, string digest, bool write, bool includeModel = true, string? effort = null)
+    private string[] DesignRecordArgs(string runtime, string verdictFile, string digest, bool write, bool includeModel = true, string? effort = null, string? model = null)
     {
         var args = new List<string>
         {
@@ -2054,7 +2415,7 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         };
         if (includeModel)
         {
-            args.AddRange(["--model", runtime == "copilot" ? CopilotModel : OpencodeModel]);
+            args.AddRange(["--model", model ?? (runtime == "copilot" ? CopilotModel : OpencodeModel)]);
         }
 
         if (effort is not null)

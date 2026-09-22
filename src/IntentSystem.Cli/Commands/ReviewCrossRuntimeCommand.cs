@@ -561,6 +561,11 @@ internal static class ReviewCrossRuntimeCommand
                 writer.WriteLine($"- model: {result.Model}");
             }
 
+            if (result.Effort is not null)
+            {
+                writer.WriteLine($"- effort: {result.Effort}");
+            }
+
             foreach (var file in result.Files)
             {
                 writer.WriteLine($"- rendered: {file}");
