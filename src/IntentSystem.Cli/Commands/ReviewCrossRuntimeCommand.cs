@@ -201,12 +201,25 @@ internal static class ReviewCrossRuntimeCommand
             return 1;
         }
 
+        JsonElement? opencodeProvider = null;
+        JsonElement validatedProvider = default;
         if (opencodeProviderConfig is not null
-            && !CrossRuntimeReviewOpencodeConfig.TryValidateProviderConfigFile(opencodeProviderConfig, out _, out var providerError))
+            && !CrossRuntimeReviewOpencodeConfig.TryValidateProviderConfigFile(
+                opencodeProviderConfig,
+                out validatedProvider,
+                out var providerError,
+                out var modeRefusal))
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.OpencodeProviderConfigInvalid,
                 providerError,
-                "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
+                modeRefusal
+                    ? CrossRuntimeReviewOpencodeConfig.ModeRefusalFix(opencodeProviderConfig)
+                    : "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
+        }
+
+        if (opencodeProviderConfig is not null)
+        {
+            opencodeProvider = validatedProvider;
         }
 
         byte[] bodyBytes = [];
@@ -276,7 +289,7 @@ internal static class ReviewCrossRuntimeCommand
                 prompt,
                 CrossRuntimeReviewVerdict.SchemaJson,
                 invocation,
-                opencodeProviderConfig);
+                opencodeProvider);
         }
         catch (InvalidOperationException exception)
         {
@@ -440,12 +453,25 @@ internal static class ReviewCrossRuntimeCommand
             return 1;
         }
 
+        JsonElement? opencodeProvider = null;
+        JsonElement validatedProvider = default;
         if (opencodeProviderConfig is not null
-            && !CrossRuntimeReviewOpencodeConfig.TryValidateProviderConfigFile(opencodeProviderConfig, out _, out var providerError))
+            && !CrossRuntimeReviewOpencodeConfig.TryValidateProviderConfigFile(
+                opencodeProviderConfig,
+                out validatedProvider,
+                out var providerError,
+                out var modeRefusal))
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.OpencodeProviderConfigInvalid,
                 providerError,
-                "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
+                modeRefusal
+                    ? CrossRuntimeReviewOpencodeConfig.ModeRefusalFix(opencodeProviderConfig)
+                    : "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
+        }
+
+        if (opencodeProviderConfig is not null)
+        {
+            opencodeProvider = validatedProvider;
         }
 
         string prompt;
@@ -474,7 +500,7 @@ internal static class ReviewCrossRuntimeCommand
                 prompt,
                 CrossRuntimeReviewVerdict.DesignSchemaJson,
                 invocation,
-                opencodeProviderConfig);
+                opencodeProvider);
         }
         catch (InvalidOperationException exception)
         {

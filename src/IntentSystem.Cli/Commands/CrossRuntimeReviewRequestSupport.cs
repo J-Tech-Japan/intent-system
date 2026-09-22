@@ -182,7 +182,7 @@ internal static class CrossRuntimeReviewRequestSupport
         string prompt,
         string schema,
         string invocation,
-        string? opencodeProviderConfigPath)
+        JsonElement? opencodeProvider)
     {
         var refused = runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode
             ? CrossRuntimeReviewHomeAccessGuard.TryRefuseRequestPaths(
@@ -191,7 +191,7 @@ internal static class CrossRuntimeReviewRequestSupport
                 kind,
                 hasClone,
                 workspace,
-                opencodeProviderConfigPath,
+                null,
                 out var plannedDetail)
             : CrossRuntimeReviewHomeAccessGuard.TryRefusePlannedPaths(outDir, runtime, out plannedDetail);
         if (refused)
@@ -216,9 +216,12 @@ internal static class CrossRuntimeReviewRequestSupport
 
         if (runtime == CrossRuntimeReviewRuntimes.Opencode)
         {
+            var reviewerConfig = opencodeProvider is JsonElement provider
+                ? CrossRuntimeReviewOpencodeConfig.ReviewerConfigBytes(provider)
+                : CrossRuntimeReviewOpencodeConfig.ReviewerConfigBytes();
             WriteBytesFile(
                 Path.Combine(outDir, CrossRuntimeReviewFiles.OpencodeReviewerConfig),
-                CrossRuntimeReviewOpencodeConfig.ReviewerConfigBytes(opencodeProviderConfigPath));
+                reviewerConfig);
         }
 
         if (CrossRuntimeReviewFiles.RenderedFor(runtime, kind, hasClone).Contains(CrossRuntimeReviewFiles.Workspace, StringComparer.Ordinal))

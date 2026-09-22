@@ -747,6 +747,7 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     {
         var provider = Path.Combine(root, "provider.json");
         File.Copy(Fixture("opencode-provider-omlx070.input.json"), provider);
+        SetPrivateProviderSource(provider);
         var copilotOut = Path.Combine(root, "provider-copilot");
         var (copilotExit, copilotOutput) = Route([
             "review", "cross-runtime", .. RequestArgs("copilot", Path.Combine(root, "clone"), copilotOut, CopilotModel),
@@ -802,6 +803,7 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     {
         var path = Path.Combine(root, "bad-provider.json");
         File.WriteAllText(path, body);
+        SetPrivateProviderSource(path);
         var outDir = Path.Combine(root, "bad-provider-out");
         var (exit, output) = Route([
             "review", "cross-runtime", .. RequestArgs("opencode", Path.Combine(root, "clone"), outDir, OpencodeModel),
@@ -1097,10 +1099,13 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     public void OpenCodeConfig_WithProviderBytes_MatchRenderedFixture()
     {
         var provider = Fixture("opencode-provider-omlx070.input.json");
+        var privateProvider = Path.Combine(root, "config-provider.json");
+        File.Copy(provider, privateProvider);
+        SetPrivateProviderSource(privateProvider);
         var outDir = Path.Combine(root, "config-provider");
         Assert.Equal(0, Route([
             "review", "cross-runtime", .. RequestArgs("opencode", Path.Combine(root, "clone"), outDir, OpencodeModel),
-            "--opencode-provider-config", provider, "--format", "json",
+            "--opencode-provider-config", privateProvider, "--format", "json",
         ]).ExitCode);
         Assert.Equal(
             File.ReadAllBytes(Fixture("opencode-reviewer-with-provider.rendered.json")),
@@ -2663,6 +2668,14 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
 
     private static string Fixture(string name) =>
         Path.Combine(RepoVersionPolicySource.RepoRoot(), "tests", "IntentSystem.Cli.Tests", "Fixtures", "G842", name);
+
+    private static void SetPrivateProviderSource(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
 
     private static string CopilotImplementationEnvelope(string verdict, string head)
     {

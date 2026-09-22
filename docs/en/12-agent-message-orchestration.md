@@ -322,8 +322,14 @@ isolation directory to verify that it is empty, and reads no file inside one. An
 protected root; it is UTF-8 JSON with exactly one object-valued `provider` key,
 inserted after `$schema`. Its provider secrets are copied only to
 `opencode-reviewer.json`, never to the prompt, invocation, result, refusal, or
-log. With the isolated copilot home, Copilot runs `gh auth token` itself, so a
-signed-in real `gh` must be first on PATH.
+log. On non-Windows, the source must have no group or other permission bits;
+request refuses one that has any with detail `file '<path>' has mode <nnnn>; a
+provider config may carry credentials, so group and other must have no
+permission bits.` and fix `chmod 600 '<path>', or remove every group and other
+permission bit.` Windows does not perform this mode check. If a source is
+extracted for one run, delete it after `record --write`, as you delete the
+out-dir. With the isolated copilot home, Copilot runs `gh auth token` itself,
+so a signed-in real `gh` must be first on PATH.
 
 Read-only enforcement (measured; pinned statements):
 
@@ -379,8 +385,14 @@ conductor's model; the gate does not check this.
 - **`--opencode-provider-config <file>`** (`request` only, `opencode` only,
   optional). The file is UTF-8 JSON whose root has exactly one key, `provider`,
   with an object value. The rendered `opencode-reviewer.json` inserts that
-  `provider` block after `$schema`. The request result names the file as
-  `opencode_provider_config` when given.
+  `provider` block after `$schema`. On non-Windows, request refuses a source
+  with any group or other permission bits with detail `file '<path>' has mode
+  <nnnn>; a provider config may carry credentials, so group and other must have
+  no permission bits.` and fix `chmod 600 '<path>', or remove every group and
+  other permission bit.` Windows does not perform this mode check. Delete a
+  source extracted for one run after `record --write`, as you delete the
+  out-dir. The request result names the file as `opencode_provider_config` when
+  given.
 
 `record` stores `effort` only when given, next to `model`. copilot envelopes
 carry an observed model and, when `--effort` is given, an observed effort that

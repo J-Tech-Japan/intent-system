@@ -1132,6 +1132,7 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         Directory.CreateDirectory(workspace);
         var provider = Path.Combine(root, "provider.json");
         File.WriteAllText(provider, JsonSerializer.Serialize(new { provider = new { local = new { options = new { apiKey = marker } } } }));
+        SetPrivateProviderSource(provider);
         var outDir = Path.Combine(root, "provider-out");
         var result = Route(["review", "cross-runtime", .. RequestArgs("opencode", workspace, outDir, OpencodeModel), "--opencode-provider-config", provider, "--format", "json"]);
         Assert.Equal(0, result.ExitCode);
@@ -1157,6 +1158,7 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
 
         var insideProvider = Path.Combine(workspace, "provider.json");
         File.Copy(provider, insideProvider);
+        SetPrivateProviderSource(insideProvider);
         var inside = Route(["review", "cross-runtime", .. RequestArgs("opencode", workspace, Path.Combine(root, "provider-inside-out"), OpencodeModel), "--opencode-provider-config", insideProvider, "--format", "json"]);
         Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, JsonDocument.Parse(inside.Output).RootElement.GetProperty("cause").GetString());
         Assert.DoesNotContain(marker, inside.Output, StringComparison.Ordinal);
@@ -1472,6 +1474,14 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
                 ? $"{Path.GetFileName(path)}:directory"
                 : $"{Path.GetFileName(path)}:file:{Convert.ToBase64String(File.ReadAllBytes(path))}")
             .ToArray();
+
+    private static void SetPrivateProviderSource(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
 
     private void AssertExitMissing(string[] args) =>
         AssertExitMissingBoundedAsync(args).GetAwaiter().GetResult();
