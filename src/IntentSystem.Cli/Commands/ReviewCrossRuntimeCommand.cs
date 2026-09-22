@@ -219,14 +219,24 @@ internal static class ReviewCrossRuntimeCommand
                 CrossRuntimeReviewHomeAccessGuard.GuardPath(body);
                 CrossRuntimeReviewHomeAccessGuard.GuardPath(reviewContext);
                 CrossRuntimeReviewHomeAccessGuard.GuardPath(implementation);
-
-                bodyBytes = File.ReadAllBytes(body);
-                reviewContextBytes = File.ReadAllBytes(reviewContext);
-                implementationBytes = File.ReadAllBytes(implementation);
             }
             catch (InvalidOperationException exception)
             {
                 return Refuse(writer, format, "request", CrossRuntimeReviewCauses.ArgumentInvalid, exception.Message, "do not read operator Copilot or OpenCode config directories.");
+            }
+
+            var packetFileName = CrossRuntimeDesignReviewDigest.PacketFileNames[1];
+            try
+            {
+                bodyBytes = File.ReadAllBytes(body);
+                packetFileName = CrossRuntimeDesignReviewDigest.PacketFileNames[2];
+                reviewContextBytes = File.ReadAllBytes(reviewContext);
+                packetFileName = CrossRuntimeDesignReviewDigest.PacketFileNames[3];
+                implementationBytes = File.ReadAllBytes(implementation);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return RefuseUnreadablePacketFile(writer, format, "request", unit, packetFileName, exception.Message);
             }
         }
 
@@ -273,6 +283,18 @@ internal static class ReviewCrossRuntimeCommand
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
                 exception.Message,
                 "do not read operator Copilot or OpenCode config directories.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            if (runtime != CrossRuntimeReviewRuntimes.Copilot
+                && runtime != CrossRuntimeReviewRuntimes.Opencode)
+            {
+                throw;
+            }
+
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
+                $"review request files could not be written under --out-dir '{outDir}': {exception.Message}",
+                "pass a writable --out-dir outside operator runtime state.");
         }
 
         var result = new CrossRuntimeReviewImplementationRequestResult
@@ -369,7 +391,28 @@ internal static class ReviewCrossRuntimeCommand
             return packetRefusal;
         }
 
-        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
+        CrossRuntimeDesignReviewDigest.PacketBytes packet;
+        string? missingPath;
+        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+        {
+            if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+                    packetDirectory,
+                    out packet,
+                    out missingPath,
+                    out var unreadableFileName,
+                    out var unreadableError))
+            {
+                if (unreadableFileName is not null)
+                {
+                    return RefuseUnreadablePacketFile(writer, format, "request", unit, unreadableFileName, unreadableError!);
+                }
+
+                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
+                    $"packet file is missing: {missingPath}; a design reviewer cannot review against an incomplete packet.",
+                    $"run from the host root that holds `.intent-cli/issues/{unit}/` with packet.yaml, github-body.md, review-context.md, and implementation.md.");
+            }
+        }
+        else if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out missingPath))
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
                 $"packet file is missing: {missingPath}; a design reviewer cannot review against an incomplete packet.",
@@ -438,6 +481,18 @@ internal static class ReviewCrossRuntimeCommand
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
                 exception.Message,
                 "do not read operator Copilot or OpenCode config directories.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            if (runtime != CrossRuntimeReviewRuntimes.Copilot
+                && runtime != CrossRuntimeReviewRuntimes.Opencode)
+            {
+                throw;
+            }
+
+            return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
+                $"review request files could not be written under --out-dir '{outDir}': {exception.Message}",
+                "pass a writable --out-dir outside operator runtime state.");
         }
 
         var result = new CrossRuntimeReviewRequestResult
@@ -1850,6 +1905,24 @@ internal static class ReviewCrossRuntimeCommand
 
         refusal = 0;
         return false;
+    }
+
+    private static int RefuseUnreadablePacketFile(
+        TextWriter writer,
+        string format,
+        string subcommand,
+        string executionUnit,
+        string fileName,
+        string exceptionMessage)
+    {
+        var relativePath = $".intent-cli/issues/{executionUnit}/{fileName}";
+        return Refuse(
+            writer,
+            format,
+            subcommand,
+            CrossRuntimeReviewCauses.PacketUnreadable,
+            PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePath, exceptionMessage),
+            $"make `{relativePath}` readable, then re-run.");
     }
 
     private static int RefuseResolution(TextWriter writer, string format, string subcommand, CrossRuntimeReviewResolution resolution) =>

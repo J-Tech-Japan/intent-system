@@ -90,15 +90,34 @@ internal static class CrossRuntimeReviewRequestSupport
         }
 
         var rendered = CrossRuntimeReviewFiles.RenderedFor(runtime, kind, hasClone);
-        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+        string?[] foreign;
+        try
         {
-            CrossRuntimeReviewHomeAccessGuard.BeforeProtectedPathAccess(outDir);
+            if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+            {
+                CrossRuntimeReviewHomeAccessGuard.BeforeProtectedPathAccess(outDir);
+            }
+
+            foreign = Directory.EnumerateFileSystemEntries(outDir)
+                .Select(Path.GetFileName)
+                .Where(name => name is not null && !rendered.Contains(name, StringComparer.Ordinal))
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
         }
-        var foreign = Directory.EnumerateFileSystemEntries(outDir)
-            .Select(Path.GetFileName)
-            .Where(name => name is not null && !rendered.Contains(name, StringComparer.Ordinal))
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToArray();
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            if (runtime != CrossRuntimeReviewRuntimes.Copilot
+                && runtime != CrossRuntimeReviewRuntimes.Opencode)
+            {
+                throw;
+            }
+
+            RefuseOutDir(writer, format, CrossRuntimeReviewCauses.PathInvalid,
+                $"--out-dir '{outDir}' could not be inspected: {exception.Message}",
+                "pass a readable and writable directory outside operator runtime state.");
+            return false;
+        }
+
         if (foreign.Length > 0)
         {
             RefuseOutDir(writer, format, CrossRuntimeReviewCauses.OutDirNotEmpty,
@@ -123,13 +142,30 @@ internal static class CrossRuntimeReviewRequestSupport
                 CrossRuntimeReviewHomeAccessGuard.BeforeProtectedPathAccess(path);
             }
 
-            if (!Directory.Exists(path) || Directory.EnumerateFileSystemEntries(path).Any())
+            try
             {
-                RefuseOutDir(writer, format, CrossRuntimeReviewCauses.OutDirNotEmpty,
-                    Directory.Exists(path)
-                        ? $"--out-dir '{outDir}' contains a non-empty directory '{directoryName}'."
-                        : $"--out-dir '{outDir}' contains a file named '{directoryName}'.",
-                    "pass a new or empty directory.");
+                var isDirectory = Directory.Exists(path);
+                if (!isDirectory || Directory.EnumerateFileSystemEntries(path).Any())
+                {
+                    RefuseOutDir(writer, format, CrossRuntimeReviewCauses.OutDirNotEmpty,
+                        isDirectory
+                            ? $"--out-dir '{outDir}' contains a non-empty directory '{directoryName}'."
+                            : $"--out-dir '{outDir}' contains a file named '{directoryName}'.",
+                        "pass a new or empty directory.");
+                    return false;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                if (runtime != CrossRuntimeReviewRuntimes.Copilot
+                    && runtime != CrossRuntimeReviewRuntimes.Opencode)
+                {
+                    throw;
+                }
+
+                RefuseOutDir(writer, format, CrossRuntimeReviewCauses.PathInvalid,
+                    $"--out-dir '{outDir}' could not be inspected: {exception.Message}",
+                    "pass a readable and writable directory outside operator runtime state.");
                 return false;
             }
         }

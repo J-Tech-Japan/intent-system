@@ -1368,6 +1368,238 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     }
 
     [Theory]
+    [InlineData("copilot", "github-body.md")]
+    [InlineData("copilot", "review-context.md")]
+    [InlineData("copilot", "implementation.md")]
+    [InlineData("opencode", "github-body.md")]
+    [InlineData("opencode", "review-context.md")]
+    [InlineData("opencode", "implementation.md")]
+    public void Request_NewRuntimeUnreadablePacketFile_RefusesPacketUnreadableWithoutWriting(string runtime, string fileName)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var packetPath = Path.Combine(PacketDir(), fileName);
+        var packetContent = File.ReadAllText(packetPath);
+        var originalMode = File.GetUnixFileMode(packetPath);
+        var outDir = Path.Combine(root, $"unreadable-{runtime}-{Path.GetFileNameWithoutExtension(fileName)}");
+        Directory.CreateDirectory(outDir);
+        File.SetUnixFileMode(packetPath, UnixFileMode.None);
+        try
+        {
+            var model = runtime == "copilot" ? CopilotModel : OpencodeModel;
+            var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs(runtime, Path.Combine(root, "clone"), outDir, model), "--format", "json"]);
+            Assert.Equal(1, exit);
+            using var refusal = JsonDocument.Parse(output);
+            Assert.Equal(CrossRuntimeReviewCauses.PacketUnreadable, refusal.RootElement.GetProperty("cause").GetString());
+            var relativePath = $".intent-cli/issues/{Unit}/{fileName}";
+            Assert.StartsWith($"packet '{relativePath}' could not be read: ", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(packetContent, refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Equal($"make `{relativePath}` readable, then re-run.", refusal.RootElement.GetProperty("fix").GetString());
+            Assert.Empty(Directory.EnumerateFileSystemEntries(outDir));
+        }
+        finally
+        {
+            File.SetUnixFileMode(packetPath, originalMode);
+        }
+    }
+
+    [Theory]
+    [InlineData("codex")]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void LegacyImplementationRequest_DoesNotReadModeZeroPacketFiles_AndStillRenders(string runtime)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var packetPaths = new[]
+        {
+            Path.Combine(PacketDir(), "github-body.md"),
+            Path.Combine(PacketDir(), "review-context.md"),
+            Path.Combine(PacketDir(), "implementation.md"),
+        };
+        var originalModes = packetPaths.Select(File.GetUnixFileMode).ToArray();
+        var outDir = Path.Combine(root, "legacy-mode-zero-" + runtime);
+        foreach (var path in packetPaths)
+        {
+            File.SetUnixFileMode(path, UnixFileMode.None);
+        }
+
+        try
+        {
+            var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs(runtime, Path.Combine(root, "clone"), outDir), "--format", "json"]);
+            Assert.True(exit == 0, output);
+            var prompt = File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt));
+            var quotedBody = CrossRuntimeReviewPaths.ShellQuote(packetPaths[0]);
+            Assert.Contains($"- Issue contract (packet github-body.md): {quotedBody}", prompt, StringComparison.Ordinal);
+        }
+        finally
+        {
+            for (var index = 0; index < packetPaths.Length; index++)
+            {
+                File.SetUnixFileMode(packetPaths[index], originalModes[index]);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("copilot", "packet.yaml")]
+    [InlineData("copilot", "github-body.md")]
+    [InlineData("copilot", "review-context.md")]
+    [InlineData("copilot", "implementation.md")]
+    [InlineData("opencode", "packet.yaml")]
+    [InlineData("opencode", "github-body.md")]
+    [InlineData("opencode", "review-context.md")]
+    [InlineData("opencode", "implementation.md")]
+    public void DesignRequest_NewRuntimeUnreadablePacketFile_RefusesPacketUnreadableWithoutWriting(string runtime, string fileName)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var packetPath = Path.Combine(PacketDir(), fileName);
+        var packetContent = File.ReadAllText(packetPath);
+        var originalMode = File.GetUnixFileMode(packetPath);
+        var outDir = Path.Combine(root, $"design-unreadable-{runtime}-{Path.GetFileNameWithoutExtension(fileName)}");
+        Directory.CreateDirectory(outDir);
+        File.SetUnixFileMode(packetPath, UnixFileMode.None);
+        try
+        {
+            var model = runtime == "copilot" ? CopilotModel : OpencodeModel;
+            var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs(runtime, outDir, model), "--format", "json"]);
+            Assert.Equal(1, exit);
+            using var refusal = JsonDocument.Parse(output);
+            Assert.Equal(CrossRuntimeReviewCauses.PacketUnreadable, refusal.RootElement.GetProperty("cause").GetString());
+            var relativePath = $".intent-cli/issues/{Unit}/{fileName}";
+            Assert.StartsWith($"packet '{relativePath}' could not be read: ", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(packetContent, refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Equal($"make `{relativePath}` readable, then re-run.", refusal.RootElement.GetProperty("fix").GetString());
+            Assert.Empty(Directory.EnumerateFileSystemEntries(outDir));
+        }
+        finally
+        {
+            File.SetUnixFileMode(packetPath, originalMode);
+        }
+    }
+
+    [Theory]
+    [InlineData("codex")]
+    [InlineData("claude")]
+    [InlineData("cursor")]
+    public void DesignRequest_LegacyUnreadableGithubBody_PropagatesUnauthorizedAccessException(string runtime)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var packetPath = Path.Combine(PacketDir(), "github-body.md");
+        var originalMode = File.GetUnixFileMode(packetPath);
+        var outDir = Path.Combine(root, "design-legacy-unreadable-" + runtime);
+        Directory.CreateDirectory(outDir);
+        File.SetUnixFileMode(packetPath, UnixFileMode.None);
+        try
+        {
+            var exception = Assert.Throws<UnauthorizedAccessException>(() =>
+                Route(["review", "cross-runtime", .. DesignRequestArgs(runtime, outDir), "--format", "json"]));
+            Assert.Contains(packetPath, exception.Message, StringComparison.Ordinal);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(outDir));
+        }
+        finally
+        {
+            File.SetUnixFileMode(packetPath, originalMode);
+        }
+    }
+
+    [Fact]
+    public void Request_UnreadableOutDirEnumeration_RefusesPathInvalidWithoutWriting()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var outDir = Path.Combine(root, "unreadable-out-dir");
+        Directory.CreateDirectory(outDir);
+        File.SetUnixFileMode(outDir, UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs("copilot", Path.Combine(root, "clone"), outDir, CopilotModel), "--format", "json"]);
+            Assert.Equal(1, exit);
+            using var refusal = JsonDocument.Parse(output);
+            Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, refusal.RootElement.GetProperty("cause").GetString());
+            Assert.DoesNotContain("Unhandled exception", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(outDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(outDir));
+    }
+
+    [Fact]
+    public void Request_UnreadableIsolationDirectoryEnumeration_RefusesPathInvalidWithoutWriting()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var outDir = Path.Combine(root, "unreadable-isolation-dir");
+        var isolation = Path.Combine(outDir, CrossRuntimeReviewFiles.CopilotHome);
+        Directory.CreateDirectory(isolation);
+        File.SetUnixFileMode(isolation, UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs("copilot", Path.Combine(root, "clone"), outDir, CopilotModel), "--format", "json"]);
+            Assert.Equal(1, exit);
+            using var refusal = JsonDocument.Parse(output);
+            Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, refusal.RootElement.GetProperty("cause").GetString());
+            Assert.DoesNotContain("Unhandled exception", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(isolation, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(isolation));
+    }
+
+    [Fact]
+    public void Request_UnwritableOutDirFileStream_RefusesPathInvalidWithoutWriting()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var outDir = Path.Combine(root, "unwritable-out-dir");
+        Directory.CreateDirectory(outDir);
+        File.SetUnixFileMode(outDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            var (exit, output) = Route(["review", "cross-runtime", .. RequestArgs("copilot", Path.Combine(root, "clone"), outDir, CopilotModel), "--format", "json"]);
+            Assert.Equal(1, exit);
+            using var refusal = JsonDocument.Parse(output);
+            Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, refusal.RootElement.GetProperty("cause").GetString());
+            Assert.DoesNotContain("Unhandled exception", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(outDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(outDir));
+    }
+
+    [Theory]
     [InlineData("codex")]
     [InlineData("claude")]
     [InlineData("cursor")]
