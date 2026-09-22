@@ -15,8 +15,8 @@ For a collocated single-machine team, prefer `herdr-only` because it has fewer
 dependencies; choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked) for distributed
 teams or an existing agmsg investment. The four-thread model is the multi-seat
 model; `solo-conductor` is the single-seat team mode. Neither transport is
-primary. See the [orchestration reference](12-agent-message-orchestration.md)
-or run `intent-cli guide solo-conductor` for the single-seat mode.
+primary. For the single-seat mode, see page 12 below or run
+`intent-cli guide solo-conductor`.
 
 ## Pages
 

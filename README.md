@@ -79,9 +79,9 @@ metadata live, and are you starting a new project or adding intent-cli to one?
 
 Each pattern is self-contained and gives two paste-ready initial prompts: prefer
 `herdr-only` for a collocated single-machine team because it has fewer
-dependencies, or choose `agmsg` + herdr (deprecated under G829; still works;
-removal planned after consumers are checked) for a distributed/multi-machine
-team or an existing agmsg investment. Record the choice with
+dependencies, or choose deprecated `agmsg` + herdr (G829; still works; removal
+planned after consumers are checked) for a distributed/multi-machine team or an
+existing agmsg investment. Record the choice with
 `intent-cli session-layer set`. The **four-thread model** is the multi-seat
 model; `solo-conductor` is the single-seat team mode. Neither transport is
 primary.
