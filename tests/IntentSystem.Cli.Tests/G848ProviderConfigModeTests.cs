@@ -212,6 +212,28 @@ public sealed class G848ProviderConfigModeTests : IDisposable
     }
 
     [Fact]
+    public void Request_ProviderConfigSwapToOwnerUnreadable_RefusesCouldNotBeReadWithoutReadingOrWriting()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var provider = WriteProvider("unreadable-swap", "apiKey-G848-unreadable-original", 0x180);
+        // 0204: owner write, other read. The owner cannot open it for reading.
+        var replacement = WriteProvider("unreadable-replacement", "apiKey-G848-unreadable-replacement", 0x84);
+        var outDir = Path.Combine(root, "unreadable-swap-out");
+        Directory.CreateDirectory(outDir);
+        var before = Snapshot(outDir);
+        CrossRuntimeReviewOpencodeConfig.BeforeProviderConfigOpen = path => File.Move(replacement, path, overwrite: true);
+
+        var result = Route(RequestArgs("implementation", provider, outDir, "json"));
+
+        Assert.Equal(1, result.ExitCode);
+        using var refusal = JsonDocument.Parse(result.Output);
+        Assert.Equal(CrossRuntimeReviewCauses.OpencodeProviderConfigInvalid, refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Contains("could not be read", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("apiKey-G848-unreadable", result.Output, StringComparison.Ordinal);
+        Assert.Equal(before, Snapshot(outDir));
+    }
+
+    [Fact]
     public void Request_ProviderConfigMissingAtPrecheck_StillGetsHandleModeRefusalAfterSwap()
     {
         if (OperatingSystem.IsWindows()) return;
