@@ -236,6 +236,7 @@ public sealed class ReleaseNotesV0320G802Tests
 
     [Theory]
     [InlineData("named-base")]
+    [InlineData("prose-base")]
     [InlineData("normal-identity")]
     [InlineData("explicit-identity")]
     public void StaleMeasurementFragmentFailsTheCriterion4Guard(string segment)
@@ -249,6 +250,10 @@ public sealed class ReleaseNotesV0320G802Tests
                 StringComparison.Ordinal),
             "normal-identity" => notes.Replace(NormalPlaceholderIdentity, "intent-cli 0.32.1-cd276e2-G837", StringComparison.Ordinal),
             "explicit-identity" => notes.Replace(ExplicitReleaseIdentity, "intent-cli 0.32.0-cd276e2-G837", StringComparison.Ordinal),
+            "prose-base" => notes.Replace(
+                $"The named product base is `{Base}`",
+                $"The named product base is `{PreviousBase}`",
+                StringComparison.Ordinal),
             _ => throw new ArgumentOutOfRangeException(nameof(segment), segment, null),
         };
 
@@ -939,6 +944,14 @@ public sealed class ReleaseNotesV0320G802Tests
             @"(?m)^\$ git rev-parse HEAD\r?\n(?<base>[0-9a-f]{40})");
         if (!namedBase.Success || namedBase.Groups["base"].Value != Base ||
             namedBase.Value.Contains(PreviousBaseFragment, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // The minor-justification prose names the base too; a stale SHA there is
+        // as wrong as a stale measurement block (G850 review at 3ca5533d).
+        var prose = Regex.Match(notes, @"(?:named product base is|named product base は) `(?<base>[0-9a-f]{40})`");
+        if (!prose.Success || prose.Groups["base"].Value != Base)
         {
             return false;
         }

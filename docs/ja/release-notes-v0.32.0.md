@@ -92,7 +92,7 @@ stable の約束の一部です。
 
 ## 独自に測定した minor justification
 
-named product base は `cd276e20754db09337a94a8b973ddebdd1564ba3` です。minor の判断は
+named product base は `a2431590f08336349be4edaa9ea5b1847f8aa533` です。minor の判断は
 v0.28.0 の auditable rule、**a command-route addition is a minor bump; option-level additions
 do not count as command routes.** に従います。G796 は新しい role への event-kind routing、G800 は
 research-delegation route を追加し、この二つの command-surface route additions が minor の測定済み

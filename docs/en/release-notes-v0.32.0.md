@@ -111,7 +111,7 @@ the scope qualifier on each line is part of the promise.
 
 ## Independently measured minor justification
 
-The named product base is `cd276e20754db09337a94a8b973ddebdd1564ba3`. The
+The named product base is `a2431590f08336349be4edaa9ea5b1847f8aa533`. The
 minor decision follows the v0.28.0 rule: **a command-route addition is a minor
 bump; option-level additions do not count as command routes.** G796 adds
 event-kind routing to a new role and G800 adds the research-delegation route;
