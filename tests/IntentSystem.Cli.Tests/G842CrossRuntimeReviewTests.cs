@@ -56,6 +56,7 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         AutomationPrTransitionCommand.PrHeadReader = null;
         CrossRuntimeReviewHomeAccessGuard.ShouldRefusePath = null;
         CrossRuntimeReviewHomeAccessGuard.ProtectedPathAccessProbe = null;
+        CrossRuntimeReviewHomeAccessGuard.IsWindowsOverride = null;
         Directory.CreateDirectory(Path.Combine(root, ".intent-cli"));
         File.WriteAllText(Path.Combine(root, ".intent-cli", "config.toml"), "default_domain = \"intent-cli\"\nartifact_root = \".intent-cli\"\n");
         WriteQueue((Unit, $"https://github.com/{Repo}/pull/{Pr}"));
@@ -72,6 +73,7 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         AutomationPrTransitionCommand.PrHeadReader = null;
         CrossRuntimeReviewHomeAccessGuard.ShouldRefusePath = null;
         CrossRuntimeReviewHomeAccessGuard.ProtectedPathAccessProbe = null;
+        CrossRuntimeReviewHomeAccessGuard.IsWindowsOverride = null;
         if (Directory.Exists(root))
         {
             Directory.Delete(root, recursive: true);
@@ -924,6 +926,7 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
                 "COPILOT_ALLOW_ALL=",
                 $"COPILOT_HOME={CrossRuntimeReviewPaths.ShellQuote(Path.Combine(outDir, CrossRuntimeReviewFiles.CopilotHome))}",
                 $"XDG_CONFIG_HOME={CrossRuntimeReviewPaths.ShellQuote(Path.Combine(outDir, CrossRuntimeReviewFiles.CopilotXdg))}",
+                $"GH_CONFIG_DIR={CrossRuntimeReviewPaths.ShellQuote(CrossRuntimeReviewHomeAccessGuard.ResolveGhConfigDir())}",
             }
             : new[]
             {
@@ -938,6 +941,14 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         foreach (var assignment in renderedAssignments)
         {
             Assert.Contains(assignment, invocationBody, StringComparison.Ordinal);
+        }
+
+        if (runtime == "copilot")
+        {
+            CrossRuntimeReviewInvocationTestHelpers.AssertCopilotEnvironmentAssignments(
+                invocationBody,
+                outDir,
+                CrossRuntimeReviewHomeAccessGuard.ResolveGhConfigDir());
         }
 
         var previousIndex = -1;

@@ -76,6 +76,37 @@ internal static class CrossRuntimeReviewInvocationTestHelpers
         return command[rmPrefix.Length..^printfSuffix.Length];
     }
 
+    internal static void AssertCopilotEnvironmentAssignments(
+        string command,
+        string outDir,
+        string expectedGhConfigDir)
+    {
+        var tokens = ShellTokens(command);
+        Assert.True(tokens.Count >= 5, $"copilot invocation is missing its environment prefix: {command}");
+        Assert.Equal("COPILOT_ALLOW_ALL=", tokens[0]);
+        Assert.Equal(
+            $"COPILOT_HOME={Path.GetFullPath(Path.Combine(outDir, CrossRuntimeReviewFiles.CopilotHome))}",
+            tokens[1]);
+        Assert.Equal(
+            $"XDG_CONFIG_HOME={Path.GetFullPath(Path.Combine(outDir, CrossRuntimeReviewFiles.CopilotXdg))}",
+            tokens[2]);
+
+        var ghAssignment = tokens[3];
+        Assert.Equal("copilot", tokens[4]);
+        Assert.True(
+            tokens.Count(token => token.StartsWith("GH_CONFIG_DIR=", StringComparison.Ordinal)) == 1,
+            $"GH_CONFIG_DIR must appear once in the fixed environment prefix: {command}");
+        Assert.StartsWith("GH_CONFIG_DIR=", ghAssignment, StringComparison.Ordinal);
+
+        var ghConfigDir = ghAssignment["GH_CONFIG_DIR=".Length..];
+        Assert.NotEmpty(ghConfigDir);
+        Assert.True(Path.IsPathRooted(ghConfigDir), $"GH_CONFIG_DIR must be absolute: {command}");
+        Assert.False(
+            IsInsideOrEqual(ghConfigDir, outDir),
+            $"GH_CONFIG_DIR must not point inside the out-dir: {command}");
+        Assert.Equal(Path.GetFullPath(expectedGhConfigDir), Path.GetFullPath(ghConfigDir));
+    }
+
     internal static void AssertNoDenyFlags(string runtime, string command)
     {
         var tokens = ShellTokens(command);
@@ -108,6 +139,19 @@ internal static class CrossRuntimeReviewInvocationTestHelpers
         && value.All(character => character == '_'
             || (character >= 'A' && character <= 'Z')
             || (character >= '0' && character <= '9'));
+
+    private static bool IsInsideOrEqual(string path, string root)
+    {
+        var normalizedPath = TrimTrailingSeparators(Path.GetFullPath(path));
+        var normalizedRoot = TrimTrailingSeparators(Path.GetFullPath(root));
+        return string.Equals(normalizedPath, normalizedRoot, StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar
+                && normalizedPath.StartsWith(normalizedRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string TrimTrailingSeparators(string value) =>
+        value.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     private static bool ContainsConsecutiveTokens(IReadOnlyList<string> tokens, IReadOnlyList<string> parts)
     {

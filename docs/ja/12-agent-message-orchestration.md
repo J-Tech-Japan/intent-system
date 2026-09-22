@@ -246,9 +246,9 @@ packet と claim から解決し（`--domain` ではない）、create path で 
 適用しません。宣言済み team の packet を publish する intent-cli を更新してから design
 gate に依存してください。
 
-## Copilot CLI と OpenCode runtime（G842 — preview-through-1.x）
+## Copilot CLI と OpenCode runtime（G842/G849 — preview-through-1.x）
 
-G842 は `codex`、`claude`、`cursor` に加えて `copilot`（GitHub Copilot CLI）と
+G842/G849 は `codex`、`claude`、`cursor` に加えて `copilot`（GitHub Copilot CLI）と
 `opencode`（OpenCode）を cross-runtime set に追加します。5 つの runtime のいずれも
 宣言された `conductor_runtime`、reviewer（`review cross-runtime request` / `record` /
 `status`、`--kind implementation` と `--kind design` の両方）、builder（
@@ -261,10 +261,20 @@ evidence を記録するだけで、reviewer、builder、AI provider CLI を起�
 2 つの新 runtime の固定 `invocation.txt` 行（ラベルの後）:
 
 ```text
-COPILOT_ALLOW_ALL= COPILOT_HOME=<out>/copilot-home XDG_CONFIG_HOME=<out>/copilot-xdg copilot -C <ws> --model <model>[ --reasoning-effort <effort>] --available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json < <out>/prompt.md > <out>/verdict.raw.json
+COPILOT_ALLOW_ALL= COPILOT_HOME=<out>/copilot-home XDG_CONFIG_HOME=<out>/copilot-xdg GH_CONFIG_DIR=<gh-config-root> copilot -C <ws> --model <model>[ --reasoning-effort <effort>] --available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json < <out>/prompt.md > <out>/verdict.raw.json
 
 rm -f <out>/opencode-exit.txt; OPENCODE_PERMISSION= OPENCODE_CONFIG_CONTENT= XDG_CONFIG_HOME=<out>/opencode-xdg OPENCODE_CONFIG_DIR=<out>/opencode-config-dir OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG=<out>/opencode-reviewer.json opencode run --pure --dir <ws> -m <model>[ --variant <effort>] --agent intent-cli-reviewer --format json < <out>/prompt.md > <out>/verdict.raw.json; printf '%s\n' "$?" > <out>/opencode-exit.txt
 ```
+
+copilot の `request` は isolated な `XDG_CONFIG_HOME` を適用する前に
+`GH_CONFIG_DIR` を解決します。順序は `GH_CONFIG_DIR`、`$XDG_CONFIG_HOME/gh`、
+Windows で `AppData` が設定された場合の `%AppData%/GitHub CLI`、最後に
+`$HOME/.config/gh` です。出力する path は absolute な metadata だけです。
+`guide solo-conductor` の builder command は同じ位置に
+`GH_CONFIG_DIR=<operator-gh-config-root>` を置く static text です。operator は
+gh の文書化された順序で見つけた gh config root に placeholder を置き換えます。
+これで isolated な XDG directory ではなく `hosts.yml` の token を
+`gh auth token` が参照できます。request だけが実行時に値を解決します。
 
 `request` は `--out-dir` 下に空の isolation directory（`copilot-home`、`copilot-xdg`、
 `opencode-xdg`、`opencode-config-dir`）を作り、opencode では `opencode-reviewer.json` を
@@ -277,7 +287,8 @@ rendered file は temp file を経由して原子的に置換します。temp fi
 directory は 0700 にします。`path-invalid` は
 workspace、out-dir、planned path と、`$HOME/.copilot`、`COPILOT_HOME`、3 つの
 OpenCode config form、home/XDG の data・state・cache form、`GH_CONFIG_DIR`、次に
-`$XDG_CONFIG_HOME/gh`、最後に `$HOME/.config/gh` で解決する `gh` root の unified list
+`$XDG_CONFIG_HOME/gh`、Windows で `AppData` が設定された場合の `%AppData%/GitHub CLI`、最後に
+`$HOME/.config/gh` で解決する `gh` root の unified list
 との重複を、両側の symlink を解決して case-insensitive に拒否します。この検査は
 out-dir の列挙より前に行います。workspace 内の root、nested、dangling な escaping
 symlink は workspace 相対の entry 名だけを示して拒否し、workspace 内に解決する link は
@@ -296,7 +307,9 @@ file content も読みません（metadata の lstat と path resolution だけ�
 UTF-8 JSON の唯一の object-valued `provider` key を `$schema` の直後へ挿入します。
 provider secret は `opencode-reviewer.json` だけにコピーされ、prompt、invocation、
 result、refusal、log には出ません。isolated copilot home では Copilot 自身が
-`gh auth token` を実行するため、PATH 先頭にサインイン済みの実 `gh` が必要です。
+`gh auth token` を実行します。`GH_CONFIG_DIR` が operator の gh root を示すため、
+isolated な XDG directory が空でも `hosts.yml` の token を参照できます。PATH
+先頭にはサインイン済みの実 `gh` が必要です。
 
 read-only enforcement（実測、pinned statement）:
 
@@ -387,7 +400,9 @@ section を追加します。step 6 がそれを指します。field は 7 項�
 `invocations`（codex、claude、cursor、copilot、opencode。各 `runtime`、`command`、
 `enforcement`、`measured`）、`opencode_config`（固定 builder config text）を持ちます。
 copilot と opencode の builder 行では `--model` が必須で、`enforcement` text は
-`The model is required.` で始まります。OpenCode builder は run ごとに新しい空の
+`The model is required.` で始まります。copilot builder 行は isolated な
+`XDG_CONFIG_HOME` の直後に `GH_CONFIG_DIR=<operator-gh-config-root>` を置きます。
+operator は gh の文書化された順序で見つけた root に置換します。OpenCode builder は run ごとに新しい空の
 `XDG_CONFIG_HOME` と `OPENCODE_CONFIG_DIR` で動き、project config と `AGENTS.md` は
 読み込まれないため、task file に repository 指示をすべて載せる必要があります。
 

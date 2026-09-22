@@ -55,6 +55,7 @@ internal static class CrossRuntimeReviewRuntimes
                 "COPILOT_ALLOW_ALL=",
                 "COPILOT_HOME=<quoted path>",
                 "XDG_CONFIG_HOME=<quoted path>",
+                "GH_CONFIG_DIR=<quoted path>",
             ],
             [Opencode] =
             [
@@ -167,6 +168,7 @@ internal static class CrossRuntimeReviewRuntimes
                 + $"\"$(cat {Out(CrossRuntimeReviewFiles.Prompt)})\" > {Out(CrossRuntimeReviewFiles.RawVerdict)}",
             Copilot =>
                 $"COPILOT_ALLOW_ALL= COPILOT_HOME={Out(CrossRuntimeReviewFiles.CopilotHome)} XDG_CONFIG_HOME={Out(CrossRuntimeReviewFiles.CopilotXdg)} "
+                + $"GH_CONFIG_DIR={CrossRuntimeReviewPaths.ShellQuote(CrossRuntimeReviewHomeAccessGuard.ResolveGhConfigDir())} "
                 + $"copilot -C {quotedClone} --model {CrossRuntimeReviewPaths.ShellQuoteValue(model!)}{effortFlag} "
                 + $"--available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json "
                 + $"< {Out(CrossRuntimeReviewFiles.Prompt)} > {Out(CrossRuntimeReviewFiles.RawVerdict)}",
