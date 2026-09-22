@@ -167,7 +167,7 @@ internal static class CrossRuntimeReviewRuntimes
                 + $"\"$(cat {Out(CrossRuntimeReviewFiles.Prompt)})\" > {Out(CrossRuntimeReviewFiles.RawVerdict)}",
             Copilot =>
                 $"COPILOT_ALLOW_ALL= COPILOT_HOME={Out(CrossRuntimeReviewFiles.CopilotHome)} XDG_CONFIG_HOME={Out(CrossRuntimeReviewFiles.CopilotXdg)} "
-                + $"copilot -C {quotedClone} --model {CrossRuntimeReviewPaths.ShellQuote(model!)}{effortFlag} "
+                + $"copilot -C {quotedClone} --model {CrossRuntimeReviewPaths.ShellQuoteValue(model!)}{effortFlag} "
                 + $"--available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json "
                 + $"< {Out(CrossRuntimeReviewFiles.Prompt)} > {Out(CrossRuntimeReviewFiles.RawVerdict)}",
             Opencode =>
@@ -175,28 +175,30 @@ internal static class CrossRuntimeReviewRuntimes
                 + $"XDG_CONFIG_HOME={Out(CrossRuntimeReviewFiles.OpencodeXdg)} "
                 + $"OPENCODE_CONFIG_DIR={Out(CrossRuntimeReviewFiles.OpencodeConfigDir)} OPENCODE_DISABLE_PROJECT_CONFIG=1 "
                 + $"OPENCODE_CONFIG={Out(CrossRuntimeReviewFiles.OpencodeReviewerConfig)} opencode run --pure --dir {quotedClone} "
-                + $"-m {CrossRuntimeReviewPaths.ShellQuote(model!)}{effortFlag} --agent intent-cli-reviewer --format json "
+                + $"-m {CrossRuntimeReviewPaths.ShellQuoteValue(model!)}{effortFlag} --agent intent-cli-reviewer --format json "
                 + $"< {Out(CrossRuntimeReviewFiles.Prompt)} > {Out(CrossRuntimeReviewFiles.RawVerdict)}; "
                 + $"printf '%s\\n' \"$?\" > {Out(CrossRuntimeReviewFiles.OpencodeExit)}",
             _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, "Unsupported cross-runtime review runtime."),
         };
     }
 
+    // codex, claude and cursor keep the merge-base path-style quoting (AC13).
     public static string ModelFlag(string runtime, string model) =>
         runtime switch
         {
             Codex => $"-m {CrossRuntimeReviewPaths.ShellQuote(model)}",
             Claude or Cursor => $"--model {CrossRuntimeReviewPaths.ShellQuote(model)}",
-            Copilot => $"--model {CrossRuntimeReviewPaths.ShellQuote(model)}",
-            Opencode => $"-m {CrossRuntimeReviewPaths.ShellQuote(model)}",
+            Copilot => $"--model {CrossRuntimeReviewPaths.ShellQuoteValue(model)}",
+            Opencode => $"-m {CrossRuntimeReviewPaths.ShellQuoteValue(model)}",
             _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, "Unsupported cross-runtime review runtime."),
         };
 
+    // effort-quote: model/effort values use value quoting after validation.
     public static string EffortFlag(string runtime, string effort) =>
         runtime switch
         {
-            Copilot => $"--reasoning-effort {CrossRuntimeReviewPaths.ShellQuote(effort)}",
-            Opencode => $"--variant {CrossRuntimeReviewPaths.ShellQuote(effort)}",
+            Copilot => $"--reasoning-effort {CrossRuntimeReviewPaths.ShellQuoteValue(effort)}",
+            Opencode => $"--variant {CrossRuntimeReviewPaths.ShellQuoteValue(effort)}",
             _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, "Unsupported cross-runtime review runtime."),
         };
 

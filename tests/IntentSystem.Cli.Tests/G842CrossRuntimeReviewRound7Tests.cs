@@ -705,6 +705,7 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         var cases = new[]
         {
             ("equal", Path.Combine(root, "equal"), Path.Combine(root, "equal")),
+            ("equal-with-trailing-separator", Path.Combine(root, "equal-trailing"), Path.Combine(root, "equal-trailing") + Path.DirectorySeparatorChar),
             ("out-under-workspace", Path.Combine(root, "workspace"), Path.Combine(root, "workspace", "review")),
             ("workspace-under-out", Path.Combine(root, "out", "clone"), Path.Combine(root, "out")),
         };
@@ -1266,6 +1267,39 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
                 var planned = RequestAt(runtime, kind, Path.Combine(root, $"protected-planned-workspace-{rootName}-{runtime}-{kind}"), Path.Combine(protectedRoot, "planned-out"), hasClone: true);
                 AssertPathInvalid(planned);
                 Assert.DoesNotContain(CrossRuntimeReviewCauses.OutDirNotEmpty, planned.Output, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("GH_CONFIG_DIR")]
+    [InlineData("COPILOT_HOME")]
+    public void Request_RefusesFilesystemRootProtectedHome_WithoutChangingLegacyRuntimes(string variable)
+    {
+        using var env = ScratchHome();
+        var filesystemRoot = Path.GetPathRoot(Environment.CurrentDirectory)!;
+        SetEnv(variable, filesystemRoot);
+
+        foreach (var runtime in new[] { "copilot", "opencode" })
+        {
+            foreach (var kind in new[] { CrossRuntimeReviewRecord.KindImplementation, CrossRuntimeReviewRecord.KindDesign })
+            {
+                var workspace = Path.Combine(root, $"root-workspace-{variable}-{runtime}-{kind}");
+                var outDir = Path.Combine(root, $"root-out-{variable}-{runtime}-{kind}");
+                var result = RequestAt(runtime, kind, workspace, outDir, hasClone: kind == CrossRuntimeReviewRecord.KindImplementation);
+                AssertPathInvalid(result);
+                Assert.DoesNotContain(CrossRuntimeReviewCauses.OutDirNotEmpty, result.Output, StringComparison.Ordinal);
+            }
+        }
+
+        foreach (var runtime in new[] { "codex", "claude", "cursor" })
+        {
+            foreach (var kind in new[] { CrossRuntimeReviewRecord.KindImplementation, CrossRuntimeReviewRecord.KindDesign })
+            {
+                var workspace = Path.Combine(root, $"legacy-root-workspace-{variable}-{runtime}-{kind}");
+                var outDir = Path.Combine(root, $"legacy-root-out-{variable}-{runtime}-{kind}");
+                var result = RequestAt(runtime, kind, workspace, outDir, hasClone: kind == CrossRuntimeReviewRecord.KindImplementation);
+                Assert.Equal(0, result.ExitCode);
             }
         }
     }

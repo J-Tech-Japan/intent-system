@@ -565,8 +565,26 @@ internal static class CrossRuntimeReviewHomeAccessGuard
     {
         var normalizedPath = TrimTrailingSeparator(path);
         var normalizedRoot = TrimTrailingSeparator(root);
+
+        // root-contain: a filesystem or drive root contains every path on its volume.
+        if (IsRootPath(root))
+        {
+            var pathRoot = Path.GetPathRoot(path);
+            return pathRoot is not null && PathEquals(pathRoot, root);
+        }
+
         var prefix = normalizedRoot + Path.DirectorySeparatorChar;
-        return normalizedPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        return normalizedPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            || Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar
+                && normalizedPath.StartsWith(
+                    normalizedRoot + Path.AltDirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRootPath(string path)
+    {
+        var pathRoot = Path.GetPathRoot(path);
+        return pathRoot is not null && PathEquals(path, pathRoot);
     }
 
     private static string TrimTrailingSeparator(string path)

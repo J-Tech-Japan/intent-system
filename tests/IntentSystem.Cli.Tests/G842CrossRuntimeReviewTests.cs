@@ -510,7 +510,7 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         Assert.Equal(0, exit);
         using var request = JsonDocument.Parse(output);
         Assert.Equal(model, request.RootElement.GetProperty("model").GetString());
-        Assert.Contains(CrossRuntimeReviewPaths.ShellQuote(model), File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation)), StringComparison.Ordinal);
+        Assert.Contains(CrossRuntimeReviewPaths.ShellQuoteValue(model), File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation)), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -541,6 +541,48 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
     {
         var outDir = Path.Combine(root, "effort-" + effort);
         Assert.Equal(0, Route(["review", "cross-runtime", .. RequestArgs("copilot", Path.Combine(root, "clone"), outDir, CopilotModel, effort), "--format", "json"]).ExitCode);
+    }
+
+    [Theory]
+    [InlineData("implementation", " ")]
+    [InlineData("implementation", "a b")]
+    [InlineData("design", " ")]
+    [InlineData("design", "a b")]
+    public void OpencodeEffort_WhitespaceValues_RenderQuotedAndRecordVerbatim(string kind, string effort)
+    {
+        var suffix = effort == " " ? "whitespace" : "space";
+        var outDir = Path.Combine(root, $"opencode-effort-{kind}-{suffix}");
+        var requestArgs = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRequestArgs("opencode", outDir, OpencodeModel, effort)
+            : RequestArgs("opencode", Path.Combine(root, "opencode-clone-" + suffix), outDir, OpencodeModel, effort);
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. requestArgs, "--format", "json"]);
+        Assert.True(requestExit == 0, requestOutput);
+        using (var request = JsonDocument.Parse(requestOutput))
+        {
+            Assert.Equal(effort, request.RootElement.GetProperty("effort").GetString());
+        }
+
+        var invocation = File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation));
+        Assert.Contains(CrossRuntimeReviewPaths.ShellQuoteValue(effort), invocation, StringComparison.Ordinal);
+
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile("opencode", kind == CrossRuntimeReviewRecord.KindDesign
+            ? OpencodeDesignEnvelope("approve", digest)
+            : OpencodeImplementationEnvelope("approve", H1));
+        var recordArgs = kind == CrossRuntimeReviewRecord.KindDesign
+            ? DesignRecordArgs("opencode", verdict, digest, write: false, effort: effort)
+            : RecordArgs("opencode", verdict, H1, write: false, effort: effort);
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. recordArgs, "--format", "json"]);
+        Assert.True(recordExit == 0, recordOutput);
+        using var record = JsonDocument.Parse(recordOutput);
+        Assert.Equal(effort, record.RootElement.GetProperty("record").GetProperty("effort").GetString());
+    }
+
+    [Fact]
+    public void ShellQuoteValue_AcceptsWhitespaceOnly_WhilePathsKeepTheirOwnCheck()
+    {
+        Assert.Equal("' '", CrossRuntimeReviewPaths.ShellQuoteValue(" "));
+        Assert.Throws<InvalidOperationException>(() => CrossRuntimeReviewPaths.ShellQuote(" "));
     }
 
     [Theory]
@@ -809,8 +851,8 @@ public sealed class G842CrossRuntimeReviewTests : IDisposable
         var outDir = Path.Combine(root, "meta-" + runtime);
         Assert.Equal(0, Route(["review", "cross-runtime", .. RequestArgs(runtime, Path.Combine(root, "clone"), outDir, model, effort), "--format", "json"]).ExitCode);
         var command = File.ReadAllText(Path.Combine(outDir, "invocation.txt")).Split('\n')[1];
-        Assert.Contains(CrossRuntimeReviewPaths.ShellQuote(model), command, StringComparison.Ordinal);
-        Assert.Contains(CrossRuntimeReviewPaths.ShellQuote(effort), command, StringComparison.Ordinal);
+        Assert.Contains(CrossRuntimeReviewPaths.ShellQuoteValue(model), command, StringComparison.Ordinal);
+        Assert.Contains(CrossRuntimeReviewPaths.ShellQuoteValue(effort), command, StringComparison.Ordinal);
     }
 
     public static IEnumerable<object[]> CopilotEffortLevelCases() =>
