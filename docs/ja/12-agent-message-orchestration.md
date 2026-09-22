@@ -306,7 +306,12 @@ file content も読みません（metadata の lstat と path resolution だけ�
 `--opencode-provider-config` は workspace と全 protected root の外でなければならず、
 UTF-8 JSON の唯一の object-valued `provider` key を `$schema` の直後へ挿入します。
 provider secret は `opencode-reviewer.json` だけにコピーされ、prompt、invocation、
-result、refusal、log には出ません。isolated copilot home では Copilot 自身が
+result、refusal、log には出ません。Windows 以外では group または other の permission bit
+が 1 つでもある source を request が拒否します。detail は `file '<path>' has mode
+<nnnn>; a provider config may carry credentials, so group and other must have no permission
+bits.`、fix は `chmod 600 '<path>', or remove every group and other permission bit.` です。
+Windows ではこの mode 検査を行いません。1 回の実行用に抽出した source は、out-dir と同じく
+`record --write` の後に削除します。isolated copilot home では Copilot 自身が
 `gh auth token` を実行します。`GH_CONFIG_DIR` が operator の gh root を示すため、
 isolated な XDG directory が空でも `hosts.yml` の token を参照できます。PATH
 先頭にはサインイン済みの実 `gh` が必要です。
@@ -365,8 +370,13 @@ gate はこれを検査しません。
   は `--effort` を `cross-runtime-review-argument-invalid` で拒否します。
 - **`--opencode-provider-config <file>`**（`request` のみ、opencode のみ、任意）。ファイルは
   UTF-8 JSON で root に `provider` キーだけを持ち、値は object。出力される
-  `opencode-reviewer.json` は `$schema` の直後にその `provider` block を挿入します。指定時は
-  request 結果が `opencode_provider_config` としてファイル名を示します。
+  `opencode-reviewer.json` は `$schema` の直後にその `provider` block を挿入します。Windows
+  以外では group または other の permission bit が 1 つでもある source を request が拒否します。
+  detail は `file '<path>' has mode <nnnn>; a provider config may carry credentials, so group and
+  other must have no permission bits.`、fix は `chmod 600 '<path>', or remove every group and other
+  permission bit.` です。Windows ではこの mode 検査を行いません。1 回の実行用に抽出した
+  source は、out-dir と同じく `record --write` の後に削除します。指定時は request 結果が
+  `opencode_provider_config` としてファイル名を示します。
 
 `record` は `model` の隣に、渡されたときだけ `effort` を保存します。copilot envelope は
 observed model を持ち、`--effort` 指定時は observed effort が一致する必要があります。OpenCode

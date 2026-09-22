@@ -367,7 +367,7 @@ public sealed class G833SoloConductorTests : IDisposable
         var step6 = guide.Loop.Single(step => step.Number == 6);
         Assert.Contains("Builder invocations", step6.Instruction, StringComparison.Ordinal);
         Assert.Contains(
-            "`--opencode-provider-config` must name a source outside the workspace and outside every operator-protected root.",
+            "--opencode-provider-config must name a source outside the workspace and outside every operator-protected root, with no group or other permission bits (request refuses one that has any); a source extracted for one run is deleted after record --write, as the out-dir is.",
             step7.Instruction,
             StringComparison.Ordinal);
         Assert.Contains(
