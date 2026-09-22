@@ -6,6 +6,8 @@
 
 Keep the existing `<owner>/<implementation-repo>` unchanged. Create a separate empty `<owner>/<intents-host-repo>` for host metadata and check out **only that host repository** for the initial session. Name the existing implementation repository in the prompt; do not mix its checkout with the host checkout now.
 
+This pattern sets up a multi-seat team; single-seat operators should follow the [single-seat section in 02a](02a-getting-started-orchestration.md#single-seat-team) instead.
+
 ## Initial prompts — choose exactly one
 
 ### Herdr-only

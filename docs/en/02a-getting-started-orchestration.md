@@ -8,6 +8,8 @@ Choose where host metadata lives and whether the project is brand-new or
 existing. Do this first; each linked page is deliberately self-contained, so
 you never combine instructions from two patterns.
 
+These four patterns set up a multi-seat team; a single-seat operator should follow the [single-seat section below](#single-seat-team) instead.
+
 | Host metadata | Brand-new project | Adding intent-cli to an existing project |
 | --- | --- | --- |
 | Separate host repository | [Separate host × brand-new](02b-separate-host-brand-new.md) | [Separate host × existing](02c-separate-host-existing.md) |
@@ -17,9 +19,12 @@ Each pattern starts with exactly two coexisting paste-ready initial prompts.
 Prefer `herdr-only` when all four agents are collocated on one machine because
 it has fewer dependencies. Choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked)
 transport for a distributed team or an existing agmsg investment. Both are
-recorded with `session-layer set`; the **four-thread model** is primary, never
-either transport. After the initial prompt, follow the recorded mode and the
-current installed guides instead of combining transport-specific instructions.
+recorded with `session-layer set`. The **four-thread model** is the multi-seat
+model; `solo-conductor` is the single-seat team mode. Neither transport is
+primary. See the [agent-message orchestration contract](12-agent-message-orchestration.md)
+and run `intent-cli guide solo-conductor` for the single-seat mode. After the
+initial prompt, follow the recorded mode and the current installed guides
+instead of combining transport-specific instructions.
 
 This page is the **orchestration-first** route from that minimal start to the
 first published packet. [Start a project](02-project-start.md) remains
@@ -35,13 +40,35 @@ commands only; it does not drive herdr.
 
 ## What you are setting up
 
-The four-thread model is the **primary** model: design authors intent,
+The four-thread model is the **multi-seat** model: design authors intent,
 orchestration coordinates, implementation delivers the child PR, and review
-checks it. For a collocated team on one machine, this route recommends the
+checks it; `solo-conductor` is the **single-seat team mode**. See the [G833
+section in the agent-message orchestration contract](12-agent-message-orchestration.md#solo-conductor-team-mode-g833--preview-through-1x)
+and run `intent-cli guide solo-conductor` for the single-seat mode. For a
+collocated team on one machine, this route recommends the
 `herdr-only` transport because it has fewer dependencies. `agmsg` + herdr
 is deprecated (G829): it still works for distributed/existing-agmsg teams and
-removal is planned after consumers are checked;
-the four-thread model is primary, not either transport.
+removal is planned after consumers are checked; neither transport is primary.
+
+## Single-seat team
+
+Initialize the host with the [same initialization flow](02-project-start.md#what-the-agent-will-run-for-maintainers-and-troubleshooting).
+
+Record the mode in the host checkout with:
+
+```text
+intent-cli team-mode set --domain <domain> --team <team> --mode solo-conductor --write
+```
+
+**Forward compatibility.** An intent-cli without G833 rejects a
+`.intent-cli/team-mode.json` that contains `solo-conductor`; the whole file then
+fails to load, affecting every team on that host. Upgrade every intent-cli that
+reads the host before recording the mode.
+
+Confirm with `intent-cli guide bootstrap --domain <domain> --team <team>`; it
+reports `solo-conductor-team-bootstrap` in state `solo-conductor-complete`.
+Then follow `intent-cli guide solo-conductor`. No seat roster and no supervision
+cycle are required. See the [G833 solo conductor team-mode section](12-agent-message-orchestration.md#solo-conductor-team-mode-g833--preview-through-1x).
 
 ## 1. Choose repositories and folders
 

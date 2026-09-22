@@ -7,6 +7,8 @@
 
 既存の `<owner>/<implementation-repo>` は変更しません。ホストメタデータ用に空の `<owner>/<intents-host-repo>` を別に作り、最初のセッションでは **そのホストリポジトリだけを** checkout します。既存の実装リポジトリはプロンプトで指定し、ここでホストの checkout と混ぜません。
 
+このパターンは複数席チームを設定するため、単独席で運用する場合は代わりに [02a の単独席チームセクション](02a-getting-started-orchestration.md#単独席チーム) に従ってください。
+
 ## 最初のプロンプト — ちょうど 1 つを選ぶ
 
 ### Herdr-only

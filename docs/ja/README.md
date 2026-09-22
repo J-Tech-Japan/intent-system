@@ -6,18 +6,19 @@
 
 `intent-cli` は、AI agent に Intent System の正規手順を確認させながら Intent-Driven Development を進めるための **決定論的なサポートツール** です。
 
+以下の導入パターンは複数席チームを設定するため、単独席で運用する場合は代わりに [02a の単独席チームセクション](02a-getting-started-orchestration.md#単独席チーム) を参照してください。
+
 最初に [自己完結した導入パターン](02a-getting-started-orchestration.md) を選びます。
 別ホストリポジトリ / 同一リポジトリのメタデータ用ブランチと、新規 / 既存プロジェクトを
 掛け合わせます。各パターンには貼り付け可能な最初のプロンプトが 2 つあります。1 台に
 同居するチームでは、依存関係が少ない `herdr-only` を優先します。分散チームまたは既存の
-agmsg 投資があるチームには、非推奨（G829。引き続き動作し、利用者確認後に削除予定）の `agmsg` + herdr を選びます。primary
-なのはトランスポートではなく 4 スレッドモデルです。
+agmsg 投資があるチームには、非推奨（G829。引き続き動作し、利用者確認後に削除予定）の `agmsg` + herdr を選びます。4 スレッドモデルは複数席モデルで、`solo-conductor` は単独席のチームモードです。どちらのトランスポートも主要ではありません。[オーケストレーションのリファレンス](12-agent-message-orchestration.md) または `intent-cli guide solo-conductor` を参照してください。
 
 ## ページ一覧
 
 1. [インストール](01-install.md)
 2. [プロジェクト開始](02-project-start.md)
-2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — 最小開始と primary な 4 スレッドモデル。同居する `herdr-only` は依存関係が少ないため優先
+2a. [はじめに: 最初の packet までの道のり](02a-getting-started-orchestration.md) — 最小開始と複数席の 4 スレッドモデル。単独席のチームモードは `solo-conductor`。同居する `herdr-only` は依存関係が少ないため優先
    - [別ホスト × 新規](02b-separate-host-brand-new.md)
    - [別ホスト × 既存](02c-separate-host-existing.md)
    - [同一リポジトリ × 新規](02d-same-repo-brand-new.md)
@@ -25,7 +26,7 @@ agmsg 投資があるチームには、非推奨（G829。引き続き動作し�
 3. [Intent Storming と intent の整理](03-intents.md)
 4. [packet 作成と issue 公開](04-packets-issues.md)
 4a. [GitHub ワークフローラベルで見る現在地](04a-workflow-labels.md) — ラベルの意味と読み方
-12. [agent メッセージオーケストレーション](12-agent-message-orchestration.md) — 4 スレッドの contract reference。single-domain と multi-domain の routing
+12. [agent メッセージオーケストレーション](12-agent-message-orchestration.md) — 複数席（4 スレッド）モデルと `solo-conductor` 単独席チームモードのリファレンス。single-domain と multi-domain の routing
 
 ### 代替経路
 

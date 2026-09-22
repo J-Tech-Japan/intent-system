@@ -6,6 +6,8 @@
 
 Create two empty repositories: `<owner>/<implementation-repo>` for product code and `<owner>/<intents-host-repo>` for host metadata. Check out **only the empty host repository**. Name the implementation repository in the prompt; do not check it out for this initial host session.
 
+This pattern sets up a multi-seat team; single-seat operators should follow the [single-seat section in 02a](02a-getting-started-orchestration.md#single-seat-team) instead.
+
 ## Initial prompts — choose exactly one
 
 ### Herdr-only
