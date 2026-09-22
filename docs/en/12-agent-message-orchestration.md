@@ -268,7 +268,7 @@ issue, declared teams receive `idempotent-not-gated`.
 applies no publish-flow gate. Refresh every intent-cli that publishes packets for a
 declared team before relying on the design gate.
 
-## Copilot CLI and OpenCode runtimes (G842 — preview-through-1.x)
+## Copilot CLI and OpenCode runtimes (G842/G849 — preview-through-1.x)
 
 G842 adds `copilot` (GitHub Copilot CLI) and `opencode` (OpenCode) to the
 cross-runtime set beside `codex`, `claude`, and `cursor`. Any of the five may be
@@ -283,10 +283,21 @@ provider CLI. The one exception remains the pre-existing claim-read `git fetch`.
 Pinned `invocation.txt` lines (after the label) for the two new runtimes:
 
 ```text
-COPILOT_ALLOW_ALL= COPILOT_HOME=<out>/copilot-home XDG_CONFIG_HOME=<out>/copilot-xdg copilot -C <ws> --model <model>[ --reasoning-effort <effort>] --available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json < <out>/prompt.md > <out>/verdict.raw.json
+COPILOT_ALLOW_ALL= COPILOT_HOME=<out>/copilot-home XDG_CONFIG_HOME=<out>/copilot-xdg GH_CONFIG_DIR=<gh-config-root> copilot -C <ws> --model <model>[ --reasoning-effort <effort>] --available-tools view rg glob --allow-all-tools --disable-builtin-mcps --no-custom-instructions --stream off --output-format json < <out>/prompt.md > <out>/verdict.raw.json
 
 rm -f <out>/opencode-exit.txt; OPENCODE_PERMISSION= OPENCODE_CONFIG_CONTENT= XDG_CONFIG_HOME=<out>/opencode-xdg OPENCODE_CONFIG_DIR=<out>/opencode-config-dir OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_CONFIG=<out>/opencode-reviewer.json opencode run --pure --dir <ws> -m <model>[ --variant <effort>] --agent intent-cli-reviewer --format json < <out>/prompt.md > <out>/verdict.raw.json; printf '%s\n' "$?" > <out>/opencode-exit.txt
 ```
+
+For copilot, `request` resolves `GH_CONFIG_DIR` before applying its isolated
+`XDG_CONFIG_HOME`. The documented order is `GH_CONFIG_DIR`, then
+`$XDG_CONFIG_HOME/gh`, then `%AppData%/GitHub CLI` on Windows when `AppData` is
+set, and finally `$HOME/.config/gh`. The rendered path is absolute,
+shell-quoted metadata only. `guide solo-conductor` keeps the builder command
+static with `GH_CONFIG_DIR=<operator-gh-config-root>` in the same position;
+replace that placeholder with the operator's gh config root found in that
+order. This keeps `gh auth token` pointed at a `hosts.yml` token instead of the
+empty reviewer XDG directory. Only the reviewer request resolves the value at
+request time.
 
 `request` creates empty isolation directories under `--out-dir` (`copilot-home`,
 `copilot-xdg`, `opencode-xdg`, `opencode-config-dir`) and, for opencode, writes
@@ -303,7 +314,8 @@ overlap between the workspace, out-dir, planned paths, and one unified list of
 operator roots: `$HOME/.copilot`, `COPILOT_HOME`, `$HOME/.config/opencode`,
 `XDG_CONFIG_HOME/opencode`, `OPENCODE_CONFIG_DIR`, the home and XDG forms of
 OpenCode data, state, and cache, and the `gh` root resolved as
-`GH_CONFIG_DIR`, then `$XDG_CONFIG_HOME/gh`, then `$HOME/.config/gh`.
+`GH_CONFIG_DIR`, then `$XDG_CONFIG_HOME/gh`, then `%AppData%/GitHub CLI` on
+Windows when `AppData` is set, then `$HOME/.config/gh`.
 The same check follows symlinks in both directions and runs before out-dir
 enumeration. It also refuses rendered or isolation symlinks, non-regular
 rendered paths, and a workspace symlink at its root, nested, or dangling that
@@ -328,8 +340,10 @@ provider config may carry credentials, so group and other must have no
 permission bits.` and fix `chmod 600 '<path>', or remove every group and other
 permission bit.` Windows does not perform this mode check. If a source is
 extracted for one run, delete it after `record --write`, as you delete the
-out-dir. With the isolated copilot home, Copilot runs `gh auth token` itself,
-so a signed-in real `gh` must be first on PATH.
+out-dir. With the isolated copilot home, Copilot runs `gh auth token` itself.
+`GH_CONFIG_DIR` points that lookup back to the operator's gh root, so a
+`hosts.yml` token remains available while the reviewer's XDG directory stays
+empty; a signed-in real `gh` must still be first on PATH.
 
 Read-only enforcement (measured; pinned statements):
 
@@ -428,6 +442,9 @@ object is accepted. **cursor** is unchanged: a fenced verdict is refused.
 `runtime`, `command`, `enforcement`, and `measured`, and `opencode_config` (the
 pinned builder config text). `--model` is required for the copilot and opencode
 builder lines; their `enforcement` texts begin with `The model is required.`
+The copilot builder line carries the literal
+`GH_CONFIG_DIR=<operator-gh-config-root>` immediately after its isolated
+`XDG_CONFIG_HOME`; substitute the gh root found in gh's documented order.
 The OpenCode builder runs with fresh, empty `XDG_CONFIG_HOME` and
 `OPENCODE_CONFIG_DIR` per run; the task file carries every repository instruction
 the builder needs because project config and `AGENTS.md` are not loaded.

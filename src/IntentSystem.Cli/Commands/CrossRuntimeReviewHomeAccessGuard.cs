@@ -12,6 +12,9 @@ internal static class CrossRuntimeReviewHomeAccessGuard
     // read fail loudly. Metadata-only lstat and path resolution do not call it.
     internal static Action<string>? ProtectedPathAccessProbe { get; set; }
 
+    /// <summary>Tests can exercise gh's Windows-only AppData branch on any host.</summary>
+    internal static Func<bool>? IsWindowsOverride { get; set; }
+
     internal static void BeforeProtectedPathAccess(string path)
     {
         if (IsProtectedOperatorPath(path))
@@ -226,11 +229,7 @@ internal static class CrossRuntimeReviewHomeAccessGuard
 
     internal static IEnumerable<string> EnumerateProtectedHomes()
     {
-        var home = Environment.GetEnvironmentVariable("HOME");
-        if (string.IsNullOrWhiteSpace(home))
-        {
-            home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        }
+        var home = ResolveHomeDirectory();
 
         yield return Path.Combine(home, ".copilot");
 
@@ -266,13 +265,43 @@ internal static class CrossRuntimeReviewHomeAccessGuard
         yield return Path.Combine(home, ".cache", "opencode");
         yield return Path.Combine(cacheHome, "opencode");
 
-        var ghConfigDir = Environment.GetEnvironmentVariable("GH_CONFIG_DIR");
-        if (string.IsNullOrWhiteSpace(ghConfigDir))
+        yield return ResolveGhConfigDir();
+    }
+
+    /// <summary>
+    /// Resolves gh's config root from the requesting environment before the
+    /// rendered copilot environment overrides XDG_CONFIG_HOME.
+    /// </summary>
+    internal static string ResolveGhConfigDir()
+    {
+        var configured = Environment.GetEnvironmentVariable("GH_CONFIG_DIR");
+        if (!string.IsNullOrWhiteSpace(configured))
         {
-            ghConfigDir = Path.Combine(configHome, "gh");
+            return Path.GetFullPath(configured);
         }
 
-        yield return ghConfigDir;
+        var xdgConfigHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        if (!string.IsNullOrWhiteSpace(xdgConfigHome))
+        {
+            return Path.GetFullPath(Path.Combine(xdgConfigHome, "gh"));
+        }
+
+        var appData = Environment.GetEnvironmentVariable("AppData");
+        if ((IsWindowsOverride?.Invoke() ?? OperatingSystem.IsWindows())
+            && !string.IsNullOrWhiteSpace(appData))
+        {
+            return Path.GetFullPath(Path.Combine(appData, "GitHub CLI"));
+        }
+
+        return Path.GetFullPath(Path.Combine(ResolveHomeDirectory(), ".config", "gh"));
+    }
+
+    private static string ResolveHomeDirectory()
+    {
+        var home = Environment.GetEnvironmentVariable("HOME");
+        return string.IsNullOrWhiteSpace(home)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            : home;
     }
 
     internal static bool IsRegularFile(string path)

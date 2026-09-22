@@ -26,7 +26,7 @@ internal static class GuideSoloConductorCommand
 
     private static readonly string[] BuilderContractItems =
     [
-        "The conductor runs one builder at a time in the unit's isolated clone (step 6), outside every runtime's trusted folders. The copilot line uses a fresh, empty `COPILOT_HOME` and `XDG_CONFIG_HOME` per run (`mktemp -d`, removed after). Copilot itself runs `gh auth token` for credentials, so a signed-in real `gh` must be on PATH; item 3's no-`gh` rule covers the builder's own commands.",
+        "The conductor runs one builder at a time in the unit's isolated clone (step 6), outside every runtime's trusted folders. The copilot line uses a fresh, empty `COPILOT_HOME` and `XDG_CONFIG_HOME` per run (`mktemp -d`, removed after), and carries `GH_CONFIG_DIR=<operator-gh-config-root>`; replace that placeholder with gh's config root found in gh's documented order so `gh auth token` can find a `hosts.yml` token. Copilot itself runs `gh auth token` for credentials, so a signed-in real `gh` must be on PATH; item 3's no-`gh` rule covers the builder's own commands.",
         "The task prompt is a file the conductor writes and passes on stdin, except cursor, which takes it as an argument. Any OpenCode command shown without a prompt file carries `< /dev/null`, because with stdin open `opencode run` waits silently (measured), including in the background.",
         "The builder may edit and commit inside the clone and never pushes, opens a PR or runs `gh`; the conductor pushes, opens the PR and owns claims and transitions.",
         "What bounds the builder differs by runtime, and no measured invocation sandboxes shell commands, so the conductor reviews the clone's diff before pushing.",
@@ -102,7 +102,7 @@ internal static class GuideSoloConductorCommand
             new SoloConductorBuilderInvocation
             {
                 Runtime = CrossRuntimeReviewRuntimes.Copilot,
-                Command = "COPILOT_ALLOW_ALL= COPILOT_HOME=<fresh-empty-copilot-home> XDG_CONFIG_HOME=<fresh-empty-xdg-dir> copilot -C <isolated-clone> --model <model> [--reasoning-effort <effort>] --allow-all-tools --deny-tool 'shell(git push)' --deny-tool 'shell(gh)' --disable-builtin-mcps --no-ask-user --stream off --output-format json < <task-file>",
+                Command = "COPILOT_ALLOW_ALL= COPILOT_HOME=<fresh-empty-copilot-home> XDG_CONFIG_HOME=<fresh-empty-xdg-dir> GH_CONFIG_DIR=<operator-gh-config-root> copilot -C <isolated-clone> --model <model> [--reasoning-effort <effort>] --allow-all-tools --deny-tool 'shell(git push)' --deny-tool 'shell(gh)' --disable-builtin-mcps --no-ask-user --stream off --output-format json < <task-file>",
                 Enforcement = ModelRequiredPrefix
                     + "an inside write succeeded; a file-tool write and a literal shell redirect outside refused by path verification (not a sandbox); `git push` refused; other outside forms unmeasured.",
                 Measured = true,
