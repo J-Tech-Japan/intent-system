@@ -1,8 +1,8 @@
 # Release Notes — intent-cli v0.32.0
 
 > **PREPARED / NOT PUBLISHED.** This prepare-only note set records the measured
-> G795–G838 units (not every number in that span) for the `v0.32.0-preview.4` prerelease. It does not create a tag
-> or GitHub Release, publish a package, change a workflow or publish
+> G795–G848 units (not every number in that span) for the stable `v0.32.0` release. It does not create a tag or
+> GitHub Release, publish a package, change a workflow or publish
 > configuration, or change product source.
 
 No stable GitHub Release exists for v0.32.0; these notes are preparation
@@ -19,8 +19,9 @@ preparation is unchanged:
 
 `0.32.1` is a replaceable development placeholder, not a decision about the
 next real release. The EN and JA v0.32.1 files are planning scaffolds, not
-changelogs. This prepare-only slice makes no tag, no GitHub Release, no workflow
-change, and no product source change.
+changelogs. This prepare-only slice makes no tag, no GitHub Release, no package
+publish, no workflow or publish-configuration change, and no product source
+change.
 
 ## Preview.3: what changed since preview.2
 
@@ -92,6 +93,22 @@ preview.3. Changes a preview.3 user must act on:
   which is the one way this can block a preview.3 user mid-task. intent-cli
   never runs `orca` or creates a Run.
 
+## Stable: what changed since preview.4
+
+`v0.32.0-preview.4` (`ba496314af0602e593b46b3376d4beba4137f400`) was the
+preview baseline. The stable release carries these nine first-parent units;
+the scope qualifier on each line is part of the promise.
+
+- **G839 — PR #1826 / issue #1824; merge commit `ab50131426e5581db56f389c9599463a243f1080`** — recovery and `pr-transition` refusals now render named causes and empty refused plans, so **refusal output names the decision**.
+- **G840 — PR #1827 / issue #1825; merge commit `c66f49360ce53223f5820f0aa5017e6cd21c6d5e`** — the two known-flaky CLI tests use deterministic wait and poll seams, and **test timing is deterministic; product behavior is unchanged**.
+- **G841 — PR #1830 / issue #1828; merge commit `3da9e7a1aa29396c6879285ad19650b4af033e3d`** — packet.yaml reads use a real YAML parser with site-specific degrade/refuse behavior, so **packet.yaml parse failures have named causes**.
+- **G847 — PR #1837 / issue #1834; merge commit `cbe5475977d151f953d1235733e6d9688e0296f1`** — the three `gh api --input` JSON-payload routes refuse malformed bodies and bodies above 65,536 bytes; **65,536 bytes is intent-cli's own conservative limit, not a verified GitHub boundary**.
+- **G846 — PR #1838 / issue #1835; merge commit `103f4b869d4b5b39170e65e3230e3ac35c7c2aaf`** — size is visible before a GitHub write, with a named refusal and a 58,000-byte warning band; **58,000 bytes is intent-cli's own warning-band budget, not a verified GitHub boundary**.
+- **G845 — PR #1840 / issue #1836; merge commit `a24cf8abfb88a323b2f0efe04fe2481c746d9e9f`** — the four `gh --body-file` routes refuse malformed bodies and bodies above 65,536 bytes; **65,536 bytes is intent-cli's own conservative limit, not a verified GitHub boundary**.
+- **G842 — PR #1839 / issue #1829; merge commit `452fd0dd21968914ba61123a2f8f820e8183144e`** — Copilot and OpenCode join the cross-runtime reviewer, conductor, and builder runtime set, with `--model` required for both; **intent-cli renders text and never launches a reviewer, builder, or provider**.
+- **G849 — PR #1844 / issue #1841; merge commit `b2211f7ed619bbeee2b1d199233531f1d4e96edc`** — the Copilot reviewer invocation pins `GH_CONFIG_DIR` alongside the isolated XDG config; **GH_CONFIG_DIR is resolved at request time and remains protected**.
+- **G848 — PR #1843 / issue #1842; merge commit `a2431590f08336349be4edaa9ea5b1847f8aa533`** — on non-Windows, the provider-config source is refused when group or other permission bits are present; **on non-Windows, the opened source must have owner-only mode bits**.
+
 ## Independently measured minor justification
 
 The named product base is `cd276e20754db09337a94a8b973ddebdd1564ba3`. The
@@ -113,21 +130,23 @@ prepared. They are counted route additions within 0.32.0.
 Since preview.3 the compatibility ledger gained six command routes:
 `automation pr-created-stale-recovery`, `guide solo-conductor`, `review cross-runtime`, `review cross-runtime request`, `review cross-runtime record`, `review cross-runtime status`. Counted as rows in the Registered command table only (the table opened by `| Registered command |` and closed by `## Durable schemas and legacy inventory`, excluding the seven-row alias table). The measured row count went from 204 to 210 in both EN and JA mirrors. By operator decision (2026-09-15) these stay in the unreleased 0.32.0 minor and ship as `v0.32.0-preview.4` rather than opening 0.33.0. G837's `session-layer topology record-orca-run` and `session-layer topology orca-runs` are subcommands of the already-registered `session-layer topology` route and are **not counted** as route additions.
 
+Since preview.4 the nine stable units add no registered command route: Counted with the same Registered command table method: 210 rows at `ba496314af0602e593b46b3376d4beba4137f400` and 210 at `a2431590f08336349be4edaa9ea5b1847f8aa533`, aliases excluded; post-preview.4 registered-command additions = 0. G839, G840, G841, G847, G846, G845, G842, G849 and G848 change behavior, validation, runtimes, or test determinism within existing routes.
+
 The route decision is independently observable in the merged history: G796 is
 the six-kind event routing addition and G800 is the first-class research
 delegation route; the eight later routes are listed above.
 
 ## Measured version identities
 
-The named base was checked with a clean Release build:
+The named post-G848 base was checked with a clean Release build:
 
 ```text
 $ git rev-parse HEAD
-cd276e20754db09337a94a8b973ddebdd1564ba3
+a2431590f08336349be4edaa9ea5b1847f8aa533
 $ dotnet build IntentSystem.sln --configuration Release --no-restore; echo BUILD_RC:$?
 BUILD_RC:0
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.32.1-cd276e2-G837
+intent-cli 0.32.1-a243159-G849
 ```
 
 That normal identity is the `nextVersion` placeholder and is **not** v0.32.0.
@@ -137,7 +156,7 @@ The same base with the explicit release property was measured separately:
 $ dotnet build IntentSystem.sln --configuration Release --no-restore -p:Version=0.32.0; echo BUILD_RC:$?
 BUILD_RC:0
 $ dotnet src/IntentSystem.Cli/bin/Release/net10.0/IntentSystem.Cli.dll --version
-intent-cli 0.32.0-cd276e2-G837
+intent-cli 0.32.0-a243159-G849
 ```
 
 Published versioning is the third identity and is derived by `release.yml`,
@@ -154,13 +173,13 @@ governs local builds and dry runs only. A preview release tag such as
 `v0.32.0-preview.4` yields `VERSION=0.32.0-preview.4` the same way. This
 prepare-only slice created no tag.
 
-## Release inventory: exactly 33 shipped first-parent units
+## Release inventory: exactly 42 shipped first-parent units
 
 The shipped inventory is derived from the exact first-parent range. Git measured
-forty-one commits; the 33 shipped units below (G813 partial) each have one
-operator-observable outcome, while the G802, G804, and G830 release-prep commits and
-five claim state commits are classified in the accounting table but are not
-counted as shipped units:
+fifty-one commits; the 42 shipped units below (G813 partial) each have one
+operator-observable outcome, while the G802, G804, G830, and G838 release-prep
+commits and five claim state commits are classified in the accounting table but
+are not counted as shipped units:
 
 - G795 — PR #1740 / issue #1737; merge commit `1b3c7229cfe8c8f8565034a7e2220a94ac14785b`.
   **Operator-observable outcome:** canonical Architect, Orchestrator, Builder, Reviewer, and Steward role values accept the four legacy aliases while unknown roles are refused.
@@ -228,11 +247,29 @@ counted as shipped units:
   **Operator-observable outcome:** the new `automation pr-created-stale-recovery` route removes only the stale `intent-pr-created` label after an unmerged PR close, dry-run by default, refusing when identity-bound linkage, PR state, open-closing-PR or unheld-claim checks fail and on a host with no claims store (`claim-unavailable`).
 - G837 — PR #1821 / issue #1820; merge commit `cd276e20754db09337a94a8b973ddebdd1564ba3`.
   **Operator-observable outcome:** `session-layer topology record-orca-run` and read-only `session-layer topology orca-runs` record, show, validate and bootstrap an adopted Orca Run id on the team-shape seat or solo sidecar, and `team-mode set --write` refuses an effective-mode change while a binding exists; intent-cli never runs `orca` or creates a Run.
+- G839 — PR #1826 / issue #1824; merge commit `ab50131426e5581db56f389c9599463a243f1080`.
+  **Operator-observable outcome:** recovery and `pr-transition` refusals render named causes and empty refused plans, so command output no longer contradicts the decision.
+- G840 — PR #1827 / issue #1825; merge commit `c66f49360ce53223f5820f0aa5017e6cd21c6d5e`.
+  **Operator-observable outcome:** the two known-flaky CLI tests use deterministic wait-clock and monotonic poll seams, with exit diagnostics pinned to the child exit code.
+- G841 — PR #1830 / issue #1828; merge commit `3da9e7a1aa29396c6879285ad19650b4af033e3d`.
+  **Operator-observable outcome:** every packet.yaml read uses a real YAML parser, with named parse failures and site-specific degrade/refuse behavior.
+- G847 — PR #1837 / issue #1834; merge commit `cbe5475977d151f953d1235733e6d9688e0296f1`.
+  **Operator-observable outcome:** the three `gh api --input` JSON-payload routes refuse malformed bodies and bodies above 65,536 bytes; this is intent-cli's own conservative limit, not a verified GitHub boundary.
+- G846 — PR #1838 / issue #1835; merge commit `103f4b869d4b5b39170e65e3230e3ac35c7c2aaf`.
+  **Operator-observable outcome:** issue-body size is visible before a GitHub write, with a named refusal and a 58,000-byte warning band; both are intent-cli measurements, not verified GitHub boundaries.
+- G845 — PR #1840 / issue #1836; merge commit `a24cf8abfb88a323b2f0efe04fe2481c746d9e9f`.
+  **Operator-observable outcome:** the four `gh --body-file` routes refuse malformed bodies and bodies above 65,536 bytes; this is intent-cli's own conservative limit, not a verified GitHub boundary.
+- G842 — PR #1839 / issue #1829; merge commit `452fd0dd21968914ba61123a2f8f820e8183144e`.
+  **Operator-observable outcome:** Copilot and OpenCode are supported as cross-runtime reviewer, conductor, and builder runtimes, with `--model` required for both; intent-cli only renders text and never launches a process.
+- G849 — PR #1844 / issue #1841; merge commit `b2211f7ed619bbeee2b1d199233531f1d4e96edc`.
+  **Operator-observable outcome:** the Copilot reviewer invocation carries the resolved `GH_CONFIG_DIR` alongside the isolated XDG config, so a hosts.yml token remains reachable without reading that protected root.
+- G848 — PR #1843 / issue #1842; merge commit `a2431590f08336349be4edaa9ea5b1847f8aa533`.
+  **Operator-observable outcome:** on non-Windows, an OpenCode provider-config source with any group or other permission bit is refused on the opened handle; owner-only mode is required.
 
 ## First-parent accounting
 
 ```text
-$ git rev-list --first-parent --reverse v0.31.0..cd276e20754db09337a94a8b973ddebdd1564ba3
+$ git rev-list --first-parent --reverse v0.31.0..a2431590f08336349be4edaa9ea5b1847f8aa533
 1b3c7229cfe8c8f8565034a7e2220a94ac14785b
 09b1f4edca51f3acbbe3e901356866996f4be29f
 67c8578090f1a53e8894aeff88abd6cd8b83ff15
@@ -274,8 +311,18 @@ d5f72c10a26e4844fac38dbc362ab1d6052bc237
 1ff9e75d1ee80739a9ec8aeea8d905b60a757a86
 75d68523739318eb97932c6f55a35e547e00b769
 cd276e20754db09337a94a8b973ddebdd1564ba3
-$ git rev-list --first-parent --count v0.31.0..cd276e20754db09337a94a8b973ddebdd1564ba3
-41
+ba496314af0602e593b46b3376d4beba4137f400
+ab50131426e5581db56f389c9599463a243f1080
+c66f49360ce53223f5820f0aa5017e6cd21c6d5e
+3da9e7a1aa29396c6879285ad19650b4af033e3d
+cbe5475977d151f953d1235733e6d9688e0296f1
+103f4b869d4b5b39170e65e3230e3ac35c7c2aaf
+a24cf8abfb88a323b2f0efe04fe2481c746d9e9f
+452fd0dd21968914ba61123a2f8f820e8183144e
+b2211f7ed619bbeee2b1d199233531f1d4e96edc
+a2431590f08336349be4edaa9ea5b1847f8aa533
+$ git rev-list --first-parent --count v0.31.0..a2431590f08336349be4edaa9ea5b1847f8aa533
+51
 ```
 
 | first-parent commit | classification | release inventory |
@@ -321,12 +368,22 @@ $ git rev-list --first-parent --count v0.31.0..cd276e20754db09337a94a8b973ddebdd
 | `1ff9e75d1ee80739a9ec8aeea8d905b60a757a86` | G835 / PR #1817 / issue #1813 | included |
 | `75d68523739318eb97932c6f55a35e547e00b769` | G836 / PR #1819 / issue #1784, #1818 | included |
 | `cd276e20754db09337a94a8b973ddebdd1564ba3` | G837 / PR #1821 / issue #1820 | included |
+| `ba496314af0602e593b46b3376d4beba4137f400` | G838 / PR #1823 | prior release prep |
+| `ab50131426e5581db56f389c9599463a243f1080` | G839 / PR #1826 / issue #1824 | included |
+| `c66f49360ce53223f5820f0aa5017e6cd21c6d5e` | G840 / PR #1827 / issue #1825 | included |
+| `3da9e7a1aa29396c6879285ad19650b4af033e3d` | G841 / PR #1830 / issue #1828 | included |
+| `cbe5475977d151f953d1235733e6d9688e0296f1` | G847 / PR #1837 / issue #1834 | included |
+| `103f4b869d4b5b39170e65e3230e3ac35c7c2aaf` | G846 / PR #1838 / issue #1835 | included |
+| `a24cf8abfb88a323b2f0efe04fe2481c746d9e9f` | G845 / PR #1840 / issue #1836 | included |
+| `452fd0dd21968914ba61123a2f8f820e8183144e` | G842 / PR #1839 / issue #1829 | included |
+| `b2211f7ed619bbeee2b1d199233531f1d4e96edc` | G849 / PR #1844 / issue #1841 | included |
+| `a2431590f08336349be4edaa9ea5b1847f8aa533` | G848 / PR #1843 / issue #1842 | included |
 
-The first-parent range contains exactly these forty-one commits and nothing
-else; the table is not a changelog of second-parent commits. G802, G804, and G830 are
-prior release preparation for preview.1, preview.2, and preview.3. The five claim state
-commits were written to the child default branch by claim transactions; they
-carry no product change and are not units. G813 is included as a partial unit:
+The first-parent range contains exactly these fifty-one commits and nothing
+else; the table is not a changelog of second-parent commits. G802, G804, G830, and G838 are
+prior release preparation for preview.1, preview.2, preview.3, and preview.4. The five claim
+state commits were written to the child default branch by claim transactions; they carry no
+product change and are not units. G813 is included as a partial unit:
 its linkage issue #1774 remains open.
 
 ## Alias promise and compatibility boundary
@@ -365,10 +422,10 @@ in new guidance.
 ## Prepare-only verification
 
 `ReleaseNotesV0320G802Tests` compares the EN/JA unit/PR/issue/merge tuples,
-asserts the four alias statements in both mirrors, checks the three measured
-identities and exact forty-one-commit accounting, and deliberately fails on
-a one-field mirror mutation and on a stale measurement from the preview.3 base
-`e78b27d1e99247380fa7518d67470304fb1d7e7b`. `ReleasePackageMetadataTests` continues to guard
+pins all nine post-preview.4 units and qualifiers in both mirrors, checks the
+three measured identities and exact fifty-one-commit accounting, and
+deliberately fails on one-unit, one-qualifier, one-field mirror, stale-count,
+and stale-measurement mutations. `ReleasePackageMetadataTests` continues to guard
 the policy shape and demanded next-version placeholder. The diff is limited to
 the EN/JA v0.32.0 notes and tests; `eng/version.json` and the v0.32.1
 placeholders are untouched. It contains no tag, GitHub Release, package
