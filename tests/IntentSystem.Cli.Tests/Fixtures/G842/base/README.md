@@ -1,6 +1,6 @@
 # G842 back-compat goldens
 
-These files were generated from merge base `cbe5475977d151f953d1235733e6d9688e0296f1`.
+These files were generated from merge base `a24cf8abfb88a323b2f0efe04fe2481c746d9e9f`.
 
 From the detached base checkout, run the env-gated capture facts with:
 
