@@ -362,6 +362,51 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         Assert.Contains("not a regular file", refusal.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("copilot", "implementation", "prompt.md")]
+    [InlineData("copilot", "implementation", "invocation.txt")]
+    [InlineData("copilot", "design", "prompt.md")]
+    [InlineData("copilot", "design", "invocation.txt")]
+    [InlineData("opencode", "implementation", "prompt.md")]
+    [InlineData("opencode", "implementation", "invocation.txt")]
+    [InlineData("opencode", "design", "prompt.md")]
+    [InlineData("opencode", "design", "invocation.txt")]
+    public void Request_ZeroByteRenderedFile_RefusesWithoutWriting_AndAcceptsAfterDelete(
+        string runtime,
+        string kind,
+        string renderedName)
+    {
+        var outDir = Path.Combine(root, $"zero-byte-{runtime}-{kind}-{Path.GetFileNameWithoutExtension(renderedName)}");
+        var workspace = Path.Combine(root, $"zero-byte-workspace-{runtime}-{kind}");
+        var hasClone = kind == CrossRuntimeReviewRecord.KindImplementation;
+
+        var first = RequestAt(runtime, kind, workspace, outDir, hasClone);
+        Assert.True(first.ExitCode == 0, first.Output);
+
+        var renderedPath = Path.Combine(outDir, renderedName);
+        File.WriteAllBytes(renderedPath, []);
+        Assert.Equal(0, new FileInfo(renderedPath).Length);
+        var beforeRefusal = SnapshotOutDir(outDir);
+
+        var refusalResult = RequestAt(runtime, kind, workspace, outDir, hasClone);
+        Assert.Equal(1, refusalResult.ExitCode);
+        using (var refusal = JsonDocument.Parse(refusalResult.Output))
+        {
+            Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, refusal.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(
+                $"planned rendered path '{renderedPath}' is not a regular file.",
+                refusal.RootElement.GetProperty("detail").GetString());
+        }
+
+        Assert.Equal(beforeRefusal, SnapshotOutDir(outDir));
+        Assert.Equal(0, new FileInfo(renderedPath).Length);
+
+        File.Delete(renderedPath);
+        var accepted = RequestAt(runtime, kind, workspace, outDir, hasClone);
+        Assert.True(accepted.ExitCode == 0, accepted.Output);
+        Assert.True(new FileInfo(renderedPath).Length > 0);
+    }
+
     // ── compaction (R4-2) ───────────────────────────────────────────────
 
     [Theory]
@@ -1385,6 +1430,14 @@ public sealed class G842CrossRuntimeReviewRound7Tests : IDisposable
         Assert.Equal(1, result.ExitCode);
         Assert.Equal(CrossRuntimeReviewCauses.PathInvalid, JsonDocument.Parse(result.Output).RootElement.GetProperty("cause").GetString());
     }
+
+    private static string[] SnapshotOutDir(string outDir) =>
+        Directory.EnumerateFileSystemEntries(outDir)
+            .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal)
+            .Select(path => Directory.Exists(path)
+                ? $"{Path.GetFileName(path)}:directory"
+                : $"{Path.GetFileName(path)}:file:{Convert.ToBase64String(File.ReadAllBytes(path))}")
+            .ToArray();
 
     private void AssertExitMissing(string[] args) =>
         AssertExitMissingBoundedAsync(args).GetAwaiter().GetResult();
