@@ -83,3 +83,4 @@
   `<home>`; nothing else. The canary token is kept: it is the evidence, not a secret.
 
 - `copilot-implementation-live-4cc85cb5.jsonl`: the AC14 copilot implementation review of PR #1839 at head `4cc85cb5192a3e10d95990d6408e93f59871c360` (gpt-5.6-sol, effort high, recorded). It is committed in the next commit, so it is one commit behind the tip by design. Scrubbed under the rule above: scratch paths to `<scratch>`.
+- `copilot-implementation-live-f680bc67.jsonl`: the AC14 copilot implementation review of PR #1839 at head `f680bc6722b01f4e670da060c4af84d1501328c0` (gpt-5.6-sol, effort high, recorded, `approve`). It is committed in the next commit, so it is one commit behind the tip by design. It supersedes `copilot-implementation-live-4cc85cb5.jsonl` as the current-head evidence; that file stays as the earlier run. Scrubbed under the rule above: scratch paths to `<scratch>`.
