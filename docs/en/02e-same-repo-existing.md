@@ -6,6 +6,8 @@
 
 Keep the existing `<owner>/<implementation-repo>` and create a metadata branch (for example `main-metadata`) from its intended implementation base branch before initialization. Check out **only the metadata-branch checkout** for the initial host session. The implementation branch and existing code remain separate from host metadata work.
 
+This pattern sets up a multi-seat team; single-seat operators should follow the [single-seat section in 02a](02a-getting-started-orchestration.md#single-seat-team) instead.
+
 ## Initial prompts — choose exactly one
 
 ### Herdr-only

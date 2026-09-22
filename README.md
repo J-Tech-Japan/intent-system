@@ -67,6 +67,8 @@ intent-cli --version
 
 ### 3. Start with an AI agent
 
+These four patterns set up a multi-seat team; single-seat operators should follow the [single-seat section in the getting-started guide](docs/en/02a-getting-started-orchestration.md#single-seat-team) instead.
+
 Choose your onboarding pattern **before** making any files. Where will host
 metadata live, and are you starting a new project or adding intent-cli to one?
 
@@ -77,10 +79,12 @@ metadata live, and are you starting a new project or adding intent-cli to one?
 
 Each pattern is self-contained and gives two paste-ready initial prompts: prefer
 `herdr-only` for a collocated single-machine team because it has fewer
-dependencies, or choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked) for a
-distributed/multi-machine team or an existing agmsg investment. Record the
-choice with `intent-cli session-layer set`; the **four-thread model**, not a
-transport, is primary.
+dependencies, or choose deprecated `agmsg` + herdr (G829; still works; removal
+planned after consumers are checked) for a distributed/multi-machine team or an
+existing agmsg investment. Record the choice with
+`intent-cli session-layer set`. The **four-thread model** is the multi-seat
+model; `solo-conductor` is the single-seat team mode. Neither transport is
+primary.
 
 **Timer-loop alternative:**
 
@@ -125,12 +129,12 @@ each answer until a stop condition is reached.
 - **Developer reference:** [`docs/en/09-developer-reference.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/09-developer-reference.md)
   — packaged invocation smoke test, preview channel, version flow.
 - **Agent-message orchestration:** [`docs/en/12-agent-message-orchestration.md`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/en/12-agent-message-orchestration.md)
-  — the primary four-thread model and its supported transport choices (日本語: [`docs/ja/12`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/12-agent-message-orchestration.md)).
+  — the multi-seat (four-thread) model and `solo-conductor` single-seat team mode, with their supported transport choices (日本語: [`docs/ja/12`](https://github.com/J-Tech-Japan/intent-system/blob/main/docs/ja/12-agent-message-orchestration.md)).
 
-> **The four-thread model is the primary way to run intent-cli.** A
+> **The four-thread model is the multi-seat model; `solo-conductor` is the single-seat team mode.** A
 > **design** thread authors intent and packets; an **orchestrator** thread
 > moves ready packets through the workflow and paces the loopless
-> **implementation** and **review** threads over a local message bus (agmsg)
+> **implementation** and **review** threads over a local message bus (`agmsg` + herdr; deprecated under G829; still works; removal planned after consumers are checked)
 > instead of independent timers. The steady state is message-driven —
 > implementation/review replies wake the orchestrator, so routine fast polling
 > is not required — with a 30-minute-class design-thread watchdog loop as the
@@ -145,6 +149,8 @@ each answer until a stop condition is reached.
 > and review run as independent timer loops with no orchestrator thread
 > required. Exactly one mode applies per domain/repo — never mix the two for
 > the same domain/repo.
+
+> For the G833 single-seat contract, see the [orchestration reference](docs/en/12-agent-message-orchestration.md#solo-conductor-team-mode-g833--preview-through-1x) or run `intent-cli guide solo-conductor`.
 
 ---
 

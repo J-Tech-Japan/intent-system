@@ -6,6 +6,8 @@
 
 Create one new `<owner>/<implementation-repo>` with its intended implementation base branch, then create a metadata branch from it (for example `main-metadata`) before initialization. Check out **only that metadata-branch checkout** for this session. Product code and child PRs remain on the implementation base branch; host metadata stays on the metadata branch.
 
+This pattern sets up a multi-seat team; single-seat operators should follow the [single-seat section in 02a](02a-getting-started-orchestration.md#single-seat-team) instead.
+
 ## Initial prompts — choose exactly one
 
 ### Herdr-only

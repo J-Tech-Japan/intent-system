@@ -2,8 +2,9 @@
 
 ← [Create packets & publish issues](04-packets-issues.md) | [docs index](README.md)
 
-This page describes the **primary four-thread model** (design / orchestrator /
-implementation / review) and, in particular, how it stays safe when a single
+This page describes the **multi-seat model** in its four-thread shape (design /
+orchestrator / implementation / review) and the `solo-conductor` **single-seat
+team mode** (G833), with particular attention to how it stays safe when one
 host repository holds **several intent domains**. Choose the supported
 `herdr-only` transport for a collocated single-machine team because it has
 fewer dependencies, or choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked) for a

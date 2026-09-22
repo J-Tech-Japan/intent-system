@@ -7,6 +7,7 @@
 
 ホストメタデータの置き場とプロジェクトが新規 / 既存のどちらかを最初に選びます。
 各リンク先は意図的に自己完結しており、2 つのパターンの手順を混ぜる必要はありません。
+4 つの導入パターンは複数席チームを設定するため、単独席で運用する場合は代わりに [単独席チームセクション](#単独席チーム) を参照してください。
 
 | ホストメタデータ | 新規プロジェクト | 既存プロジェクトに intent-cli を追加 |
 | --- | --- | --- |
@@ -18,9 +19,11 @@
 各パターンは共存する貼り付け可能な最初のプロンプトをちょうど 2 つ提示します。4 agent 全員が
 1 台に同居する場合は、依存関係が少ない `herdr-only` を優先します。分散チームまたは既存の
 agmsg 投資があるチームには、非推奨（G829。引き続き動作し、利用者確認後に削除予定）の `agmsg` + herdr を選びます。どちらも
-`session-layer set` で記録します。primary なのはトランスポートではなく
-**4 スレッドモデル**です。最初のプロンプトの後はトランスポート固有の手順を混ぜず、記録された
-mode と現在のインストール済みガイドに従います。
+`session-layer set` で記録します。4 スレッドモデルは複数席モデルで、`solo-conductor` は
+単独席のチームモードです。どちらのトランスポートも主要ではありません。[agent メッセージ
+オーケストレーション contract](12-agent-message-orchestration.md) と
+`intent-cli guide solo-conductor` を参照してください。最初のプロンプトの後はトランスポート固有の
+手順を混ぜず、記録された mode と現在のインストール済みガイドに従います。
 
 このページは最小開始から最初の公開 packet までの **orchestration-first** 経路です。
 [プロジェクト開始](02-project-start.md) はトポロジーの正本となる定義であり、[agent メッセージ
@@ -34,11 +37,31 @@ pane を配置する前に、[チームのワークスペース配置（G637、p
 
 ## これから設定するもの
 
-4 スレッドモデルが **primary** です。design は intent を作成し、orchestration は
-調整し、implementation は子 PR を届け、review は確認します。1 台の
+4 スレッドモデルは **複数席モデル**です。design は intent を作成し、orchestration は
+調整し、implementation は子 PR を届け、review は確認します。`solo-conductor` は
+**単独席のチームモード**です。[G833 の agent メッセージオーケストレーション contract](12-agent-message-orchestration.md#solo-conductor-team-modeg833--preview-through-1x)
+と `intent-cli guide solo-conductor` を参照してください。1 台の
 マシンに同居するチームには、この経路では依存関係が少ない `herdr-only` トランスポートを優先します。
-分散 / 既存 agmsg のチーム向けの `agmsg` + herdr は非推奨（G829）ですが引き続き動作し、利用者確認後に削除予定です。primary は
-4 スレッドモデルだけであり、どちらのトランスポートでもありません。
+分散 / 既存 agmsg のチーム向けの `agmsg` + herdr は非推奨（G829）ですが引き続き動作し、利用者確認後に削除予定です。どちらのトランスポートも主要ではありません。
+
+## 単独席チーム
+
+ホストは[同じ初期化フロー](02-project-start.md#agent-が実行するコマンドメンテナトラブルシューティング向け)で初期化します。
+
+ホストの checkout で次の mode を記録します:
+
+```text
+intent-cli team-mode set --domain <domain> --team <team> --mode solo-conductor --write
+```
+
+**前方互換性。** G833 を含まない intent-cli は `.intent-cli/team-mode.json` に
+`solo-conductor` が含まれると拒否します。このファイル全体の読み込みが失敗し、そのホスト上の
+すべてのチームに影響します。mode を記録する前に、そのホストを読むすべての intent-cli を更新してください。
+
+`intent-cli guide bootstrap --domain <domain> --team <team>` で確認します。この command は
+`solo-conductor-team-bootstrap` を state `solo-conductor-complete` で出力します。
+続けて `intent-cli guide solo-conductor` に従います。seat roster も supervision cycle も必要ありません。
+[doc 12 の G833 solo conductor チームモード節](12-agent-message-orchestration.md#solo-conductor-team-modeg833--preview-through-1x) を参照してください。
 
 ## 1. repository と folder を選ぶ
 

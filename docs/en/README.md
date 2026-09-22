@@ -6,19 +6,23 @@
 
 `intent-cli` is **deterministic support tooling** for an intent-driven development workflow on top of GitHub.
 
+The patterns below set up a multi-seat team; single-seat operators should follow the [single-seat section in 02a](02a-getting-started-orchestration.md#single-seat-team) instead.
+
 Start by choosing one [self-contained onboarding pattern](02a-getting-started-orchestration.md):
 separate host repository or same-repository metadata branch, crossed with a
 brand-new or existing project. Each pattern has two paste-ready initial prompts.
 For a collocated single-machine team, prefer `herdr-only` because it has fewer
 dependencies; choose deprecated `agmsg` + herdr (still works; removal planned after consumers are checked) for distributed
-teams or an existing agmsg investment. The primary thing is the four-thread
-model, not either transport.
+teams or an existing agmsg investment. The four-thread model is the multi-seat
+model; `solo-conductor` is the single-seat team mode. Neither transport is
+primary. For the single-seat mode, see page 12 below or run
+`intent-cli guide solo-conductor`.
 
 ## Pages
 
 1. [Install](01-install.md)
 2. [Start a project](02-project-start.md)
-2a. [Getting started: the road to the first packet](02a-getting-started-orchestration.md) — minimal start and the primary four-thread model; collocated `herdr-only` is preferred because it has fewer dependencies
+2a. [Getting started: the road to the first packet](02a-getting-started-orchestration.md) — minimal start and the multi-seat four-thread model; collocated `herdr-only` is preferred because it has fewer dependencies; single-seat mode is `solo-conductor`
    - [Separate host × brand-new](02b-separate-host-brand-new.md)
    - [Separate host × existing](02c-separate-host-existing.md)
    - [Same repo × brand-new](02d-same-repo-brand-new.md)
@@ -26,7 +30,7 @@ model, not either transport.
 3. [Intent Storming & organize intents](03-intents.md)
 4. [Create packets & publish issues](04-packets-issues.md)
 4a. [GitHub workflow labels and what they mean](04a-workflow-labels.md) — label meanings and how to read them
-12. [Agent-message orchestration](12-agent-message-orchestration.md) — four-thread contract reference; single-domain vs multi-domain routing
+12. [Agent-message orchestration](12-agent-message-orchestration.md) — multi-seat (four-thread) model and `solo-conductor` single-seat team-mode reference; single-domain vs multi-domain routing
 
 ### Alternative paths
 

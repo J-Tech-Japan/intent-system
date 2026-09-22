@@ -9,6 +9,8 @@
 
 <!-- G608 field-tested wording: only the empty host repository; host repository だけ。 -->
 
+このパターンは複数席チームを設定するため、単独席で運用する場合は代わりに [02a の単独席チームセクション](02a-getting-started-orchestration.md#単独席チーム) に従ってください。
+
 ## 最初のプロンプト — ちょうど 1 つを選ぶ
 
 ### Herdr-only
