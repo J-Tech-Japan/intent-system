@@ -285,7 +285,7 @@ symlink は workspace 相対の entry 名だけを示して拒否し、workspace
 path も拒否します。link は kernel と同じく、後ろの `..` より先に辿って解決するので、
 `..` の前に置いた link で脱出を隠すことはできません。既存の 0 byte の rendered path は
 意図して regular でないものとして扱います。interop なしでは FIFO と空の file を
-区別できず、intent-cli は空の file を render しないためです。切り詰められた file は
+区別できず、intent-cli が空の file を書き出すことはないためです。切り詰められた file は
 削除してから再実行します。
 
 `cross-runtime-review-out-dir-not-empty` は既存の `opencode-exit.txt` または
