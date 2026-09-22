@@ -4,21 +4,22 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G804 / G830 / G838: v0.32.0 is a measured, prepare-only release line,
-/// remeasured for preview.4 at the post-G837 base. These guards keep the
-/// thirty-three shipped units, the forty-one-commit first-parent accounting
-/// (G802/G804/G830 prior prep, five claim state commits, G813 partial), the
-/// alias compatibility promise, the three version identities, EN/JA parity, and
-/// the unchanged version policy durable.
+/// G804 / G830 / G838 / G850: v0.32.0 is a measured, prepare-only release
+/// line, remeasured for the stable release at the post-G848 base. These
+/// guards keep the forty-two shipped units, the fifty-one-commit first-parent
+/// accounting (G802/G804/G830/G838 prior prep, five claim state commits,
+/// G813 partial), the alias compatibility promise, the three version
+/// identities, EN/JA parity, the since-preview.4 section, and the unchanged
+/// version policy durable.
 /// </summary>
 public sealed class ReleaseNotesV0320G802Tests
 {
-    private const string Base = "cd276e20754db09337a94a8b973ddebdd1564ba3";
-    private const string Range = "v0.31.0..cd276e20754db09337a94a8b973ddebdd1564ba3";
-    private const string NormalPlaceholderIdentity = "intent-cli 0.32.1-cd276e2-G837";
-    private const string ExplicitReleaseIdentity = "intent-cli 0.32.0-cd276e2-G837";
-    private const string PreviousBaseFragment = "e78b27d";
-    private const string PreviousBase = "e78b27d1e99247380fa7518d67470304fb1d7e7b";
+    private const string Base = "a2431590f08336349be4edaa9ea5b1847f8aa533";
+    private const string Range = "v0.31.0..a2431590f08336349be4edaa9ea5b1847f8aa533";
+    private const string NormalPlaceholderIdentity = "intent-cli 0.32.1-a243159-G849";
+    private const string ExplicitReleaseIdentity = "intent-cli 0.32.0-a243159-G849";
+    private const string PreviousBaseFragment = "cd276e2";
+    private const string PreviousBase = "cd276e20754db09337a94a8b973ddebdd1564ba3";
 
     private static readonly (string Unit, string Pr, string Issue, string Merge)[] Units =
     [
@@ -55,6 +56,15 @@ public sealed class ReleaseNotesV0320G802Tests
         ("G835", "#1817", "#1813", "1ff9e75d1ee80739a9ec8aeea8d905b60a757a86"),
         ("G836", "#1819", "#1784, #1818", "75d68523739318eb97932c6f55a35e547e00b769"),
         ("G837", "#1821", "#1820", "cd276e20754db09337a94a8b973ddebdd1564ba3"),
+        ("G839", "#1826", "#1824", "ab50131426e5581db56f389c9599463a243f1080"),
+        ("G840", "#1827", "#1825", "c66f49360ce53223f5820f0aa5017e6cd21c6d5e"),
+        ("G841", "#1830", "#1828", "3da9e7a1aa29396c6879285ad19650b4af033e3d"),
+        ("G847", "#1837", "#1834", "cbe5475977d151f953d1235733e6d9688e0296f1"),
+        ("G846", "#1838", "#1835", "103f4b869d4b5b39170e65e3230e3ac35c7c2aaf"),
+        ("G845", "#1840", "#1836", "a24cf8abfb88a323b2f0efe04fe2481c746d9e9f"),
+        ("G842", "#1839", "#1829", "452fd0dd21968914ba61123a2f8f820e8183144e"),
+        ("G849", "#1844", "#1841", "b2211f7ed619bbeee2b1d199233531f1d4e96edc"),
+        ("G848", "#1843", "#1842", "a2431590f08336349be4edaa9ea5b1847f8aa533"),
     ];
 
     private static readonly string[] FirstParentCommits =
@@ -99,13 +109,23 @@ public sealed class ReleaseNotesV0320G802Tests
         "2e6e6b62defcdcfed95f7f8036eb4a134ccc5adf",
         "1ff9e75d1ee80739a9ec8aeea8d905b60a757a86",
         "75d68523739318eb97932c6f55a35e547e00b769",
+        "cd276e20754db09337a94a8b973ddebdd1564ba3",
+        "ba496314af0602e593b46b3376d4beba4137f400",
+        "ab50131426e5581db56f389c9599463a243f1080",
+        "c66f49360ce53223f5820f0aa5017e6cd21c6d5e",
+        "3da9e7a1aa29396c6879285ad19650b4af033e3d",
+        "cbe5475977d151f953d1235733e6d9688e0296f1",
+        "103f4b869d4b5b39170e65e3230e3ac35c7c2aaf",
+        "a24cf8abfb88a323b2f0efe04fe2481c746d9e9f",
+        "452fd0dd21968914ba61123a2f8f820e8183144e",
+        "b2211f7ed619bbeee2b1d199233531f1d4e96edc",
         Base,
     ];
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NotesCoverExactlyTheThirtyThreeShippedUnitsThroughG837(string language)
+    public void NotesCoverExactlyTheFortyTwoShippedUnitsThroughG848(string language)
     {
         var notes = ReadNotes(language);
         var listed = Regex.Matches(notes, @"(?m)^- (G\d+) —")
@@ -113,14 +133,14 @@ public sealed class ReleaseNotesV0320G802Tests
             .ToArray();
 
         Assert.Equal(Units.Select(unit => unit.Unit), listed);
-        Assert.Equal(33, listed.Length);
+        Assert.Equal(Units.Length, listed.Length);
         if (language == "en")
         {
-            Assert.Contains("## Release inventory: exactly 33 shipped first-parent units", notes, StringComparison.Ordinal);
+            Assert.Contains("## Release inventory: exactly 42 shipped first-parent units", notes, StringComparison.Ordinal);
         }
         else
         {
-            Assert.Contains("## Release inventory: 正確に 33", notes, StringComparison.Ordinal);
+            Assert.Contains("## Release inventory: 正確に 42", notes, StringComparison.Ordinal);
         }
 
         foreach (var unit in Units)
@@ -138,19 +158,19 @@ public sealed class ReleaseNotesV0320G802Tests
             Assert.Contains(qualifier, entry, StringComparison.Ordinal);
         }
 
-        Console.WriteLine($"G838 AC3 {language}: shipped_units={listed.Length}; units={string.Join(',', listed)}; base={Base}; operator_outcomes={listed.Length}");
+        Console.WriteLine($"G850 AC3 {language}: shipped_units={listed.Length}; units={string.Join(',', listed)}; base={Base}; operator_outcomes={listed.Length}");
     }
 
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void NotesPinTheFortyOneCommitRangeAndClassifyEveryCommit(string language)
+    public void NotesPinTheFiftyOneCommitRangeAndClassifyEveryCommit(string language)
     {
         var notes = ReadNotes(language);
 
         Assert.Contains($"$ git rev-list --first-parent --reverse {Range}", notes, StringComparison.Ordinal);
-        Assert.Contains($"$ git rev-list --first-parent --count {Range}\n41", notes, StringComparison.Ordinal);
-        Assert.Equal(41, FirstParentCommits.Length);
+        Assert.Contains($"$ git rev-list --first-parent --count {Range}\n51", notes, StringComparison.Ordinal);
+        Assert.Equal(51, FirstParentCommits.Length);
         foreach (var commit in FirstParentCommits)
         {
             Assert.Contains(commit, notes, StringComparison.Ordinal);
@@ -163,14 +183,15 @@ public sealed class ReleaseNotesV0320G802Tests
         var includedCount = tableRows.Count(row => row.Classification is "included" or "partial unit, included");
         var priorPrepCount = tableRows.Count(row => row.Classification == "prior release prep");
         var claimStateCount = tableRows.Count(row => row.Classification == "claim state commit, not a unit");
-        Assert.Equal(33, includedCount);
-        Assert.Equal(3, priorPrepCount);
+        Assert.Equal(Units.Length, includedCount);
+        Assert.Equal(4, priorPrepCount);
         Assert.Equal(5, claimStateCount);
         Assert.Contains("G802 / PR #1751 / issue #1750", notes, StringComparison.Ordinal);
         Assert.Contains("G804 / PR #1755", notes, StringComparison.Ordinal);
         Assert.Contains("G830 / PR #1804 / issue #1803", notes, StringComparison.Ordinal);
+        Assert.Contains("G838 / PR #1823", notes, StringComparison.Ordinal);
         Assert.Contains("G813 / PR #1781 / linkage issue #1774 (not closed)", notes, StringComparison.Ordinal);
-        Console.WriteLine($"G838 AC2 {language}: first_parent_count={tableRows.Length}; included={includedCount}; prior_prep={priorPrepCount}; claim_state={claimStateCount}; unclassified=0");
+        Console.WriteLine($"G850 AC3 {language}: first_parent_count={tableRows.Length}; included={includedCount}; prior_prep={priorPrepCount}; claim_state={claimStateCount}; unclassified={tableRows.Length - includedCount - priorPrepCount - claimStateCount}");
     }
 
     [Theory]
@@ -215,6 +236,7 @@ public sealed class ReleaseNotesV0320G802Tests
 
     [Theory]
     [InlineData("named-base")]
+    [InlineData("prose-base")]
     [InlineData("normal-identity")]
     [InlineData("explicit-identity")]
     public void StaleMeasurementFragmentFailsTheCriterion4Guard(string segment)
@@ -222,15 +244,22 @@ public sealed class ReleaseNotesV0320G802Tests
         var notes = ReadNotes("en");
         var mutated = segment switch
         {
-            "named-base" => notes.Replace($"`{Base}`", $"`{PreviousBase}`", StringComparison.Ordinal),
-            "normal-identity" => notes.Replace(NormalPlaceholderIdentity, "intent-cli 0.32.1-e78b27d-G829", StringComparison.Ordinal),
-            "explicit-identity" => notes.Replace(ExplicitReleaseIdentity, "intent-cli 0.32.0-e78b27d-G829", StringComparison.Ordinal),
+            "named-base" => notes.Replace(
+                $"$ git rev-parse HEAD\n{Base}",
+                $"$ git rev-parse HEAD\n{PreviousBase}",
+                StringComparison.Ordinal),
+            "normal-identity" => notes.Replace(NormalPlaceholderIdentity, "intent-cli 0.32.1-cd276e2-G837", StringComparison.Ordinal),
+            "explicit-identity" => notes.Replace(ExplicitReleaseIdentity, "intent-cli 0.32.0-cd276e2-G837", StringComparison.Ordinal),
+            "prose-base" => notes.Replace(
+                $"The named product base is `{Base}`",
+                $"The named product base is `{PreviousBase}`",
+                StringComparison.Ordinal),
             _ => throw new ArgumentOutOfRangeException(nameof(segment), segment, null),
         };
 
         Assert.False(MeasurementSegmentsAreCurrent(mutated));
         Assert.Contains(PreviousBaseFragment, mutated, StringComparison.Ordinal);
-        Console.WriteLine($"G804 AC4 stale mutation: segment={segment}; stale_fragment={PreviousBaseFragment}; guard_passed=False; result=FAIL (expected guard refusal)");
+        Console.WriteLine($"G850 AC4 stale mutation: segment={segment}; stale_fragment={PreviousBaseFragment}; guard_passed=False; result=FAIL (expected guard refusal)");
     }
 
     [Fact]
@@ -257,6 +286,127 @@ public sealed class ReleaseNotesV0320G802Tests
 
         Assert.False(english.SequenceEqual(mutated));
         Console.WriteLine($"G804 AC7 parity mutation: changed=issue #1737->#9999; equal={english.SequenceEqual(mutated)}; result=FAIL (expected guard)");
+    }
+
+    private static readonly (string Unit, string EnQualifier, string JaQualifier)[] PostPreview4Units =
+    [
+        ("G839", "refusal output names the decision", "refusal output は decision をそのまま示します"),
+        ("G840", "test timing is deterministic; product behavior is unchanged", "test timing は deterministic で、product behavior は不変です"),
+        ("G841", "packet.yaml parse failures have named causes", "packet.yaml の parse failure は named cause になります"),
+        ("G847", "65,536 bytes is intent-cli's own conservative limit, not a verified GitHub boundary", "65,536 bytes は intent-cli 固有の conservative limit で、GitHub の verified boundary ではありません"),
+        ("G846", "58,000 bytes is intent-cli's own warning-band budget, not a verified GitHub boundary", "58,000 bytes は intent-cli 固有の warning-band budget で、GitHub の verified boundary ではありません"),
+        ("G845", "65,536 bytes is intent-cli's own conservative limit, not a verified GitHub boundary", "65,536 bytes は intent-cli 固有の conservative limit で、GitHub の verified boundary ではありません"),
+        ("G842", "intent-cli renders text and never launches a reviewer, builder, or provider", "intent-cli は text を render するだけで、reviewer・builder・provider を起動しません"),
+        ("G849", "GH_CONFIG_DIR is resolved at request time and remains protected", "GH_CONFIG_DIR は request 時の値で、protected root のままです"),
+        ("G848", "on non-Windows, the opened source must have owner-only mode bits", "non-Windows では、open 済みの source に owner-only mode bits だけを認めます"),
+    ];
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void StableSectionNamesEveryPostPreview4UnitAndQualifier(string language)
+    {
+        var notes = ReadNotes(language);
+        AssertStableSection(notes, language);
+
+        var section = ExtractStableSection(notes, language);
+        var listed = Regex.Matches(section, @"(?m)^- \*\*(G\d+) —")
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
+        var qualifiers = PostPreview4Units
+            .Select(unit => language == "en" ? unit.EnQualifier : unit.JaQualifier)
+            .ToArray();
+
+        Console.WriteLine($"G850 AC2 {language}: section_units={listed.Length}; units={string.Join(',', listed)}; qualifiers={qualifiers.Length}; parity_source={language}");
+    }
+
+    [Fact]
+    public void StableSectionEnglishAndJapaneseHaveIdenticalTuples()
+    {
+        var english = ParseStableInventory(ReadNotes("en"));
+        var japanese = ParseStableInventory(ReadNotes("ja"));
+
+        Assert.Equal(Units.Skip(Units.Length - PostPreview4Units.Length), english);
+        Assert.Equal(english, japanese);
+        Console.WriteLine($"G850 AC2 parity: en=ja; tuples={english.Count}; units={string.Join(',', english.Select(unit => unit.Unit))}");
+    }
+
+    [MemberData(nameof(StableSectionUnitMutationCases))]
+    [Theory]
+    public void StableSectionUnitRemovalFailsTheGuard(string language, string unit)
+    {
+        var notes = ReadNotes(language);
+        var section = ExtractStableSection(notes, language);
+        var entry = FindStableEntry(section, unit);
+        var mutated = notes.Replace(entry, string.Empty, StringComparison.Ordinal);
+
+        Assert.ThrowsAny<Exception>(() => AssertStableSection(mutated, language));
+        Console.WriteLine($"G850 AC2 unit mutation: language={language}; unit={unit}; guard_passed=False; result=FAIL (expected guard refusal)");
+    }
+
+    [MemberData(nameof(StableSectionQualifierMutationCases))]
+    [Theory]
+    public void StableSectionQualifierRemovalFailsTheGuard(string language, string unit, string qualifier)
+    {
+        var notes = ReadNotes(language);
+        var section = ExtractStableSection(notes, language);
+        var mutated = notes.Replace(qualifier, "REMOVED", StringComparison.Ordinal);
+
+        Assert.DoesNotContain(qualifier, FindStableEntry(ExtractStableSection(mutated, language), unit), StringComparison.Ordinal);
+        Assert.ThrowsAny<Exception>(() => AssertStableSection(mutated, language));
+        Console.WriteLine($"G850 AC2 qualifier mutation: language={language}; unit={unit}; qualifier={qualifier}; guard_passed=False; result=FAIL (expected guard refusal)");
+    }
+
+    public static IEnumerable<object[]> StableSectionUnitMutationCases() =>
+        from language in new[] { "en", "ja" }
+        from unit in PostPreview4Units
+        select new object[] { language, unit.Unit };
+
+    public static IEnumerable<object[]> StableSectionQualifierMutationCases() =>
+        from language in new[] { "en", "ja" }
+        from unit in PostPreview4Units
+        select new object[]
+        {
+            language,
+            unit.Unit,
+            language == "en" ? unit.EnQualifier : unit.JaQualifier,
+        };
+
+    [Theory]
+    [InlineData("shipped-unit-count")]
+    [InlineData("first-parent-count")]
+    public void PreviousThirtyThreeAndFortyOneCountsFailTheStableGuard(string segment)
+    {
+        var notes = ReadNotes("en");
+        var mutated = segment switch
+        {
+            "shipped-unit-count" => notes.Replace(
+                "## Release inventory: exactly 42 shipped first-parent units",
+                "## Release inventory: exactly 33 shipped first-parent units",
+                StringComparison.Ordinal),
+            "first-parent-count" => notes.Replace(
+                $"$ git rev-list --first-parent --count {Range}\n51",
+                $"$ git rev-list --first-parent --count {Range}\n41",
+                StringComparison.Ordinal),
+            _ => throw new ArgumentOutOfRangeException(nameof(segment), segment, null),
+        };
+
+        if (segment == "shipped-unit-count")
+        {
+            Assert.ThrowsAny<Exception>(() => Assert.Contains(
+                "## Release inventory: exactly 42 shipped first-parent units",
+                mutated,
+                StringComparison.Ordinal));
+        }
+        else
+        {
+            Assert.ThrowsAny<Exception>(() => Assert.Contains(
+                $"$ git rev-list --first-parent --count {Range}\n51",
+                mutated,
+                StringComparison.Ordinal));
+        }
+
+        Console.WriteLine($"G850 AC3 stale-count mutation: segment={segment}; stale_value={(segment == "shipped-unit-count" ? "33" : "41")}; guard_passed=False; result=FAIL (expected guard refusal)");
     }
 
     private static readonly string[] PostPreview2MinorJustificationRoutes =
@@ -294,8 +444,8 @@ public sealed class ReleaseNotesV0320G802Tests
         Assert.Contains("no product source", normalized, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("2026-09-15", normalized, StringComparison.Ordinal);
         Assert.Contains("record-orca-run", normalized, StringComparison.Ordinal);
-        Assert.Contains("G795–G838", notes, StringComparison.Ordinal);
-        Assert.Contains("v0.32.0-preview.4` prerelease", notes, StringComparison.Ordinal);
+        Assert.Contains("G795–G848", notes, StringComparison.Ordinal);
+        Assert.Contains("v0.32.0-preview.4", notes, StringComparison.Ordinal);
         Assert.Contains(Normalize(CountingMethodSentence(language)), normalized, StringComparison.Ordinal);
 
         foreach (var route in PostPreview2MinorJustificationRoutes)
@@ -312,6 +462,54 @@ public sealed class ReleaseNotesV0320G802Tests
 
         var routeCount = PostPreview2MinorJustificationRoutes.Length + PostPreview3MinorJustificationRoutes.Length;
         Console.WriteLine($"G838 AC4 {language}: routes_counted=G796,G800; G803=not counted; alias/config/guide/npm=not counted; prepare_only=true; routes={routeCount}");
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void StableRouteDecisionUsesTheRegisteredTableAtBothBases(string language)
+    {
+        var notes = ReadNotes(language);
+        var normalized = Normalize(notes);
+        var paragraph = ExtractStableMinorJustificationRouteParagraph(notes, language);
+
+        Assert.Contains("210", paragraph, StringComparison.Ordinal);
+        Assert.Contains(StableCountingMethodSentence(language), normalized, StringComparison.Ordinal);
+        Assert.Contains("post-preview.4", normalized, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("registered-command additions = 0", normalized, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("G839", paragraph, StringComparison.Ordinal);
+        Assert.Contains("G840", paragraph, StringComparison.Ordinal);
+        Assert.Contains("G841", paragraph, StringComparison.Ordinal);
+        Assert.Contains("G847", paragraph, StringComparison.Ordinal);
+        Assert.Contains("G846", paragraph, StringComparison.Ordinal);
+        Assert.Contains("G845", paragraph, StringComparison.Ordinal);
+        Assert.Contains("G842", paragraph, StringComparison.Ordinal);
+        Assert.Contains("G849", paragraph, StringComparison.Ordinal);
+        Assert.Contains("G848", paragraph, StringComparison.Ordinal);
+
+        var registeredRowCounts = Regex.Matches(paragraph, @"\b210\b")
+            .Select(match => int.Parse(match.Value))
+            .ToArray();
+        var routeCountMatch = Regex.Match(paragraph, @"registered-command additions = (?<count>\d+)");
+        Assert.True(routeCountMatch.Success);
+        var postPreview4RouteCount = int.Parse(routeCountMatch.Groups["count"].Value);
+        Assert.Equal(new[] { 210, 210 }, registeredRowCounts);
+        Assert.Equal(0, postPreview4RouteCount);
+        Console.WriteLine($"G850 AC4 {language}: preview4_registered_rows={registeredRowCounts[0]}; stable_registered_rows={registeredRowCounts[1]}; post_preview4_route_additions={postPreview4RouteCount}; route_count={postPreview4RouteCount}; aliases_excluded=true");
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void StableRouteCountingSentenceMutationFailsTheGuard(string language)
+    {
+        var notes = ReadNotes(language);
+        var sentence = StableCountingMethodSentence(language);
+        var mutated = notes.Replace(sentence, "The registered table was counted differently.", StringComparison.Ordinal);
+
+        Assert.DoesNotContain(sentence, mutated, StringComparison.Ordinal);
+        Assert.ThrowsAny<Exception>(() => Assert.Contains(sentence, mutated, StringComparison.Ordinal));
+        Console.WriteLine($"G850 AC4 counting-method mutation: language={language}; guard_passed=False; result=FAIL (expected guard refusal)");
     }
 
     [Fact]
@@ -502,10 +700,10 @@ public sealed class ReleaseNotesV0320G802Tests
     }
 
     [Theory]
-    [InlineData("en", "G795–G838")]
-    [InlineData("ja", "G795–G838")]
-    [InlineData("en", "v0.32.0-preview.4` prerelease")]
-    [InlineData("ja", "v0.32.0-preview.4` prerelease")]
+    [InlineData("en", "G795–G848")]
+    [InlineData("ja", "G795–G848")]
+    [InlineData("en", "v0.32.0-preview.4")]
+    [InlineData("ja", "v0.32.0-preview.4")]
     public void BannerWordingMutationFailsTheGuard_G838(string language, string bannerLiteral)
     {
         var notes = ReadNotes(language);
@@ -516,10 +714,51 @@ public sealed class ReleaseNotesV0320G802Tests
         Console.WriteLine($"G838 AC9 banner mutation: language={language}; literal={bannerLiteral}; guard_passed=False; result=FAIL (expected guard refusal)");
     }
 
+    private static void AssertStableSection(string notes, string language)
+    {
+        var section = ExtractStableSection(notes, language);
+        var listed = Regex.Matches(section, @"(?m)^- \*\*(G\d+) —")
+            .Select(match => match.Groups[1].Value)
+            .ToArray();
+
+        Assert.Equal(PostPreview4Units.Select(unit => unit.Unit), listed);
+        Assert.Equal(PostPreview4Units.Length, listed.Length);
+        foreach (var unit in PostPreview4Units)
+        {
+            var source = Units.Single(candidate => candidate.Unit == unit.Unit);
+            var entry = FindStableEntry(section, unit.Unit);
+            Assert.NotEmpty(entry);
+            Assert.Contains($"PR {source.Pr} / issue {source.Issue};", entry, StringComparison.Ordinal);
+            Assert.Contains($"merge commit `{source.Merge}`", entry, StringComparison.Ordinal);
+            var qualifier = language == "en" ? unit.EnQualifier : unit.JaQualifier;
+            Assert.Contains(qualifier, entry, StringComparison.Ordinal);
+        }
+    }
+
     private static string FindEntry(string notes, string unit)
     {
         var match = Regex.Match(notes, $"(?ms)^- {Regex.Escape(unit)} —.*?(?=^- |^## |\\z)");
         return match.Success ? match.Value : string.Empty;
+    }
+
+    private static string FindStableEntry(string section, string unit)
+    {
+        var match = Regex.Match(section, $"(?ms)^- \\*\\*{Regex.Escape(unit)} —.*?(?=^- \\*\\*G|^## |\\z)");
+        return match.Success ? match.Value : string.Empty;
+    }
+
+    private static IReadOnlyList<(string Unit, string Pr, string Issue, string Merge)> ParseStableInventory(string notes)
+    {
+        var section = ExtractStableSection(notes, notes.Contains("## Stable: what changed since preview.4", StringComparison.Ordinal) ? "en" : "ja");
+        return Regex.Matches(
+                section,
+                @"(?ms)^- \*\*(G\d+) — PR (#\d+) / issue (#\d+(?:, #\d+)*); merge commit `([0-9a-f]{40})`\*\*")
+            .Select(match => (
+                match.Groups[1].Value,
+                match.Groups[2].Value,
+                match.Groups[3].Value,
+                match.Groups[4].Value))
+            .ToArray();
     }
 
     private static IEnumerable<(string Unit, string Qualifier)> InventoryScopeQualifiers(string language) =>
@@ -600,6 +839,14 @@ public sealed class ReleaseNotesV0320G802Tests
             _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
         };
 
+    private static string StableCountingMethodSentence(string language) =>
+        language switch
+        {
+            "en" => "Counted with the same Registered command table method: 210 rows at `ba496314af0602e593b46b3376d4beba4137f400` and 210 at `a2431590f08336349be4edaa9ea5b1847f8aa533`, aliases excluded; post-preview.4 registered-command additions = 0.",
+            "ja" => "同じ Registered command table の方法で数えると、alias table を除く行数は `ba496314af0602e593b46b3376d4beba4137f400` で 210、`a2431590f08336349be4edaa9ea5b1847f8aa533` で 210、post-preview.4 registered-command additions = 0 です。",
+            _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
+        };
+
     private static string ExtractPreviewSection(string notes, string language, int previewNumber)
     {
         var heading = language switch
@@ -611,6 +858,18 @@ public sealed class ReleaseNotesV0320G802Tests
                 4 => "## Preview.4: preview.3 からの変更",
                 _ => throw new ArgumentOutOfRangeException(nameof(previewNumber), previewNumber, null),
             },
+            _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
+        };
+        var match = Regex.Match(notes, $@"(?ms)^{Regex.Escape(heading)}.*?(?=^## |\z)");
+        return match.Success ? match.Value : string.Empty;
+    }
+
+    private static string ExtractStableSection(string notes, string language)
+    {
+        var heading = language switch
+        {
+            "en" => "## Stable: what changed since preview.4",
+            "ja" => "## Stable: preview.4 以降の変更",
             _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
         };
         var match = Regex.Match(notes, $@"(?ms)^{Regex.Escape(heading)}.*?(?=^## |\z)");
@@ -645,6 +904,26 @@ public sealed class ReleaseNotesV0320G802Tests
         return end >= 0 ? notes[start..end] : notes[start..];
     }
 
+    private static string ExtractStableMinorJustificationRouteParagraph(string notes, string language)
+    {
+        var marker = language switch
+        {
+            "en" => "Since preview.4 the nine stable units add no registered command route:",
+            "ja" => "preview.4 以降の stable unit 九件には registered command route の追加がありません:",
+            _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
+        };
+        var start = notes.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Missing stable minor-justification marker: {marker}");
+        var nextMarker = language switch
+        {
+            "en" => "The route decision is independently observable",
+            "ja" => "merged history から route の判断を再現できます",
+            _ => throw new ArgumentOutOfRangeException(nameof(language), language, null),
+        };
+        var end = notes.IndexOf(nextMarker, start + marker.Length, StringComparison.Ordinal);
+        return end >= 0 ? notes[start..end] : notes[start..];
+    }
+
     private static IReadOnlyList<(string Unit, string Pr, string Issue, string Merge)> ParseInventory(string notes) =>
         Regex.Matches(
                 notes,
@@ -662,9 +941,17 @@ public sealed class ReleaseNotesV0320G802Tests
     {
         var namedBase = Regex.Match(
             notes,
-            @"(?m)^(?:The named product base is|named product base は) `(?<base>[0-9a-f]{40})`");
+            @"(?m)^\$ git rev-parse HEAD\r?\n(?<base>[0-9a-f]{40})");
         if (!namedBase.Success || namedBase.Groups["base"].Value != Base ||
             namedBase.Value.Contains(PreviousBaseFragment, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // The minor-justification prose names the base too; a stale SHA there is
+        // as wrong as a stale measurement block (G850 review at 3ca5533d).
+        var prose = Regex.Match(notes, @"(?:named product base is|named product base は) `(?<base>[0-9a-f]{40})`");
+        if (!prose.Success || prose.Groups["base"].Value != Base)
         {
             return false;
         }
