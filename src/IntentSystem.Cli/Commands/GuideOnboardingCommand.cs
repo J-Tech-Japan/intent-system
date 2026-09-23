@@ -72,14 +72,14 @@ internal static class GuideOnboardingCommand
                 {
                     Order = 1,
                     Command = "intent-cli guide model --format json",
-                    Purpose = "Learn the chat-first / CLI-internal collaboration model (roles: human / AI agent / intent-cli / host repo, primary data paths, optional advanced runtime, hard rules) AND the PRIMARY execution orchestration model for autonomous multi-thread work (design / orchestrator / implementation / review over agmsg, message-driven steady state, timer-loop as the simpler alternative).",
+                    Purpose = "Learn the chat-first / CLI-internal collaboration model (roles: human / AI agent / intent-cli / host repo, primary data paths, optional advanced runtime, hard rules) AND the execution orchestration model for autonomous work: the transport-neutral role model in three shapes (four-thread, five-thread, `solo-conductor`), a message-driven steady state over the recorded session transport, and timer-loop as the simpler alternative.",
                     NoMutation = "Pure read; emits a static description and never touches the file system."
                 },
                 new GuideOnboardingStep
                 {
                     Order = 2,
                     Command = "intent-cli guide orchestrator-thread --domain <domain> --target-repo <owner/repo> --agent <agent> --format markdown",
-                    Purpose = "G540: reach the full orchestrator-thread setup checklist directly from onboarding — the PRIMARY four-thread model's setup intake over the selected session transport (missing-inputs / setup-ready / blocked), role prompts, mode separation, role boundary and design↔orchestrator double-check rule, and safety-net guidance. Not required for a single-thread/timer-loop setup (see `guide prompt-matrix` instead).",
+                    Purpose = "G540: reach the full orchestrator-thread setup checklist directly from onboarding — the multi-seat setup intake over the selected session transport (missing-inputs / setup-ready / blocked), role prompts, mode separation, role boundary and design↔orchestrator double-check rule, and safety-net guidance. Not required for a single-thread/timer-loop setup (see `guide prompt-matrix` instead). A single-seat team records `solo-conductor` (G833) and follows `intent-cli guide solo-conductor` instead.",
                     NoMutation = "Pure read; emits a static description and never touches the file system or agmsg state."
                 },
                 // G570: a fresh agent must learn WHICH TRANSPORT this team runs

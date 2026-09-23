@@ -49,9 +49,9 @@ internal static class SessionLayerMode
     public const string TransportPreferenceSentence =
         "herdr-only is the preferred transport because it has fewer dependencies. "
         + AgmsgDeprecationNotice
-        + " The four-thread model itself "
-        + "(design / orchestrator / implementation / review) is PRIMARY and unqualified in both modes; no transport "
-        + "is primary.";
+        + " Team shape is independent of the transport: the transport-neutral role model "
+        + "(design / orchestrator / implementation / review) is supported in three shapes - four-thread, five-thread "
+        + "and `solo-conductor` (G833; `intent-cli guide solo-conductor`) - and no transport is primary.";
 
     /// <summary>One team runs one mode; mixed delivery is a contract violation.</summary>
     public const string ExclusivitySentence =

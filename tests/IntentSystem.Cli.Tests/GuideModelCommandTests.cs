@@ -78,7 +78,8 @@ public sealed class GuideModelCommandTests
         Assert.Contains("## Session layer (transport for the threads)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("preview", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(SessionLayerMode.TransportPreferenceSentence, output, StringComparison.Ordinal);
-        Assert.Contains("PRIMARY and unqualified in both modes", output, StringComparison.Ordinal);
+        Assert.Contains("Team shape is independent of the transport: the transport-neutral role model (design / orchestrator / implementation / review) is supported in three shapes - four-thread, five-thread and `solo-conductor` (G833; `intent-cli guide solo-conductor`) - and no transport is primary.", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIMARY and unqualified in both modes", output, StringComparison.Ordinal);
     }
 
     [Fact]
