@@ -820,8 +820,7 @@ operator ruling of 2026-08-01 it is now selectable rather than fixed.
   members are distributed across machines or the team already invests in agmsg.
   `agmsg` remains the default when nothing is recorded; removal is planned for a
   later release after consumers are checked.
-- **The four-thread model is PRIMARY** and unqualified in both modes, exactly
-  as G540 ruled; neither transport is primary.
+- **Team shape is independent of the transport.** The transport-neutral role model is supported in three shapes - four-thread, five-thread and `solo-conductor` (ADR 0015) - and neither transport is primary.
 - **One mode per team.** Mixing agmsg and herdr-only delivery inside one team is
   a contract violation, not a fallback: two transports mean two views of who was
   told what.

@@ -34,7 +34,9 @@ public sealed class GuideOnboardingCommandTests
             writer);
 
         Assert.Equal(0, exitCode);
-        using var document = JsonDocument.Parse(writer.ToString());
+        var output = writer.ToString();
+        Assert.DoesNotContain("PRIMARY", output, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
 
         var sequence = root.GetProperty("first_call_sequence");
@@ -76,7 +78,10 @@ public sealed class GuideOnboardingCommandTests
 
         var orchestratorStep = Assert.Single(steps, s => s.GetProperty("command").GetString()!
             .StartsWith("intent-cli guide orchestrator-thread", StringComparison.Ordinal));
-        Assert.Contains("PRIMARY four-thread model", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+        var orchestratorPurpose = orchestratorStep.GetProperty("purpose").GetString()!;
+        Assert.Contains("multi-seat setup intake", orchestratorPurpose, StringComparison.Ordinal);
+        Assert.Contains("A single-seat team records `solo-conductor` (G833) and follows `intent-cli guide solo-conductor` instead.", orchestratorPurpose, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIMARY four-thread model's setup intake", orchestratorPurpose, StringComparison.Ordinal);
         Assert.Contains("selected session transport", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
         Assert.Contains("double-check", orchestratorStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
 
@@ -90,7 +95,9 @@ public sealed class GuideOnboardingCommandTests
         // guide model's own purpose now names the primary execution orchestration model too.
         var modelStep = steps.Single(s => s.GetProperty("command").GetString()!
             .StartsWith("intent-cli guide model", StringComparison.Ordinal));
-        Assert.Contains("PRIMARY execution orchestration model", modelStep.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+        var modelPurpose = modelStep.GetProperty("purpose").GetString()!;
+        Assert.Contains("AND the execution orchestration model for autonomous work: the transport-neutral role model in three shapes (four-thread, five-thread, `solo-conductor`), a message-driven steady state over the recorded session transport, and timer-loop as the simpler alternative.", modelPurpose, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIMARY execution orchestration model", modelPurpose, StringComparison.Ordinal);
 
         var sessionStep = steps.Single(s => s.GetProperty("command").GetString()!
             .StartsWith("intent-cli session-layer show", StringComparison.Ordinal));

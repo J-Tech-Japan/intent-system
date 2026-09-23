@@ -1,6 +1,6 @@
 # ADR 0001: Four-thread agmsg orchestration is the primary collaboration model
 
-- Status: Accepted
+- Status: Accepted; narrowed by [ADR 0015](0015-team-shapes-and-driver-primacy.md) (2026-09-22)
 - Date: 2026-07-20
 - Deciders: Operator (2026-07-20 decision), recorded by G540
 - Related: G520–G539 (the orchestration-mode feature line this decision reflects), G540 (guide-surface repositioning that implements this decision), G541 (repo-facing docs; depends on this ADR)

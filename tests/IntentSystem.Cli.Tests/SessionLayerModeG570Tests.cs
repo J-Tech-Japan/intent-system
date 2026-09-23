@@ -2240,7 +2240,8 @@ public sealed class SessionLayerModeG570Tests : IDisposable
         var purpose = group.GetProperty("purpose").GetString()!;
         Assert.Contains("session-layer show", purpose, StringComparison.Ordinal);
         Assert.Contains("agmsg|herdr-only", purpose, StringComparison.Ordinal);
-        Assert.Contains("PRIMARY four-thread model is unchanged", purpose, StringComparison.Ordinal);
+        Assert.Contains("The team shape (four-thread, five-thread or `solo-conductor`) is unchanged in either transport", purpose, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIMARY four-thread model is unchanged", purpose, StringComparison.Ordinal);
     }
 
     /// <summary>
