@@ -1752,7 +1752,7 @@ internal static class IssuePublishFlowCommand
 
         if (resolution.Declared && !TargetRepoMatches(resolution.TargetRepo, repo))
         {
-            var detail = ComposeTargetRepoMismatchDetail(resolution, repo);
+            var detail = $"packet target_repo '{resolution.TargetRepo ?? "(missing)"}' does not match --repo '{repo}'.";
             return new CrossRuntimeDesignReviewField
             {
                 Decision = CrossRuntimeReviewGate.DecisionBlocked,
