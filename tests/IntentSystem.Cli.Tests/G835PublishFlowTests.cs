@@ -117,8 +117,10 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.Equal(Domain, review.GetProperty("domain").GetString());
     }
 
-    [Fact]
-    public void PublishFlow_DomainMismatch_RefusesWhenClaimTeamDeclaredUnderAnotherDomain()
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 1)]
+    public void PublishFlow_DomainMismatch_RefusesWhenClaimTeamDeclaredUnderAnotherDomain(bool write, int expectedExit)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: true, extraTeams:
         [
@@ -134,12 +136,23 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.WriteClaim(Unit, "sekiban-dev");
 
         workspace.CaptureDurableBaseline();
-        var (exit, output) = Run(workspace, Unit, Repo, write: true, team: "sekiban-dev");
-        Assert.Equal(1, exit);
+        var (exit, output) = Run(workspace, Unit, Repo, write, team: "sekiban-dev");
+        Assert.Equal(expectedExit, exit);
         using var result = JsonDocument.Parse(output);
-        Assert.Equal(CrossRuntimeReviewCauses.DomainMismatch, result.RootElement.GetProperty("cause").GetString());
-        AssertZeroCreates();
-        AssertDurableStateUntouched(workspace);
+        var detail = "packet domain 'wrong-domain' resolves team 'wrong-domain/sekiban-dev' as undeclared, but the claim team is declared under 'sekiban' whose repos include 'J-Tech-Japan/intent-system'.";
+        AssertRefusalSurface(
+            result.RootElement,
+            write ? CrossRuntimeReviewCauses.DomainMismatch : null,
+            write ? detail : null,
+            CrossRuntimeReviewCauses.DomainMismatch,
+            detail,
+            "wrong-domain",
+            "sekiban-dev");
+        if (write)
+        {
+            AssertZeroCreates();
+            AssertDurableStateUntouched(workspace);
+        }
     }
 
     [Fact]
@@ -153,8 +166,16 @@ public sealed class G835PublishFlowTests : IDisposable
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(1, exit);
         using var result = JsonDocument.Parse(output);
-        Assert.Equal(CrossRuntimeReviewCauses.TargetRepoMismatch, result.RootElement.GetProperty("cause").GetString());
-        Assert.Contains(Repo, result.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+        var detail = $"packet target_repo 'J-Tech-Japan/wrong' does not match --repo '{Repo}'.";
+        var error = $"{detail} set implementation_issue_packet.target_repo to '{Repo}' in `.intent-cli/issues/{Unit}/packet.yaml`.";
+        AssertRefusalSurface(
+            result.RootElement,
+            CrossRuntimeReviewCauses.TargetRepoMismatch,
+            error,
+            CrossRuntimeReviewCauses.TargetRepoMismatch,
+            detail,
+            Domain,
+            Team);
         AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
     }
@@ -169,8 +190,16 @@ public sealed class G835PublishFlowTests : IDisposable
         var (exit, output) = Run(workspace, Unit, Repo, write: false);
         Assert.Equal(0, exit);
         using var result = JsonDocument.Parse(output);
-        var review = result.RootElement.GetProperty("cross_runtime_design_review");
-        Assert.Equal(CrossRuntimeReviewCauses.TargetRepoMismatch, review.GetProperty("reasons")[0].GetProperty("cause").GetString());
+        var detail = $"packet target_repo 'J-Tech-Japan/wrong' does not match --repo '{Repo}'.";
+        AssertRefusalSurface(
+            result.RootElement,
+            null,
+            null,
+            CrossRuntimeReviewCauses.TargetRepoMismatch,
+            detail,
+            Domain,
+            Team);
+        AssertPinnedNormalizedOutput("P02-target-repo-dry-run", (exit, output));
     }
 
     [Fact]
@@ -190,19 +219,35 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.False(result.RootElement.TryGetProperty("cross_runtime_design_review", out _));
     }
 
-    [Fact]
-    public void PublishFlow_TeamUnresolved_RefusesOnWrite()
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 1)]
+    public void PublishFlow_TeamUnresolved_RefusesOnWrite(bool write, int expectedExit)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: true, heldTeam: null);
         workspace.WriteFullPacket(Unit, Repo);
         workspace.SeedQueueState(Unit, Title());
 
         workspace.CaptureDurableBaseline();
-        var (exit, output) = Run(workspace, Unit, Repo, write: true);
-        Assert.Equal(1, exit);
-        Assert.Contains(CrossRuntimeReviewCauses.TeamUnresolved, output, StringComparison.Ordinal);
-        AssertZeroCreates();
-        AssertDurableStateUntouched(workspace);
+        var (exit, output) = Run(workspace, Unit, Repo, write);
+        Assert.Equal(expectedExit, exit);
+        using var result = JsonDocument.Parse(output);
+        const string detail = "execution unit 'G835PF' has no held claim with a team (claim status 'not-configured': No claims store is configured; legacy single-team behavior applies unchanged.).";
+        var error = write ? detail : null;
+        AssertRefusalSurface(
+            result.RootElement,
+            write ? CrossRuntimeReviewCauses.TeamUnresolved : null,
+            error,
+            CrossRuntimeReviewCauses.TeamUnresolved,
+            detail,
+            Domain,
+            null);
+        AssertPinnedNormalizedOutput(write ? "P04-no-claim-write" : "P04-no-claim-dry-run", (exit, output));
+        if (write)
+        {
+            AssertZeroCreates();
+            AssertDurableStateUntouched(workspace);
+        }
     }
 
     // ── body swap seams ────────────────────────────────────────────────
@@ -281,9 +326,139 @@ public sealed class G835PublishFlowTests : IDisposable
         var (exit, output) = Run(workspace, Unit, Repo, write: true);
         Assert.Equal(1, exit);
         using var result = JsonDocument.Parse(output);
-        Assert.Equal(CrossRuntimeReviewCauses.LookupInputChanged, result.RootElement.GetProperty("cause").GetString());
+        const string detail = "packet.yaml or github-body.md changed after the GitHub lookup snapshot; refusing recovery.";
+        AssertRefusalSurface(
+            result.RootElement,
+            CrossRuntimeReviewCauses.LookupInputChanged,
+            detail,
+            CrossRuntimeReviewCauses.LookupInputChanged,
+            detail,
+            Domain,
+            Team);
         AssertZeroCreates();
         AssertDurableStateUntouched(workspace);
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    public void PublishFlow_Gated_UnparseablePacket_RefusesWithPacketInvalidField(bool write, int expectedExit)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.WriteAllText(
+            Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml"),
+            "implementation_issue_packet:\n  issue_title: \"unterminated\n  domain: intent-cli\n  target_repo: J-Tech-Japan/intent-system\n");
+        workspace.SeedQueueState(Unit, Title());
+        workspace.CaptureDurableBaseline();
+
+        var (exit, output) = Run(workspace, Unit, Repo, write);
+        Assert.Equal(expectedExit, exit);
+        using var result = JsonDocument.Parse(output);
+        Assert.Equal("packet-yaml-unparseable", result.RootElement.GetProperty("cause").GetString());
+        const string topLevelError = "packet '<normalized>/.intent-cli/issues/G835PF/packet.yaml' could not be parsed at line 2, column 16: While scanning a multi-line double-quoted scalar, found wrong indentation.";
+        const string fieldDetail = "packet '.intent-cli/issues/G835PF/packet.yaml' could not be parsed at line 2, column 16: While scanning a multi-line double-quoted scalar, found wrong indentation.";
+        AssertRefusalSurface(
+            result.RootElement,
+            "packet-yaml-unparseable",
+            topLevelError,
+            CrossRuntimeReviewCauses.PacketInvalid,
+            fieldDetail,
+            null,
+            null,
+            workspace.RootPath);
+        AssertPinnedNormalizedOutput(
+            write ? "P05-unparseable-write" : "P05-unparseable-dry-run",
+            (exit, output),
+            workspace.RootPath);
+        AssertZeroCreates();
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    public void PublishFlow_Gated_UnreadablePacket_RefusesWithPacketUnreadableField(bool write, int expectedExit)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        workspace.SeedQueueState(Unit, Title());
+        var packetPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("chmod 000 unreadable-packet fixture requires Unix file permissions.");
+        }
+
+        if (!G841TestHelpers.IsNonRootUnixUser())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("chmod 000 unreadable-packet fixture requires a non-root Unix user.");
+        }
+
+        File.SetUnixFileMode(packetPath, UnixFileMode.None);
+        var deniedMessage = ReadDeniedPacketMessage(packetPath);
+        var normalizedDeniedMessage = deniedMessage.Replace(workspace.RootPath, "<normalized>", StringComparison.Ordinal);
+        workspace.CaptureDurableBaseline();
+
+        try
+        {
+            var (exit, output) = Run(workspace, Unit, Repo, write);
+            Assert.Equal(expectedExit, exit);
+            using var result = JsonDocument.Parse(output);
+            Assert.Equal("packet-yaml-unreadable", result.RootElement.GetProperty("cause").GetString());
+            var topLevelError = $"packet '<normalized>/.intent-cli/issues/{Unit}/packet.yaml' could not be read: {normalizedDeniedMessage}";
+            var fieldDetail = $"packet '.intent-cli/issues/{Unit}/packet.yaml' could not be read: {normalizedDeniedMessage}";
+            AssertPinnedNormalizedOutput(
+                write ? "P06-unreadable-write" : "P06-unreadable-dry-run",
+                (exit, output),
+                workspace.RootPath);
+            AssertRefusalSurface(
+                result.RootElement,
+                "packet-yaml-unreadable",
+                topLevelError,
+                CrossRuntimeReviewCauses.PacketUnreadable,
+                fieldDetail,
+                null,
+                null,
+                workspace.RootPath);
+            AssertPinnedNormalizedOutput(
+                write ? "P06-unreadable-write" : "P06-unreadable-dry-run",
+                (exit, output),
+                workspace.RootPath);
+            AssertZeroCreates();
+            AssertDurableStateUntouched(workspace);
+        }
+        finally
+        {
+            G841TestHelpers.RestorePacketPermissions(packetPath);
+        }
+    }
+
+    private static string ReadDeniedPacketMessage(string packetPath)
+    {
+        try
+        {
+            _ = File.ReadAllText(packetPath);
+            throw new InvalidOperationException("The chmod 000 fixture unexpectedly remained readable.");
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            return exception.Message;
+        }
+    }
+
+    [Fact]
+    public void BuildResolutionRefusalField_ResolvedNonDomainMismatchRequiresExplicitCause()
+    {
+        var resolution = new CrossRuntimeReviewPublishResolver.PublishResolution
+        {
+            Resolved = true,
+            Declared = true,
+            Domain = Domain,
+            Team = Team,
+            TargetRepo = Repo,
+        };
+
+        Assert.Throws<InvalidOperationException>(() => IssuePublishFlowCommand.BuildResolutionRefusalField(resolution));
     }
 
     // ── lookup and recovery ────────────────────────────────────────────
@@ -834,9 +1009,14 @@ public sealed class G835PublishFlowTests : IDisposable
         return (exit, writer.ToString());
     }
 
-    private static (int ExitCode, string Json) NormalizePublishOutput((int ExitCode, string Output) result)
+    private static (int ExitCode, string Json) NormalizePublishOutput(
+        (int ExitCode, string Output) result,
+        string? temporaryRoot = null)
     {
-        var node = System.Text.Json.Nodes.JsonNode.Parse(result.Output)!.AsObject();
+        var source = temporaryRoot is null
+            ? result.Output
+            : result.Output.Replace(temporaryRoot, "<normalized>", StringComparison.Ordinal);
+        var node = System.Text.Json.Nodes.JsonNode.Parse(source)!.AsObject();
         foreach (var path in new[]
         {
             "packet_directory", "github_body_path", "publish_yaml_path", "issue_url", "issue_number",
@@ -854,6 +1034,110 @@ public sealed class G835PublishFlowTests : IDisposable
         }
 
         return (result.ExitCode, node.ToJsonString());
+    }
+
+    private static void AssertRefusalSurface(
+        JsonElement result,
+        string? expectedTopLevelCause,
+        string? expectedTopLevelError,
+        string expectedFieldCause,
+        string expectedFieldDetail,
+        string? expectedDomain,
+        string? expectedTeam,
+        string? temporaryRoot = null)
+    {
+        if (expectedTopLevelCause is null)
+        {
+            Assert.False(result.TryGetProperty("cause", out _));
+        }
+        else
+        {
+            Assert.Equal(expectedTopLevelCause, result.GetProperty("cause").GetString());
+        }
+
+        if (expectedTopLevelError is null)
+        {
+            Assert.False(result.TryGetProperty("error", out _));
+        }
+        else
+        {
+            var actualError = result.GetProperty("error").GetString()!;
+            if (temporaryRoot is not null)
+            {
+                actualError = actualError.Replace(temporaryRoot, "<normalized>", StringComparison.Ordinal);
+            }
+
+            Assert.Equal(expectedTopLevelError, actualError);
+        }
+
+        var expectedField = new System.Text.Json.Nodes.JsonObject
+        {
+            ["decision"] = "blocked",
+            ["reasons"] = new System.Text.Json.Nodes.JsonArray
+            {
+                new System.Text.Json.Nodes.JsonObject
+                {
+                    ["cause"] = expectedFieldCause,
+                    ["detail"] = expectedFieldDetail,
+                },
+            },
+        };
+        if (expectedDomain is not null)
+        {
+            expectedField["domain"] = expectedDomain;
+        }
+
+        if (expectedTeam is not null)
+        {
+            expectedField["team"] = expectedTeam;
+        }
+
+        var actualField = result.GetProperty("cross_runtime_design_review");
+        var actualFieldJson = actualField.GetRawText();
+        if (temporaryRoot is not null)
+        {
+            actualFieldJson = actualFieldJson.Replace(temporaryRoot, "<normalized>", StringComparison.Ordinal);
+        }
+
+        Assert.Equal(
+            expectedField.ToJsonString(),
+            System.Text.Json.Nodes.JsonNode.Parse(actualFieldJson)!.ToJsonString());
+    }
+
+    private static void AssertPinnedNormalizedOutput(
+        string name,
+        (int ExitCode, string Output) result,
+        string? temporaryRoot = null)
+    {
+        var normalized = NormalizePublishOutput(result, temporaryRoot);
+        var expected = name switch
+        {
+            "P02-target-repo-dry-run" => (0, """
+                {"execution_unit":"G835PF","domain":"intent-cli","repo":"J-Tech-Japan/intent-system","packet_directory":"\u003Cnormalized\u003E","github_body_path":"\u003Cnormalized\u003E","publish_yaml_path":"\u003Cnormalized\u003E","packet_exists":true,"github_body_present":true,"missing_contract_sections":[],"mode":"dry-run","title":"G835PF Publish-flow design gate","issue_title":"G835PF Publish-flow design gate","title_source":"packet-yaml","warnings":[],"created":false,"idempotent":false,"durable_state_synced":false,"queue_state_patched":false,"publish_yaml_patched":false,"runs_appended":false,"intent_target_applied":false,"next_steps":[],"cross_runtime_design_review":{"decision":"blocked","reasons":[{"cause":"cross-runtime-review-target-repo-mismatch","detail":"packet target_repo \u0027J-Tech-Japan/wrong\u0027 does not match --repo \u0027J-Tech-Japan/intent-system\u0027."}],"domain":"intent-cli","team":"intent-cli-dev"}}
+                """),
+            "P04-no-claim-dry-run" => (0, """
+                {"execution_unit":"G835PF","domain":"intent-cli","repo":"J-Tech-Japan/intent-system","packet_directory":"\u003Cnormalized\u003E","github_body_path":"\u003Cnormalized\u003E","publish_yaml_path":"\u003Cnormalized\u003E","packet_exists":true,"github_body_present":true,"missing_contract_sections":[],"mode":"dry-run","title":"G835PF Publish-flow design gate","issue_title":"G835PF Publish-flow design gate","title_source":"packet-yaml","warnings":[],"created":false,"idempotent":false,"durable_state_synced":false,"queue_state_patched":false,"publish_yaml_patched":false,"runs_appended":false,"intent_target_applied":false,"next_steps":[],"cross_runtime_design_review":{"decision":"blocked","reasons":[{"cause":"cross-runtime-review-team-unresolved","detail":"execution unit \u0027G835PF\u0027 has no held claim with a team (claim status \u0027not-configured\u0027: No claims store is configured; legacy single-team behavior applies unchanged.)."}],"domain":"intent-cli"}}
+                """),
+            "P04-no-claim-write" => (1, """
+                {"execution_unit":"G835PF","domain":"intent-cli","repo":"J-Tech-Japan/intent-system","packet_directory":"\u003Cnormalized\u003E","github_body_path":"\u003Cnormalized\u003E","publish_yaml_path":"\u003Cnormalized\u003E","packet_exists":true,"github_body_present":true,"missing_contract_sections":[],"mode":"write","title":"G835PF Publish-flow design gate","issue_title":"G835PF Publish-flow design gate","title_source":"packet-yaml","warnings":[],"created":false,"idempotent":false,"durable_state_synced":false,"queue_state_patched":false,"publish_yaml_patched":false,"runs_appended":false,"intent_target_applied":false,"next_steps":[],"error":"execution unit \u0027G835PF\u0027 has no held claim with a team (claim status \u0027not-configured\u0027: No claims store is configured; legacy single-team behavior applies unchanged.).","cause":"cross-runtime-review-team-unresolved","cross_runtime_design_review":{"decision":"blocked","reasons":[{"cause":"cross-runtime-review-team-unresolved","detail":"execution unit \u0027G835PF\u0027 has no held claim with a team (claim status \u0027not-configured\u0027: No claims store is configured; legacy single-team behavior applies unchanged.)."}],"domain":"intent-cli"}}
+                """),
+            "P05-unparseable-dry-run" => (1, """
+                {"execution_unit":"G835PF","domain":"intent-cli","repo":"J-Tech-Japan/intent-system","packet_directory":"\u003Cnormalized\u003E","github_body_path":"\u003Cnormalized\u003E","publish_yaml_path":"\u003Cnormalized\u003E","packet_exists":true,"github_body_present":true,"missing_contract_sections":[],"mode":"dry-run","warnings":[],"created":false,"idempotent":false,"durable_state_synced":false,"queue_state_patched":false,"publish_yaml_patched":false,"runs_appended":false,"intent_target_applied":false,"next_steps":[],"error":"packet \u0027\u003Cnormalized\u003E/.intent-cli/issues/G835PF/packet.yaml\u0027 could not be parsed at line 2, column 16: While scanning a multi-line double-quoted scalar, found wrong indentation.","cause":"packet-yaml-unparseable","cross_runtime_design_review":{"decision":"blocked","reasons":[{"cause":"cross-runtime-review-packet-invalid","detail":"packet \u0027.intent-cli/issues/G835PF/packet.yaml\u0027 could not be parsed at line 2, column 16: While scanning a multi-line double-quoted scalar, found wrong indentation."}]}}
+                """),
+            "P05-unparseable-write" => (1, """
+                {"execution_unit":"G835PF","domain":"intent-cli","repo":"J-Tech-Japan/intent-system","packet_directory":"\u003Cnormalized\u003E","github_body_path":"\u003Cnormalized\u003E","publish_yaml_path":"\u003Cnormalized\u003E","packet_exists":true,"github_body_present":true,"missing_contract_sections":[],"mode":"write","warnings":[],"created":false,"idempotent":false,"durable_state_synced":false,"queue_state_patched":false,"publish_yaml_patched":false,"runs_appended":false,"intent_target_applied":false,"next_steps":[],"error":"packet \u0027\u003Cnormalized\u003E/.intent-cli/issues/G835PF/packet.yaml\u0027 could not be parsed at line 2, column 16: While scanning a multi-line double-quoted scalar, found wrong indentation.","cause":"packet-yaml-unparseable","cross_runtime_design_review":{"decision":"blocked","reasons":[{"cause":"cross-runtime-review-packet-invalid","detail":"packet \u0027.intent-cli/issues/G835PF/packet.yaml\u0027 could not be parsed at line 2, column 16: While scanning a multi-line double-quoted scalar, found wrong indentation."}]}}
+                """),
+            "P06-unreadable-dry-run" => (1, """
+                {"execution_unit":"G835PF","domain":"intent-cli","repo":"J-Tech-Japan/intent-system","packet_directory":"\u003Cnormalized\u003E","github_body_path":"\u003Cnormalized\u003E","publish_yaml_path":"\u003Cnormalized\u003E","packet_exists":true,"github_body_present":true,"missing_contract_sections":[],"mode":"dry-run","warnings":[],"created":false,"idempotent":false,"durable_state_synced":false,"queue_state_patched":false,"publish_yaml_patched":false,"runs_appended":false,"intent_target_applied":false,"next_steps":[],"error":"packet \u0027\u003Cnormalized\u003E/.intent-cli/issues/G835PF/packet.yaml\u0027 could not be read: Access to the path \u0027\u003Cnormalized\u003E/.intent-cli/issues/G835PF/packet.yaml\u0027 is denied.","cause":"packet-yaml-unreadable","cross_runtime_design_review":{"decision":"blocked","reasons":[{"cause":"cross-runtime-review-packet-unreadable","detail":"packet \u0027.intent-cli/issues/G835PF/packet.yaml\u0027 could not be read: Access to the path \u0027\u003Cnormalized\u003E/.intent-cli/issues/G835PF/packet.yaml\u0027 is denied."}]}}
+                """),
+            "P06-unreadable-write" => (1, """
+                {"execution_unit":"G835PF","domain":"intent-cli","repo":"J-Tech-Japan/intent-system","packet_directory":"\u003Cnormalized\u003E","github_body_path":"\u003Cnormalized\u003E","publish_yaml_path":"\u003Cnormalized\u003E","packet_exists":true,"github_body_present":true,"missing_contract_sections":[],"mode":"write","warnings":[],"created":false,"idempotent":false,"durable_state_synced":false,"queue_state_patched":false,"publish_yaml_patched":false,"runs_appended":false,"intent_target_applied":false,"next_steps":[],"error":"packet \u0027\u003Cnormalized\u003E/.intent-cli/issues/G835PF/packet.yaml\u0027 could not be read: Access to the path \u0027\u003Cnormalized\u003E/.intent-cli/issues/G835PF/packet.yaml\u0027 is denied.","cause":"packet-yaml-unreadable","cross_runtime_design_review":{"decision":"blocked","reasons":[{"cause":"cross-runtime-review-packet-unreadable","detail":"packet \u0027.intent-cli/issues/G835PF/packet.yaml\u0027 could not be read: Access to the path \u0027\u003Cnormalized\u003E/.intent-cli/issues/G835PF/packet.yaml\u0027 is denied."}]}}
+                """),
+            _ => throw new ArgumentOutOfRangeException(nameof(name), name, "No G844 baseline snapshot is registered."),
+        };
+
+        Assert.Equal(expected.Item1, normalized.ExitCode);
+        Assert.Equal(expected.Item2, normalized.Json);
     }
 
     private void AssertZeroCreates() => Assert.Equal(0, throwingCreator.CallCount);
@@ -911,6 +1195,8 @@ public sealed class G835PublishFlowTests : IDisposable
         }
 
         public CliContext Context { get; }
+
+        public string RootPath => rootPath;
 
         public string QueueStatePath => Path.Combine(rootPath, ".intent-cli", "queue-state.json");
 

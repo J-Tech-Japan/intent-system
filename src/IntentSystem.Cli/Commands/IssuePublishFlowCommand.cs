@@ -711,7 +711,10 @@ internal static class IssuePublishFlowCommand
                         error: "packet.yaml or github-body.md changed after the GitHub lookup snapshot; refusing recovery.",
                         titleSource: titleSource,
                         cause: CrossRuntimeReviewCauses.LookupInputChanged,
-                        crossRuntimeDesignReview: BuildResolutionRefusalField(gatedPublishResolution));
+                        crossRuntimeDesignReview: BuildResolutionRefusalField(
+                            gatedPublishResolution,
+                            CrossRuntimeReviewCauses.LookupInputChanged,
+                            "packet.yaml or github-body.md changed after the GitHub lookup snapshot; refusing recovery."));
                     EmitResult(writer, lookupChangedResult, format);
                     return 1;
                 }
@@ -1734,14 +1737,22 @@ internal static class IssuePublishFlowCommand
                 : null;
         }
 
-        if (!resolution.Resolved || resolution.DomainMismatch)
+        if (!resolution.Resolved)
         {
             return BuildResolutionRefusalField(resolution);
         }
 
+        if (resolution.DomainMismatch)
+        {
+            return BuildResolutionRefusalField(
+                resolution,
+                CrossRuntimeReviewCauses.DomainMismatch,
+                ComposeDomainMismatchDetail(resolution, repo));
+        }
+
         if (resolution.Declared && !TargetRepoMatches(resolution.TargetRepo, repo))
         {
-            var detail = $"packet target_repo '{resolution.TargetRepo ?? "(missing)"}' does not match --repo '{repo}'.";
+            var detail = ComposeTargetRepoMismatchDetail(resolution, repo);
             return new CrossRuntimeDesignReviewField
             {
                 Decision = CrossRuntimeReviewGate.DecisionBlocked,
@@ -1789,20 +1800,21 @@ internal static class IssuePublishFlowCommand
 
         if (resolution.DomainMismatch)
         {
-            var detail = $"packet domain '{resolution.Domain}' resolves team '{resolution.Domain}/{resolution.Team}' as undeclared, "
-                + $"but the claim team is declared under '{resolution.AlternateDeclaredDomain}' whose repos include '{repo}'.";
+            var detail = ComposeDomainMismatchDetail(resolution, repo);
             return BuildResolutionRefusalResult(
                 executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write, title, titleSource, authorization,
-                CrossRuntimeReviewCauses.DomainMismatch, detail, BuildResolutionRefusalField(resolution));
+                CrossRuntimeReviewCauses.DomainMismatch, detail,
+                BuildResolutionRefusalField(resolution, CrossRuntimeReviewCauses.DomainMismatch, detail));
         }
 
         if (resolution.Declared && !TargetRepoMatches(resolution.TargetRepo, repo))
         {
-            var detail = $"packet target_repo '{resolution.TargetRepo ?? "(missing)"}' does not match --repo '{repo}'.";
+            var detail = ComposeTargetRepoMismatchDetail(resolution, repo);
             var fix = $"set implementation_issue_packet.target_repo to '{repo}' in `.intent-cli/issues/{executionUnit}/packet.yaml`.";
             return BuildResolutionRefusalResult(
                 executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write, title, titleSource, authorization,
-                CrossRuntimeReviewCauses.TargetRepoMismatch, $"{detail} {fix}", BuildResolutionRefusalField(resolution));
+                CrossRuntimeReviewCauses.TargetRepoMismatch, $"{detail} {fix}",
+                BuildResolutionRefusalField(resolution, CrossRuntimeReviewCauses.TargetRepoMismatch, detail));
         }
 
         return null;
@@ -1841,17 +1853,20 @@ internal static class IssuePublishFlowCommand
             cause: cause,
             crossRuntimeDesignReview: designReview);
 
-    private static CrossRuntimeDesignReviewField BuildResolutionRefusalField(
+    internal static CrossRuntimeDesignReviewField BuildResolutionRefusalField(
         CrossRuntimeReviewPublishResolver.PublishResolution resolution,
         string? overrideCause = null,
         string? overrideDetail = null)
     {
+        if (overrideCause is null && resolution.Resolved && !resolution.DomainMismatch)
+        {
+            throw new InvalidOperationException("A resolved refusal requires an explicit cause.");
+        }
+
         var cause = overrideCause
             ?? (!resolution.Resolved
                 ? resolution.Cause ?? CrossRuntimeReviewCauses.TeamUnresolved
-                : resolution.DomainMismatch
-                    ? CrossRuntimeReviewCauses.DomainMismatch
-                    : CrossRuntimeReviewCauses.TargetRepoMismatch);
+                : CrossRuntimeReviewCauses.DomainMismatch);
         var detail = overrideDetail ?? resolution.Detail ?? string.Empty;
         return new CrossRuntimeDesignReviewField
         {
@@ -2006,6 +2021,17 @@ internal static class IssuePublishFlowCommand
     private static bool TargetRepoMatches(string? targetRepo, string repo) =>
         !string.IsNullOrWhiteSpace(targetRepo)
         && string.Equals(targetRepo.Trim(), repo, StringComparison.OrdinalIgnoreCase);
+
+    private static string ComposeDomainMismatchDetail(
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution,
+        string repo) =>
+        $"packet domain '{resolution.Domain}' resolves team '{resolution.Domain}/{resolution.Team}' as undeclared, "
+        + $"but the claim team is declared under '{resolution.AlternateDeclaredDomain}' whose repos include '{repo}'.";
+
+    private static string ComposeTargetRepoMismatchDetail(
+        CrossRuntimeReviewPublishResolver.PublishResolution resolution,
+        string repo) =>
+        $"packet target_repo '{resolution.TargetRepo ?? "(missing)"}' does not match --repo '{repo}'.";
 
     private static int ExecuteDeclaredTeamCreate(
         TextWriter writer,
