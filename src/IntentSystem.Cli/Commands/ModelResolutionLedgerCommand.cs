@@ -515,6 +515,9 @@ internal static class ModelResolutionLedgerCommand
 
     private static int ExecuteRecord(CliContext context, string[] args, TextWriter writer)
     {
+        if (ScopedModelResolutionRecord.HasScopedArguments(args))
+            return ScopedModelResolutionRecord.Execute(context, args, writer);
+
         if (!TryParseRecord(args, out var parsed, out var error))
         {
             writer.WriteLine(error);
