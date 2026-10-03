@@ -118,6 +118,11 @@ src/IntentSystem.Cli/Commands/NotifyTransportPreflight.cs	INotifyProcessRunner	2
 src/IntentSystem.Cli/Commands/QueueDispatchCommand.cs	GitRemoteCommandRunner	1
 src/IntentSystem.Cli/Commands/QueueDispatchCommand.cs	IGitRemoteCommandRunner	1
 src/IntentSystem.Cli/Commands/SafetyNestedProviderHandoffCommand.cs	NestedProviderLauncher	1
+src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs	INotifyProcessRunner	2
+src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs	Process	13
+src/IntentSystem.Cli/Commands/ScopedModelResolutionReaders.cs	INotifyProcessRunner	1
+src/IntentSystem.Cli/Commands/ScopedModelResolutionReaders.cs	Process	4
+src/IntentSystem.Cli/Commands/ScopedModelResolutionReaders.cs	ProcessStartInfo	4
 src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs	NotifyProcessRunner	2
 src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs	ProcessRunnerFactory	2
 src/IntentSystem.Cli/Commands/SessionLayerSeatPreflightCommand.cs	CheckoutFreshnessGitCommandRunner	1
