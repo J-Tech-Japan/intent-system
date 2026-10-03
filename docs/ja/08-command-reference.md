@@ -538,6 +538,12 @@ Acceptance Criteria の bullet に `actual output pasted` または `actual coun
 または fence の最初の行で `AC <ordinal>`、`Criterion <ordinal>`、`Criteria <ordinal>`、あるいは
 その criterion 由来の識別可能な 4 語以上の phrase を名前として示した、収集済み output の
 fenced block が必要です。aggregate count、要約、expected value は代わりになりません。
+Acceptance Criteria section 内で番号が一意なら、criterion text の先頭にある `AC<n>`、`AC <n>`、
+`AC #<n>` は label `AC<n>` になります。Rule L により、その番号の `AC<n>` reference は対応する
+label 付き criterion だけを指し、ordinal `<n>` も同時には指しません。ほかの `AC` reference は
+ordinal として扱われ、`Criterion <ordinal>` と `Criteria <ordinal>` は常に ordinal を指します。
+`AC<n>` と `AC <n>` は同じ表記として扱います。refusal と measurement では
+label 付き criterion を `AC<n> (Criterion <ordinal>)` と表示します。
 
 ```bash
 intent-cli worker result-summary --kind issue-to-pr --repo <owner>/<repo> \
@@ -546,7 +552,7 @@ intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> \
   --outcome pr-created --pr <n> --github-only --write --format json
 ```
 
-`result-summary` は `evidence_required`（ordinal と criterion text）、
+`result-summary` は `evidence_required`（ordinal、criterion text、および存在する場合の `label`）、
 `evidence_blocks_present`、`evidence_gap` を出力します。`pr-created` completion gate は
 gap が空でなければ label を適用せずに拒否します。例外を明示するには、空でない記録理由を
 付けます。

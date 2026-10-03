@@ -589,8 +589,15 @@ Verification or elsewhere do not create a requirement. For each matching
 criterion, the PR body needs a fenced block of collected output whose immediately
 preceding Markdown heading or non-empty line, or whose first line, names it as
 `AC <ordinal>`, `Criterion <ordinal>`, `Criteria <ordinal>`, or a distinctive
-four-or-more-word phrase from that criterion. Aggregate, paraphrased, or expected
-values are not a substitute.
+four-or-more-word phrase from that criterion. A criterion whose text starts with
+`AC<n>`, `AC <n>`, or `AC #<n>` has the label `AC<n>` when that number is unique
+in the Acceptance Criteria section. Rule L makes an `AC<n>` fence name only the
+criterion labelled with that number; it cannot also name ordinal `<n>`. Other
+`AC` references keep their ordinal meaning, and `Criterion <ordinal>` /
+`Criteria <ordinal>` always name ordinals. Glued and
+spaced `AC` references (`AC<n>` and `AC <n>`) are equivalent. Refusal and
+measurement items show labelled criteria as `AC<n> (Criterion <ordinal>)`.
+Aggregate, paraphrased, or expected values are not a substitute.
 
 ```bash
 intent-cli worker result-summary --kind issue-to-pr --repo <owner>/<repo> \
@@ -599,7 +606,8 @@ intent-cli worker complete --kind issue --number <n> --repo <owner>/<repo> \
   --outcome pr-created --pr <n> --github-only --write --format json
 ```
 
-`result-summary` emits `evidence_required` (ordinal and criterion text),
+`result-summary` emits `evidence_required` (ordinal, criterion text, and `label`
+when present),
 `evidence_blocks_present`, and `evidence_gap`. The `pr-created` completion gate
 refuses a nonempty gap without applying labels. An explicit exceptional path is
 available only with a nonempty recorded reason:
