@@ -62,6 +62,10 @@ public sealed class ModelResolutionConsumersG814Tests : IDisposable
             Assert.Contains(AgentModelResolutionGuidance.QueryCommand, output, StringComparison.Ordinal);
             Assert.Contains("--requested-effort", output, StringComparison.Ordinal);
             Assert.Contains("ask the human", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("returned scope, request, available observed evidence, and reason", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("solo conductor covers architecture, orchestration, and building with a fresh independent reviewer", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("distributed session-layer duties apply only to configured roles", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("the Steward relays only", output, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("live_argv_fallback", output, StringComparison.OrdinalIgnoreCase);
             Assert.True(output.Contains("selected target", StringComparison.OrdinalIgnoreCase)
                 || output.Contains("selected pane argv", StringComparison.OrdinalIgnoreCase), output);
@@ -78,6 +82,13 @@ public sealed class ModelResolutionConsumersG814Tests : IDisposable
         Assert.Contains("G814", purpose, StringComparison.Ordinal);
         Assert.Contains("exact scoped query", purpose, StringComparison.Ordinal);
         Assert.Contains("Legacy unscoped rows remain readable diagnostics", purpose, StringComparison.Ordinal);
+        Assert.Contains("`record-orca-run` records Orca Run mailbox bindings", purpose, StringComparison.Ordinal);
+        Assert.Contains("`orca-runs` lists recorded binding health read-only across the host", purpose, StringComparison.Ordinal);
+        Assert.Contains("Use `intent-cli guide topology-workspace-move`", purpose, StringComparison.Ordinal);
+        Assert.Contains("no transport is primary", purpose, StringComparison.Ordinal);
+        Assert.Contains("move is CAS-guarded", purpose, StringComparison.Ordinal);
+        Assert.Contains("validate `--live` additionally reads herdr pane labels", purpose, StringComparison.Ordinal);
+        Assert.Contains("removal planned after consumers are checked", purpose, StringComparison.Ordinal);
 
         var solo = GuideSoloConductorCommand.BuildGuide();
         Assert.Contains("architect, orchestrator, and builder", solo.Model.Summary, StringComparison.Ordinal);

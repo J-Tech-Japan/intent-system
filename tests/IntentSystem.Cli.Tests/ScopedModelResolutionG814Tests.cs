@@ -33,6 +33,23 @@ public sealed class ScopedModelResolutionG814Tests : IDisposable
     [InlineData("codex --prompt \"use --model fake -c model_reasoning_effort=low\"", "codex")]
     [InlineData("codex --prompt --model decoy --model real -c model_reasoning_effort=medium", "codex")]
     [InlineData("codex --model m-fixture -c model_reasoning_effort=medium; echo unsafe", "codex")]
+    [InlineData("codex --config model=other --model m-fixture -c model_reasoning_effort=medium", "codex")]
+    [InlineData("codex --model m-fixture -c model_reasoning_effort=medium --config model=other", "codex")]
+    [InlineData("codex --config=model=other --model m-fixture -c model_reasoning_effort=medium", "codex")]
+    [InlineData("codex --model m-fixture -c model=other -c model_reasoning_effort=medium", "codex")]
+    [InlineData("codex --model m-fixture -c model_reasoning_effort=medium -c model=other", "codex")]
+    [InlineData("codex --model m-fixture -c ' model_reasoning_effort=medium'", "codex")]
+    [InlineData("codex --model m-fixture -c '\"model_reasoning_effort\"=medium'", "codex")]
+    [InlineData("codex --model m-fixture -c model_reasoning_effort =medium", "codex")]
+    [InlineData("codex --model m-fixture -c model_reasoning_effort=medium=other", "codex")]
+    [InlineData("codex -m m-fixture -c model_reasoning_effort=medium", "codex")]
+    [InlineData("codex -mm-fixture -c model_reasoning_effort=medium", "codex")]
+    [InlineData("codex --model m-fixture --model-reasoning-effort medium -c model_reasoning_effort=medium", "codex")]
+    [InlineData("codex -p profile --model m-fixture -c model_reasoning_effort=medium", "codex")]
+    [InlineData("codex --profile profile --model m-fixture -c model_reasoning_effort=medium", "codex")]
+    [InlineData("codex --unknown-bool --model m-fixture -c model_reasoning_effort=medium", "codex")]
+    [InlineData("claude --config model=other --model m-fixture --effort high", "claude")]
+    [InlineData("claude --model m-fixture -c model_reasoning_effort=medium --effort high", "claude")]
     [InlineData("codex --model \"m-fixture -c model_reasoning_effort=medium", "codex")]
     [InlineData("claude --model m-fixture --effort=high", "claude")]
     [InlineData("claude --model m-fixture --effort high --effort low", "claude")]
@@ -70,6 +87,58 @@ public sealed class ScopedModelResolutionG814Tests : IDisposable
             "codex");
         Assert.False(lookalikeOnly.Resolved);
         Assert.Equal("ambiguous-option-value", lookalikeOnly.Reason);
+    }
+
+    [Theory]
+    [InlineData("codex --sandbox workspace-write --ask-for-approval never --add-dir /tmp/project --model m-fixture -c model_reasoning_effort=medium", "codex", "m-fixture", "medium")]
+    [InlineData("codex --dangerously-bypass-approvals-and-sandbox --model m-fixture -c model_reasoning_effort=medium", "codex", "m-fixture", "medium")]
+    [InlineData("codex --model m-fixture --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort=medium", "codex", "m-fixture", "medium")]
+    [InlineData("codex --model m-fixture -c model_reasoning_effort=medium --dangerously-bypass-approvals-and-sandbox", "codex", "m-fixture", "medium")]
+    [InlineData("claude --dangerously-skip-permissions --model m-fixture --effort high", "claude", "m-fixture", "high")]
+    [InlineData("claude --model m-fixture --allow-dangerously-skip-permissions --effort high", "claude", "m-fixture", "high")]
+    [InlineData("claude --model m-fixture --effort high --dangerously-skip-permissions", "claude", "m-fixture", "high")]
+    [InlineData("claude -p 'prompt text' --model m-fixture --effort high", "claude", "m-fixture", "high")]
+    public void InvocationParser_RecognizesOnlyMeasuredValueAndValuelessOptions(
+        string invocation,
+        string kind,
+        string model,
+        string effort)
+    {
+        var parsed = ModelResolutionInvocationParser.ParseInvocation(invocation, kind);
+
+        Assert.True(parsed.Resolved, parsed.Reason);
+        Assert.Equal(model, parsed.Model);
+        Assert.Equal(effort, parsed.Effort);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void StructuredArgvParser_RejectsUnmeasuredConfigBeforeOrAfterValidModelEffort(bool configFirst)
+    {
+        var argv = configFirst
+            ? new[] { "codex", "--config", "model=other", "--model", "m-fixture", "-c", "model_reasoning_effort=medium" }
+            : new[] { "codex", "--model", "m-fixture", "-c", "model_reasoning_effort=medium", "--config", "model=other" };
+
+        var parsed = ModelResolutionInvocationParser.ParseArgv(argv, "codex");
+
+        Assert.False(parsed.Resolved);
+        Assert.Equal("unsupported-config-option", parsed.Reason);
+    }
+
+    [Fact]
+    public void StructuredArgvParser_PreservesTerminatorBoundaryAndDoesNotReadPayloadFlags()
+    {
+        var validBeforeTerminator = ModelResolutionInvocationParser.ParseArgv(
+            ["codex", "--model", "m-fixture", "-c", "model_reasoning_effort=medium", "--", "--config", "model=other"],
+            "codex");
+        var flagsOnlyAfterTerminator = ModelResolutionInvocationParser.ParseArgv(
+            ["codex", "--", "--model", "m-fixture", "-c", "model_reasoning_effort=medium"],
+            "codex");
+
+        Assert.True(validBeforeTerminator.Resolved, validBeforeTerminator.Reason);
+        Assert.False(flagsOnlyAfterTerminator.Resolved);
+        Assert.Equal("model-effort-missing", flagsOnlyAfterTerminator.Reason);
     }
 
     [Fact]

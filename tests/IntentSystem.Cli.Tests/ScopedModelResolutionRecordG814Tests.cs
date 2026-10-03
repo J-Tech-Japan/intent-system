@@ -139,6 +139,45 @@ public sealed class ScopedModelResolutionRecordG814Tests : IDisposable
     }
 
     [Theory]
+    [InlineData("claude --config model=other --model m-test --effort medium")]
+    [InlineData("claude --model m-test --effort medium --config model=other")]
+    [InlineData("claude --config=model=other --model m-test --effort medium")]
+    public void ContradictoryConfigInvocationDoesNotResolveOrAppend(string invocation)
+    {
+        InstallSeams();
+
+        var result = Run(ReplaceValue(ValidatedArgs(), "--invocation", invocation));
+
+        Assert.Equal(1, result.ExitCode);
+        using var json = JsonDocument.Parse(result.Text);
+        Assert.Equal("invocation-unreadable", json.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(0, topologyReads);
+        Assert.Equal(0, observerReads);
+        Assert.Equal(0, appendCalls);
+    }
+
+    [Fact]
+    public void MeasuredBooleanFlagDoesNotBlockStableVerifiedCapture()
+    {
+        const string invocation = "claude --dangerously-skip-permissions --model m-test --effort medium";
+        var observedArgv = new[] { "claude", "--dangerously-skip-permissions", "--model", "m-test", "--effort", "medium" };
+        InstallSeams();
+        evidenceMutation = value => value with { ObservedArgv = observedArgv };
+        CountAndAppendToStore();
+
+        var result = Run(ReplaceValue(ValidatedArgs(), "--invocation", invocation));
+
+        Assert.Equal(0, result.ExitCode);
+        using var json = JsonDocument.Parse(result.Text);
+        Assert.True(json.RootElement.GetProperty("resolved").GetBoolean());
+        Assert.Equal(1, topologyReads);
+        Assert.Equal(1, observerReads);
+        Assert.Equal(1, appendCalls);
+        Assert.Equal(invocation, appendedEntry!.FullInvocation);
+        Assert.Equal(observedArgv, appendedEntry.ObservedArgv);
+    }
+
+    [Theory]
     [InlineData("invocation")]
     [InlineData("requested-effort")]
     [InlineData("requested-model")]

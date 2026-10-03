@@ -29,6 +29,8 @@ public sealed class ScopedModelResolutionQueryG814Tests : IDisposable
     [InlineData("--unsupported-kind")]
     [InlineData("--duplicate-domain")]
     [InlineData("--invalid-candidate")]
+    [InlineData("--candidate-config-before")]
+    [InlineData("--candidate-config-after")]
     [InlineData("--write")]
     public void InvalidScopedArgumentsFailBeforeLedgerTopologyOrObserver(string variant)
     {
@@ -40,6 +42,8 @@ public sealed class ScopedModelResolutionQueryG814Tests : IDisposable
             case "--unsupported-kind": args = ReplaceValue(args, "--kind", "cursor"); break;
             case "--duplicate-domain": args = [.. args, "--domain", "other-domain"]; break;
             case "--invalid-candidate": args = [.. args, "--candidate-invocation", "claude --model=m-test --effort medium"]; break;
+            case "--candidate-config-before": args = [.. args, "--candidate-invocation", "claude --config model=other --model m-test --effort medium"]; break;
+            case "--candidate-config-after": args = [.. args, "--candidate-invocation", "claude --model m-test --effort medium --config model=other"]; break;
             case "--write": args = [.. args, "--write"]; break;
         }
 
@@ -126,6 +130,27 @@ public sealed class ScopedModelResolutionQueryG814Tests : IDisposable
         Assert.Equal(1, ledgerReads);
         Assert.Equal(1, topologyReads);
         Assert.Equal(1, observerReads);
+    }
+
+    [Fact]
+    public void StableQueryAcceptsMeasuredBooleanPermissionFlagInObservedInvocation()
+    {
+        var observedArgv = new[] { "claude", "--dangerously-skip-permissions", "--model", "m-test", "--effort", "medium" };
+        var baseline = CompleteBaseline() with
+        {
+            FullInvocation = "claude --dangerously-skip-permissions --model m-test --effort medium",
+            ObservedArgv = observedArgv,
+        };
+        InstallSeams([baseline]);
+        evidenceMutation = value => value with { ObservedArgv = observedArgv };
+
+        var result = Run();
+
+        Assert.True(result.RootElement.GetProperty("resolved").GetBoolean());
+        Assert.Equal("target-current", result.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(1, observerReads);
+        Assert.Equal(1, ledgerReads);
+        Assert.Equal(1, topologyReads);
     }
 
     [Theory]

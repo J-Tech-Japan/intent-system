@@ -147,10 +147,24 @@ internal static class ModelResolutionInvocationParser
 {
     private static readonly HashSet<string> ValueOptions = new(StringComparer.Ordinal)
     {
-        "-p", "--prompt", "--add-dir", "--system-prompt", "--append-system-prompt",
+        "--prompt", "--add-dir", "--system-prompt", "--append-system-prompt",
         "--output-format", "--permission-mode", "--approval-mode", "--sandbox",
-        "--workdir", "--cwd", "--session-id", "--model-reasoning-effort",
+        "--ask-for-approval", "--workdir", "--cwd", "--session-id",
         "--allowedTools", "--disallowedTools", "--tools", "--mcp-config",
+    };
+
+    // These measured valueless switches are recognized only so their presence
+    // cannot make an otherwise valid argv ambiguous. They do not authorize or
+    // recommend a launch recipe or permission choice.
+    private static readonly HashSet<string> ClaudeBooleanOptions = new(StringComparer.Ordinal)
+    {
+        "--dangerously-skip-permissions",
+        "--allow-dangerously-skip-permissions",
+    };
+
+    private static readonly HashSet<string> CodexBooleanOptions = new(StringComparer.Ordinal)
+    {
+        "--dangerously-bypass-approvals-and-sandbox",
     };
 
     public static ModelResolutionInvocationParseResult ParseInvocation(string invocation, string kind)
@@ -187,9 +201,18 @@ internal static class ModelResolutionInvocationParser
                 return ModelResolutionInvocationParseResult.Failure(canonicalKind, "argv-unreadable");
             if (token == "--") break;
 
+            if (token.StartsWith("--config", StringComparison.Ordinal))
+                return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-config-option");
+            if (token == "-m" || token.StartsWith("-m", StringComparison.Ordinal))
+                return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-model-short-flag");
+            if (token.StartsWith("-c", StringComparison.Ordinal) && token != "-c")
+                return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-inline-config");
+            if (canonicalKind == "codex"
+                && (token == "-p" || token.StartsWith("-p", StringComparison.Ordinal)
+                    || token == "--profile" || token.StartsWith("--profile=", StringComparison.Ordinal)))
+                return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-codex-profile-option");
             if (token.StartsWith("--model=", StringComparison.Ordinal)
-                || token.StartsWith("--effort=", StringComparison.Ordinal)
-                || token.StartsWith("-c=", StringComparison.Ordinal))
+                || token.StartsWith("--effort=", StringComparison.Ordinal))
                 return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-inline-flag");
 
             if (token == "--model")
@@ -223,33 +246,32 @@ internal static class ModelResolutionInvocationParser
 
             if (token == "-c")
             {
+                if (canonicalKind != "codex")
+                    return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-config-option");
                 if (index + 1 >= argv.Count)
                     return ModelResolutionInvocationParseResult.Failure(canonicalKind, "missing-config-value");
+
                 var config = argv[++index];
-                if (config.StartsWith("model_reasoning_effort", StringComparison.Ordinal))
-                {
-                    const string prefix = "model_reasoning_effort=";
-                    if (canonicalKind != "codex")
-                        return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-effort-flag");
-                    if (!config.StartsWith(prefix, StringComparison.Ordinal)
-                        || config.Length == prefix.Length
-                        || config[prefix.Length..].StartsWith("-", StringComparison.Ordinal)
-                        || config[prefix.Length..].Contains('=')
-                        || ContainsQuote(config[prefix.Length..]))
-                        return ModelResolutionInvocationParseResult.Failure(canonicalKind, "ambiguous-effort-value");
-                    effortCount++;
-                    effort = config[prefix.Length..];
-                    if (effortCount > 1)
-                        return ModelResolutionInvocationParseResult.Failure(canonicalKind, "duplicate-effort-flag");
-                }
-                else if (config.StartsWith("-", StringComparison.Ordinal))
-                {
-                    return ModelResolutionInvocationParseResult.Failure(canonicalKind, "ambiguous-config-value");
-                }
+                const string prefix = "model_reasoning_effort=";
+                if (!config.StartsWith(prefix, StringComparison.Ordinal))
+                    return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-config-key");
+                var configuredEffort = config[prefix.Length..];
+                if (configuredEffort.Length == 0
+                    || configuredEffort.StartsWith("-", StringComparison.Ordinal)
+                    || configuredEffort.Contains('=')
+                    || configuredEffort.Any(char.IsWhiteSpace)
+                    || ContainsQuote(config))
+                    return ModelResolutionInvocationParseResult.Failure(canonicalKind, "ambiguous-effort-value");
+
+                effortCount++;
+                effort = configuredEffort;
+                if (effortCount > 1)
+                    return ModelResolutionInvocationParseResult.Failure(canonicalKind, "duplicate-effort-flag");
                 continue;
             }
 
-            if (ValueOptions.Contains(token))
+            var isClaudePrompt = canonicalKind == "claude" && token == "-p";
+            if (ValueOptions.Contains(token) || isClaudePrompt)
             {
                 if (index + 1 >= argv.Count)
                     return ModelResolutionInvocationParseResult.Failure(canonicalKind, "missing-option-value");
@@ -259,6 +281,10 @@ internal static class ModelResolutionInvocationParser
                 index++;
                 continue;
             }
+
+            if ((canonicalKind == "claude" && ClaudeBooleanOptions.Contains(token))
+                || (canonicalKind == "codex" && CodexBooleanOptions.Contains(token)))
+                continue;
 
             if (token.StartsWith("--model", StringComparison.Ordinal)
                 || token.StartsWith("--effort", StringComparison.Ordinal))
@@ -271,6 +297,9 @@ internal static class ModelResolutionInvocationParser
                     || argv[index + 1].StartsWith("--effort=", StringComparison.Ordinal)
                     || argv[index + 1].StartsWith("-c=", StringComparison.Ordinal)))
                 return ModelResolutionInvocationParseResult.Failure(canonicalKind, "ambiguous-option-value");
+
+            if (token.StartsWith("-", StringComparison.Ordinal))
+                return ModelResolutionInvocationParseResult.Failure(canonicalKind, "unsupported-option");
         }
 
         if (modelCount != 1 || effortCount != 1 || string.IsNullOrWhiteSpace(model) || string.IsNullOrWhiteSpace(effort))

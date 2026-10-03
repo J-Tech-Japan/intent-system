@@ -337,7 +337,8 @@ internal static class AgentModelResolutionGuidance
     [
         "Run the read-only scoped query for the exact routing root, domain, team, logical role, kind, request form, and requested effort (plus requested model for an explicit request). It selects the newest matching scoped verified baseline before validating completeness.",
         "The query resolves only when two bounded observations confirm the exact selected target, full foreground argv, local PID and actual process start time, host, and selected routing/role digest still match that baseline. It never scans another pane or writes the ledger.",
-        "A missing baseline, omitted scope, refusal, incomplete identity, changed process generation, unreadable argv, or request/topology mismatch remains unresolved: ask the human to authorize an exact invocation; do not substitute another model or auto-replace a running seat.",
+        "A missing baseline, omitted scope, refusal, incomplete identity, changed process generation, unreadable argv, or request/topology mismatch remains unresolved: show the returned scope, request, available observed evidence, and reason, then ask the human to authorize the exact invocation; never guess a model, do not substitute another model, or auto-replace a running seat.",
+        "Role responsibility follows recorded team mode: the solo conductor covers architecture, orchestration, and building with a fresh independent reviewer; distributed session-layer duties apply only to configured roles; the Steward relays only and makes no design or review decisions.",
     ];
 
     public const string RecordCommand =
