@@ -122,7 +122,7 @@ internal static class WorkerResultSummaryCommand
             {
                 var warnings = result.Warnings.ToList();
                 warnings.Add(
-                    $"evidence-paste (G785): missing named fenced collected-output block(s) for {FormatCriteria(evidence.EvidenceGap)}.");
+                    $"evidence-paste (G785): missing named fenced collected-output block(s) for {WorkerEvidenceCriterionFormatter.Format(evidence.EvidenceGap)}.");
                 result = result with { Warnings = warnings };
             }
         }
@@ -219,20 +219,14 @@ internal static class WorkerResultSummaryCommand
         if (result.EvidenceRequired.Count > 0)
         {
             writer.WriteLine("## Evidence-paste measurement");
-            writer.WriteLine($"- required: {FormatCriteria(result.EvidenceRequired)}");
-            writer.WriteLine($"- blocks present: {FormatCriteria(result.EvidenceBlocksPresent)}");
-            writer.WriteLine($"- gap: {FormatCriteria(result.EvidenceGap)}");
+            writer.WriteLine($"- required: {(result.EvidenceRequired.Count == 0 ? "(none)" : WorkerEvidenceCriterionFormatter.Format(result.EvidenceRequired))}");
+            writer.WriteLine($"- blocks present: {(result.EvidenceBlocksPresent.Count == 0 ? "(none)" : WorkerEvidenceCriterionFormatter.Format(result.EvidenceBlocksPresent))}");
+            writer.WriteLine($"- gap: {(result.EvidenceGap.Count == 0 ? "(none)" : WorkerEvidenceCriterionFormatter.Format(result.EvidenceGap))}");
             writer.WriteLine();
         }
 
         writer.WriteLine(result.Summary);
     }
-
-    private static string FormatCriteria(IReadOnlyList<WorkerEvidenceCriterion> criteria) =>
-        criteria.Count == 0
-            ? "(none)"
-            : string.Join(", ", criteria.Select(criterion =>
-                $"Criterion {criterion.Ordinal}: {criterion.Text}"));
 
     private static bool TryParseArguments(
         string[] args,

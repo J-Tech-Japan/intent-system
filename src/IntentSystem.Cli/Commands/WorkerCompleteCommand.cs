@@ -280,9 +280,10 @@ internal static class WorkerCompleteCommand
                 {
                     writer.WriteLine(
                         $"refused to complete issue #{number} as `pr-created`: evidence gap (G785) — "
-                        + $"no named fenced collected-output block for {FormatEvidenceCriteria(evidence.EvidenceGap)}.");
-                    writer.WriteLine(
-                        "- Repair: paste the collected output in a fenced block whose heading or first line names each missing Criterion, or re-run with `--accept-evidence-gap <recorded reason>`.");
+                        + $"no named fenced collected-output block for {WorkerEvidenceCriterionFormatter.Format(evidence.EvidenceGap)}.");
+                    writer.WriteLine(evidence.EvidenceGap.Any(criterion => criterion.Label is not null)
+                        ? "- Repair: paste the collected output in a fenced block whose heading or first line contains the label printed first for each missing criterion (`AC<n>` or `Criterion <n>`), or re-run with `--accept-evidence-gap <recorded reason>`."
+                        : "- Repair: paste the collected output in a fenced block whose heading or first line names each missing Criterion, or re-run with `--accept-evidence-gap <recorded reason>`.");
                     return 1;
                 }
 
@@ -948,10 +949,6 @@ internal static class WorkerCompleteCommand
         }
     }
 
-    private static string FormatEvidenceCriteria(IReadOnlyList<WorkerEvidenceCriterion> criteria) =>
-        string.Join(", ", criteria.Select(criterion =>
-            $"Criterion {criterion.Ordinal}: {criterion.Text}"));
-
     private static BaseBranchCheckOutcome TryCheckBaseBranchFromIssue(
         string repo,
         int issueNumber,
@@ -1116,9 +1113,9 @@ internal static class WorkerCompleteCommand
         }
         if (result.EvidenceRequired.Count > 0)
         {
-            writer.WriteLine($"- evidence required: {FormatEvidenceCriteria(result.EvidenceRequired)}");
-            writer.WriteLine($"- evidence blocks present: {FormatEvidenceCriteria(result.EvidenceBlocksPresent)}");
-            writer.WriteLine($"- evidence gap: {(result.EvidenceGap.Count == 0 ? "(none)" : FormatEvidenceCriteria(result.EvidenceGap))}");
+            writer.WriteLine($"- evidence required: {WorkerEvidenceCriterionFormatter.Format(result.EvidenceRequired)}");
+            writer.WriteLine($"- evidence blocks present: {WorkerEvidenceCriterionFormatter.Format(result.EvidenceBlocksPresent)}");
+            writer.WriteLine($"- evidence gap: {(result.EvidenceGap.Count == 0 ? "(none)" : WorkerEvidenceCriterionFormatter.Format(result.EvidenceGap))}");
         }
         if (result.EvidenceGapAccepted is not null)
         {

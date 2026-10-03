@@ -41,13 +41,14 @@ internal static class WorkerEvidencePasteAnalyzer
         ArgumentNullException.ThrowIfNull(issueBody);
         ArgumentNullException.ThrowIfNull(prBody);
 
-        var required = FindRequiredCriteria(issueBody);
+        var scan = FindRequiredCriteria(issueBody);
+        var required = scan.Required;
         if (required.Count == 0)
         {
             return WorkerEvidencePasteAnalysisResult.Empty;
         }
 
-        var namedOrdinals = FindNamedFenceOrdinals(prBody, required);
+        var namedOrdinals = FindNamedFenceOrdinals(prBody, required, scan.LabelValues);
         var present = required.Where(criterion => namedOrdinals.Contains(criterion.Ordinal)).ToArray();
         var gap = required.Where(criterion => !namedOrdinals.Contains(criterion.Ordinal)).ToArray();
 
@@ -59,12 +60,12 @@ internal static class WorkerEvidencePasteAnalyzer
         };
     }
 
-    private static IReadOnlyList<WorkerEvidenceCriterion> FindRequiredCriteria(string issueBody)
+    private static RequiredCriteriaScan FindRequiredCriteria(string issueBody)
     {
         var lines = NormalizeLines(issueBody);
         var inAcceptanceCriteria = false;
         var ordinal = 0;
-        var required = new List<WorkerEvidenceCriterion>();
+        var allCriteria = new List<ParsedCriterion>();
 
         for (var index = 0; index < lines.Length; index++)
         {
@@ -105,23 +106,42 @@ internal static class WorkerEvidencePasteAnalyzer
 
             index = continuationIndex - 1;
             var criterionText = string.Join(" ", parts);
-            if (RecognizedPhrases.Any(phrase =>
-                    criterionText.Contains(phrase, StringComparison.OrdinalIgnoreCase)))
-            {
-                required.Add(new WorkerEvidenceCriterion
-                {
-                    Ordinal = ordinal,
-                    Text = criterionText,
-                });
-            }
+            var isRequired = RecognizedPhrases.Any(phrase =>
+                criterionText.Contains(phrase, StringComparison.OrdinalIgnoreCase));
+            allCriteria.Add(new ParsedCriterion(
+                ordinal,
+                criterionText,
+                isRequired,
+                TryReadCriterionLabel(criterionText, out var labelValue) ? labelValue : null));
         }
 
-        return required;
+        var labelCounts = allCriteria
+            .Where(criterion => criterion.LabelValue is not null)
+            .GroupBy(criterion => criterion.LabelValue!.Value)
+            .ToDictionary(group => group.Key, group => group.Count());
+        var labelValues = labelCounts
+            .Where(pair => pair.Value == 1)
+            .Select(pair => pair.Key)
+            .ToHashSet();
+        var required = allCriteria
+            .Where(criterion => criterion.IsRequired)
+            .Select(criterion => new WorkerEvidenceCriterion
+            {
+                Ordinal = criterion.Ordinal,
+                Text = criterion.Text,
+                Label = criterion.LabelValue is { } value && labelValues.Contains(value)
+                    ? $"AC{value}"
+                    : null,
+            })
+            .ToArray();
+
+        return new RequiredCriteriaScan(required, labelValues);
     }
 
     private static IReadOnlySet<int> FindNamedFenceOrdinals(
         string prBody,
-        IReadOnlyList<WorkerEvidenceCriterion> required)
+        IReadOnlyList<WorkerEvidenceCriterion> required,
+        IReadOnlySet<int> labelValues)
     {
         var lines = NormalizeLines(prBody);
         var namedOrdinals = new HashSet<int>();
@@ -143,8 +163,8 @@ internal static class WorkerEvidencePasteAnalyzer
             var firstLine = index + 1 < closingIndex ? lines[index + 1].Trim() : string.Empty;
             foreach (var criterion in required)
             {
-                if (NamesCriterion(precedingName, criterion)
-                    || NamesCriterion(firstLine, criterion))
+                if (NamesCriterion(precedingName, criterion, labelValues)
+                    || NamesCriterion(firstLine, criterion, labelValues))
                 {
                     namedOrdinals.Add(criterion.Ordinal);
                 }
@@ -258,19 +278,47 @@ internal static class WorkerEvidencePasteAnalyzer
         return null;
     }
 
-    private static bool NamesCriterion(string? candidate, WorkerEvidenceCriterion criterion) =>
-        NamesCriterionOrdinal(candidate, criterion.Ordinal)
-        || ContainsDistinctiveCriterionPhrase(candidate, criterion.Text);
-
-    private static bool NamesCriterionOrdinal(string? candidate, int ordinal)
+    private static bool NamesCriterion(
+        string? candidate,
+        WorkerEvidenceCriterion criterion,
+        IReadOnlySet<int> labelValues)
     {
         if (string.IsNullOrWhiteSpace(candidate))
         {
             return false;
         }
 
+        foreach (var reference in FindCriterionReferences(candidate))
+        {
+            if (reference.IsAc)
+            {
+                if (labelValues.Contains(reference.Number))
+                {
+                    if (string.Equals(criterion.Label, $"AC{reference.Number}", StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+                else if (reference.Number == criterion.Ordinal)
+                {
+                    return true;
+                }
+            }
+            else if (reference.Number == criterion.Ordinal)
+            {
+                return true;
+            }
+        }
+
+        return ContainsDistinctiveCriterionPhrase(candidate, criterion.Text);
+    }
+
+    private static IReadOnlyList<CriterionReference> FindCriterionReferences(string candidate)
+    {
+        var references = new List<CriterionReference>();
         foreach (var marker in CriterionNameMarkers)
         {
+            var isAcMarker = string.Equals(marker, "ac", StringComparison.Ordinal);
             var searchStart = 0;
             while (searchStart < candidate.Length)
             {
@@ -283,7 +331,10 @@ internal static class WorkerEvidencePasteAnalyzer
                 var beforeIsWord = index > 0 && char.IsLetterOrDigit(candidate[index - 1]);
                 var cursor = index + marker.Length;
                 var afterIsWord = cursor < candidate.Length && char.IsLetterOrDigit(candidate[cursor]);
-                if (!beforeIsWord && !afterIsWord)
+                var gluedAcNumber = isAcMarker
+                    && cursor < candidate.Length
+                    && char.IsDigit(candidate[cursor]);
+                if (!beforeIsWord && (!afterIsWord || gluedAcNumber))
                 {
                     while (cursor < candidate.Length && char.IsWhiteSpace(candidate[cursor]))
                     {
@@ -306,11 +357,10 @@ internal static class WorkerEvidencePasteAnalyzer
                     }
 
                     if (numberStart < cursor
-                        && int.TryParse(candidate[numberStart..cursor], out var namedOrdinal)
-                        && namedOrdinal == ordinal
+                        && int.TryParse(candidate[numberStart..cursor], out var namedNumber)
                         && (cursor == candidate.Length || !char.IsLetterOrDigit(candidate[cursor])))
                     {
-                        return true;
+                        references.Add(new CriterionReference(isAcMarker, namedNumber));
                     }
                 }
 
@@ -318,8 +368,68 @@ internal static class WorkerEvidencePasteAnalyzer
             }
         }
 
-        return false;
+        return references;
     }
+
+    private static bool TryReadCriterionLabel(string text, out int labelValue)
+    {
+        labelValue = default;
+        var cursor = 0;
+        while (cursor < text.Length
+            && (char.IsWhiteSpace(text[cursor]) || text[cursor] is '*' or '_'))
+        {
+            cursor++;
+        }
+
+        if (cursor + 2 > text.Length
+            || !text.AsSpan(cursor, 2).Equals("AC", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        cursor += 2;
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+        {
+            cursor++;
+        }
+
+        if (cursor < text.Length && text[cursor] == '#')
+        {
+            cursor++;
+            while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            {
+                cursor++;
+            }
+        }
+
+        var numberStart = cursor;
+        while (cursor < text.Length && IsAsciiDigit(text[cursor]))
+        {
+            cursor++;
+        }
+
+        if (numberStart == cursor
+            || (cursor < text.Length && char.IsLetterOrDigit(text[cursor])))
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            text.AsSpan(numberStart, cursor - numberStart),
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out labelValue);
+    }
+
+    private static bool IsAsciiDigit(char value) => value is >= '0' and <= '9';
+
+    private sealed record ParsedCriterion(int Ordinal, string Text, bool IsRequired, int? LabelValue);
+
+    private sealed record RequiredCriteriaScan(
+        IReadOnlyList<WorkerEvidenceCriterion> Required,
+        IReadOnlySet<int> LabelValues);
+
+    private readonly record struct CriterionReference(bool IsAc, int Number);
 
     private static bool ContainsDistinctiveCriterionPhrase(string? candidate, string criterionText)
     {
@@ -391,7 +501,8 @@ internal static class WorkerEvidencePasteRule
         + "requires a fenced block of collected output in the PR body. Name the matching `AC <ordinal>`, "
         + "`Criterion <ordinal>`, `Criteria <ordinal>`, or a distinctive four-or-more-word criterion phrase "
         + "in the block's immediately preceding Markdown heading or non-empty line, or its first line; paraphrased or expected values "
-        + "are a request-update. `intent-cli worker result-summary` measures this rule when given `--pr-body` or `--pr-body-file`.";
+        + "are a request-update. A criterion whose text begins with `AC<n>` can be named by that label; `AC<n>` and `AC <n>` are equivalent, and the gate prints the label to use. "
+        + "`intent-cli worker result-summary` measures this rule when given `--pr-body` or `--pr-body-file`.";
 }
 
 /// <summary>One acceptance criterion that is subject to the G785 evidence rule.</summary>
@@ -402,6 +513,19 @@ internal sealed record WorkerEvidenceCriterion
 
     [JsonPropertyName("text")]
     public required string Text { get; init; }
+
+    [JsonPropertyName("label")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Label { get; init; }
+}
+
+/// <summary>Shared text formatting for G785 required, present, and gap criteria.</summary>
+internal static class WorkerEvidenceCriterionFormatter
+{
+    public static string Format(IReadOnlyList<WorkerEvidenceCriterion> criteria) =>
+        string.Join(", ", criteria.Select(criterion => criterion.Label is null
+            ? $"Criterion {criterion.Ordinal}: {criterion.Text}"
+            : $"{criterion.Label} (Criterion {criterion.Ordinal}): {criterion.Text}"));
 }
 
 /// <summary>G785 measurement returned by result-summary and worker-complete.</summary>
