@@ -561,6 +561,9 @@ internal static class ModelResolutionLedgerCommand
 
     private static int ExecuteQuery(CliContext context, string[] args, TextWriter writer)
     {
+        if (ScopedModelResolutionQuery.HasScopedArguments(args))
+            return ScopedModelResolutionQuery.ExecuteAsync(context, args, writer).GetAwaiter().GetResult();
+
         if (!TryParseQuery(args, out var parsed, out var error))
         {
             writer.WriteLine(error);
