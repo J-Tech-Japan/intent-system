@@ -547,6 +547,47 @@ public sealed class SessionLayerSeatPreflightG808Tests : IDisposable
         Assert.Contains("session-layer seat preflight", orchestrator.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void LegacyLaunchTimestampRemainsPreflightHintButCannotResolveModelQuery_G814()
+    {
+        Directory.CreateDirectory(Path.Combine(root, ".intent-cli", "claims"));
+        Assert.True(SessionLayerTopologyWriter.Record(root, new SessionLayerTopologyRecordRequest
+        {
+            Domain = Domain,
+            Team = Team,
+            Role = "architect",
+            Resident = NotifyRecordedRole.HerdrResident,
+            WorkspaceId = "wG814",
+            PaneId = "wG814:p-architect",
+            Cwd = "/machine-local",
+            Kind = "codex",
+            Write = true,
+            Format = "json",
+        }).Applied);
+        var recordedAt = new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero);
+        Assert.True(AppendVerifiedLaunch(recordedAt).Applied);
+
+        var launchAt = SessionLayerSeatPreflightCommand.ResolveLaunchAt(root, Domain, Team, "architect", null);
+        Assert.Equal(recordedAt, launchAt.LaunchAt);
+
+        using var legacyWriter = new StringWriter();
+        Assert.Equal(0, ModelResolutionLedgerCommand.Execute(Context(),
+            ["query", "--kind", "codex", "--informal-name", "g808-seat", "--format", "json"], legacyWriter));
+        using var legacy = JsonDocument.Parse(legacyWriter.ToString());
+        Assert.False(legacy.RootElement.GetProperty("resolved").GetBoolean());
+        Assert.True(legacy.RootElement.GetProperty("human_required").GetBoolean());
+
+        using var scopedWriter = new StringWriter();
+        Assert.Equal(0, ModelResolutionLedgerCommand.Execute(Context(),
+            ["query", "--routing-root", root, "--domain", Domain, "--team", Team,
+                "--role", "architect", "--kind", "codex", "--informal-name", "g808-seat",
+                "--requested-effort", "medium", "--format", "json"], scopedWriter));
+        using var scoped = JsonDocument.Parse(scopedWriter.ToString());
+        Assert.False(scoped.RootElement.GetProperty("resolved").GetBoolean());
+        Assert.True(scoped.RootElement.GetProperty("human_required").GetBoolean());
+        Assert.Equal("missing-scoped-baseline", scoped.RootElement.GetProperty("reason").GetString());
+    }
+
     private SessionLayerSeatPreflightAppendResult Record(string role, DateTimeOffset observedAt, DateTimeOffset launchAt, bool passed)
         => SessionLayerSeatPreflightStore.Append(root, new SessionLayerSeatPreflightRecord
         {

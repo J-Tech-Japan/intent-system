@@ -137,29 +137,50 @@ intent-cli guide intent-work setup --format json
 ### Host-local model-resolution ledger (G685 — preview-through-1.x)
 
 ```bash
-intent-cli session-layer model-resolution query --kind <codex|claude> \
-  --informal-name <name> [--candidate-invocation <full-invocation>] --format json
-intent-cli session-layer model-resolution record --kind <codex|claude> \
-  --informal-name <name> --outcome verified --invocation <full-invocation> \
-  --evidence <banner-or-argv-evidence> --write --format json
-intent-cli session-layer model-resolution record --kind <codex|claude> \
-  --informal-name <name> --outcome refused --invocation <refused-invocation> \
-  --error <error-text> --write --format json
+intent-cli session-layer model-resolution query --routing-root <absolute-host-root> \
+  --domain <domain> --team <team> --role <logical-role> --kind <codex|claude> \
+  --informal-name <mapping-or-attribution> --requested-effort <effort> \
+  [--requested-model <explicit-id>] [--candidate-invocation <full-invocation>] --format json
+intent-cli session-layer model-resolution record --routing-root <absolute-host-root> \
+  --domain <domain> --team <team> --role <logical-role> --kind <codex|claude> \
+  --informal-name <mapping-or-attribution> --requested-effort <effort> \
+  [--requested-model <explicit-id>] --outcome verified --invocation <full-invocation> \
+  --evidence <READY-proof> --capture-target-evidence --write --format json
+intent-cli session-layer model-resolution record --routing-root <absolute-host-root> \
+  --domain <domain> --team <team> --role <logical-role> --kind <codex|claude> \
+  --informal-name <mapping-or-attribution> --requested-effort <effort> \
+  [--requested-model <explicit-id>] --outcome refused --invocation <raw-invocation> \
+  --error <captured-error> --write --format json
 ```
 
-Resolve in order: ledger hit, currently-running same-kind seat argv, then ask
-the human. On a miss, run `herdr agent list`, select running entries whose
-`result.agents[].agent` exactly equals the resolved kind, then inspect each with
-`herdr pane process-info --pane <selected-pane-id>` and read
-`result.process_info.foreground_processes[].argv`. Reuse the full invocation
-only when all selected same-kind seats agree; otherwise ask the human.
+Every query requires the absolute routing root, domain, team, logical role,
+kind, informal name, and requested effort; only `--requested-model` and the
+candidate invocation are optional. An omitted required field is invalid and
+exits nonzero. Informal requests use the mapping name; explicit-model requests
+add `--requested-model` and treat the informal name as attribution only. The
+read-only query selects the newest matching scoped verified baseline before
+checking its completeness, then resolves only if bounded observations of the
+exact selected target still agree on full argv, local PID and actual UTC
+process start time, host, and selected routing/role digest. Each observation
+reader has a five-second deadline. The query never scans another pane, writes
+the ledger, or substitutes a model. A missing scoped baseline, refusal,
+unreadable identity/argv, process-generation change, or request/topology
+mismatch remains unresolved and asks the human to authorize an exact
+invocation. A valid query with no scoped baseline exits `0` with
+`resolved=false` and `human_required=true`; malformed or unreadable-ledger
+requests exit nonzero.
 
-Every rendered launch attempt has one mandatory matching record step before
-retry or continuation. After READY, record the captured exact invocation plus
-banner/running-argv evidence as `verified`; after refusal, record the captured
-exact invocation plus error text as `refused`. Never guess a bare id or consult
-a shipped list. The append-only ledger is host-local; these commands launch no
-provider and perform no provider validation.
+After each launch attempt permitted by the existing workflow, record matching
+READY or refusal evidence before retrying or continuing. A verified capture
+requires READY and captures only the selected target's identity and current
+argv; refusal stores the raw invocation and error without target capture.
+`--dry-run` may perform the bounded verified observation but writes neither
+ledger nor ignore file. The tool copies no permissions, cwd, or `--add-dir`
+values and never launches or validates a provider. Legacy unscoped rows remain
+readable diagnostic history without migration; they cannot authorize a model.
+Their query stays `resolved=false`, `human_required=true`, with
+`next_step=query-recorded-target-or-ask-human` and resolution order
+`[recorded-target-scoped-query, ask-human]`. No baseline is auto-replaced.
 
 ### Operator-recorded envelope profiles (G686 — preview-through-1.x)
 

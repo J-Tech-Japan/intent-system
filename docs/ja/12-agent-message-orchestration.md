@@ -513,38 +513,38 @@ supervision process formula、preview-through-1.x boundary を変更せず構成
 
 ### host-local model resolution（G685 — preview-through-1.x）
 
-bootstrap、seat recovery、kind switch では、operator の informal な model / effort 名を
-必ず次の順序で解決します。
+bootstrap、seat recovery、kind switch では、absolute routing root、domain、team、logical role、kind、
+request form、requested effort をすべて含む exact scoped read-only query を使います。
+explicit-model request では requested model も指定し、informal name は attribution のみです。
+query は matching scoped verified baseline のうち最も新しい row を completeness 判定より先に選び、
+同一 selected target と full argv、local PID と実際の UTC process start time、host、selected routing/role
+digest の二回の bounded observation が一致するときだけ解決します。各 external observation の deadline
+は 5 秒です。別 pane を読まず、ledger に書かず、target を選び直しません。
+scope/baseline 不足、refusal、identity/argv の失敗、generation 変更、request/topology mismatch は
+unresolved のままで、human が exact invocation を許可する必要があります。model を推測・代替・自動置換
+しません。妥当な unresolved query の exit は `0` です。
 
-1. `intent-cli session-layer model-resolution query` で host-local measured ledger を検索する。
-2. miss の場合は `herdr agent list` を実行し、`result.agents[].agent` が resolved kind と
-   完全一致する running entry を残し、workspace と pane の順に並べる。選択した pane ごとに
-   `herdr pane process-info --pane <selected-pane-id>` を実行する。
-3. `result.process_info.foreground_processes[].argv` を読み、選択した同一 kind の seat
-   すべてで full invocation が一致するときだけ再利用する。
-4. 読み取り可能な一致 argv が無い場合は human に質問する。
+既存 workflow が許可した各 launch attempt には retry/続行より前の matching record が必須です。
+READY 後は verified evidence と selected target capture を記録し、refusal 後は raw invocation と error を
+target capture なしで記録します。verified capture は exact selected argv と process-generation identity を
+保存します。permission、cwd、`--add-dir` はコピーしません。verified `--dry-run` は observation を行えますが、
+ledger と ignore file は書き込みません。追記 JSONL は host-local です。legacy unscoped row は migration なしで
+読める diagnostic history として残りますが、モデルの自動解決を許可しません。legacy query は unresolved、
+`human_required=true`、`next_step=query-recorded-target-or-ask-human`、resolution order
+`[recorded-target-scoped-query, ask-human]` を返します。
 
-bare model id を推測せず、shipped list を参照しません。intent-cli が出荷するのは実測済みの
-stable flag shape だけです。Codex は `--model <id> -c
-model_reasoning_effort=<level>`、Claude は正確に
-`claude --model <id> --add-dir <host-root>` を使います。Claude entry は grammar
-だけで、model id や catalogue は出荷しません。他 kind の grammar は発明しません。
+role responsibility は team shape に従います。solo conductor は architecture/orchestration/building を担い、
+各 review には新しい independent reviewer を使います。distributed session-layer behavior は記録された
+delivery team に条件付きで適用されます。Steward は relay のみを担当し、design/review の判断をしません。
 
-表示された launch attempt ごとに、retry または続行の前に対応する記録 step が必須です。
-READY の後は、取得した informal name、kind、exact launched invocation、banner / running argv
-evidence を含む、表示済みの `model-resolution record --outcome verified` command を実行します。
-refusal の後は、取得した exact invocation と error text を含む、表示済みの
-`--outcome refused` command を実行します。次回 query は negative evidence を明示し、
-同一 invocation の retry を許可しません。JSONL ledger は machine-local な
-`.intent-cli/model-resolution/ledger.jsonl` にあり、configuration ではなく measurement です。
-sharing mechanism も catalogue もありません。
+記録する Claude launch recipe は `claude --model <id> --add-dir <host-root> --effort <level>` のままです。
+これは placeholder の flag shape であり、model id を出荷せず、既存 process から permission/cwd/add-dir を
+コピーしません。
 
-2026-08-12 の btx-mvc setup で、`--model sol` は account-shaped HTTP 400 になりました。
-別 workspace の running Codex argv を読むことで working full invocation を回復しました。その
-provider id は host-local evidence のままで、intent-cli とこの guide には意図的に収録しません。
-
-これらの command は provider を起動せず、provider API に対して id を検証しません。
-G647 envelope field と G684 の model / effort を wish とする drift semantics は不変です。
+2026-08-12 の btx-mvc `--model sol` HTTP 400 と手動 argv recovery は historical incident の記録であり、
+現在の recovery policy ではありません。現在は exact scoped baseline と bounded selected-target evidence
+だけを使います。intent-cli は model id/catalogue を出荷せず、provider を起動せず、provider API に対して id を
+検証しません。G647 envelope field と G684 の model / effort を wish とする drift semantics は不変です。
 
 ## design thread の運用 contract（G654 — preview-through-1.x）
 

@@ -131,6 +131,7 @@ public sealed class ScopedModelResolutionQueryG814Tests : IDisposable
     [Theory]
     [InlineData("host-mismatch")]
     [InlineData("generation-mismatch")]
+    [InlineData("starttime-mismatch")]
     [InlineData("topology-mismatch")]
     [InlineData("request-mismatch")]
     public void CurrentEvidenceMismatchReturnsHumanRequiredWithObservedEvidence(string reason)
@@ -139,6 +140,7 @@ public sealed class ScopedModelResolutionQueryG814Tests : IDisposable
         {
             "host-mismatch" => value => value with { Host = "another-host" },
             "generation-mismatch" => value => value with { Pid = value.Pid + 1 },
+            "starttime-mismatch" => value => value with { ProcessStartTimeUtc = "2026-10-03T12:00:01.0000000Z" },
             "topology-mismatch" => value => value with { TopologyDigest = new string('a', 64) },
             "request-mismatch" => value => value with { ObservedModel = "m-other" },
             _ => evidenceMutation,
@@ -147,7 +149,8 @@ public sealed class ScopedModelResolutionQueryG814Tests : IDisposable
 
         var result = Run();
 
-        Assert.Equal(reason, result.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(reason == "starttime-mismatch" ? "generation-mismatch" : reason,
+            result.RootElement.GetProperty("reason").GetString());
         Assert.False(result.RootElement.GetProperty("resolved").GetBoolean());
         Assert.True(result.RootElement.GetProperty("human_required").GetBoolean());
         Assert.Equal("ask-human", result.RootElement.GetProperty("next_step").GetString());
@@ -379,7 +382,6 @@ public sealed class ScopedModelResolutionQueryG814Tests : IDisposable
         ScopedModelResolutionQuery.LedgerReadOverride = null;
         ScopedModelResolutionQuery.TopologyReadOverride = null;
         ScopedModelResolutionQuery.ObserverOverride = null;
-        ModelResolutionLedgerStore.WriteOverride = null;
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 }

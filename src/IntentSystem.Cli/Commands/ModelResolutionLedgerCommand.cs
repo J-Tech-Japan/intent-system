@@ -289,30 +289,6 @@ internal static class ModelResolutionLedgerStore
     }
 }
 
-internal sealed record AgentLiveArgvFallback
-{
-    [JsonPropertyName("mode")]
-    public required string Mode { get; init; }
-
-    [JsonPropertyName("list_command")]
-    public required string ListCommand { get; init; }
-
-    [JsonPropertyName("selection")]
-    public required string Selection { get; init; }
-
-    [JsonPropertyName("inspect_command")]
-    public required string InspectCommand { get; init; }
-
-    [JsonPropertyName("argv_path")]
-    public required string ArgvPath { get; init; }
-
-    [JsonPropertyName("agreement_rule")]
-    public required string AgreementRule { get; init; }
-
-    [JsonPropertyName("human_fallback")]
-    public required string HumanFallback { get; init; }
-}
-
 internal sealed record AgentLaunchEvidenceRecordStep
 {
     [JsonPropertyName("outcome")]
@@ -353,41 +329,27 @@ internal static class AgentModelResolutionGuidance
 {
     public const string PreviewStatus = "preview-through-1.x";
     public const string NeverGuessRule =
-        "Never guess a bare model id and never consult a shipped model list; intent-cli ships no model identifiers or provider catalogue.";
+        "Never guess a bare model id, scan another pane for a replacement, or consult a shipped model list; intent-cli ships no model identifiers or provider catalogue.";
     public const string Incident =
-        "Measured 2026-08-12 on the btx-mvc host: the informal-name guess `--model sol` was refused with an account-shaped HTTP 400; recovery read a currently-running same-kind seat argv and reused its full invocation. The recovered provider id remains host-local evidence and is not shipped.";
+        "Historical incident (2026-08-12, btx-mvc host): an informal-name guess `--model sol` was refused with an account-shaped HTTP 400; the historical manual recovery read a currently-running same-kind seat argv. Current policy uses only an exact scoped baseline and stable selected-target observation; the old live-pane recovery is not the current fallback.";
 
     public static readonly IReadOnlyList<string> ResolutionOrder =
     [
-        "Query the host-local measured ledger for an exact informal-name and kind hit.",
-        "If absent, read a currently-running same-kind seat argv and use its full model/effort invocation as measured host evidence.",
-        "If neither source resolves it, ask the human before emitting a launch command.",
+        "Run the read-only scoped query for the exact routing root, domain, team, logical role, kind, request form, and requested effort (plus requested model for an explicit request). It selects the newest matching scoped verified baseline before validating completeness.",
+        "The query resolves only when two bounded observations confirm the exact selected target, full foreground argv, local PID and actual process start time, host, and selected routing/role digest still match that baseline. It never scans another pane or writes the ledger.",
+        "A missing baseline, omitted scope, refusal, incomplete identity, changed process generation, unreadable argv, or request/topology mismatch remains unresolved: ask the human to authorize an exact invocation; do not substitute another model or auto-replace a running seat.",
     ];
 
     public const string RecordCommand =
-        "intent-cli session-layer model-resolution record --kind <codex|claude> --informal-name <name> --outcome verified|refused --invocation <full-invocation> --evidence <verified-evidence>|--error <refusal-error> --write --format json";
+        "intent-cli session-layer model-resolution record --routing-root <absolute-host-root> --domain <domain> --team <team> --role <logical-role> --kind <codex|claude> --informal-name <informal-mapping-or-attribution> --requested-effort <effort> [--requested-model <explicit-id>] --outcome verified|refused --invocation <exact-invocation> (--evidence <READY-proof> --capture-target-evidence|--error <refusal-text>) --write --format json";
     public const string QueryCommand =
-        "intent-cli session-layer model-resolution query --kind <codex|claude> --informal-name <name> [--candidate-invocation <full-invocation>] --format json";
-
-    public static readonly AgentLiveArgvFallback LiveArgvFallback = new()
-    {
-        Mode = "read-only",
-        ListCommand = "herdr agent list",
-        Selection =
-            "Read result.agents[]; retain entries whose agent equals <resolved-kind>, agent_session is an object, interactive_ready is not false, agent_status is not unknown, and pane_id is non-empty. Sort by workspace_id then pane_id. Zero candidates proceeds to the human fallback; one candidate proceeds to argv inspection; multiple candidates must all be inspected.",
-        InspectCommand = "herdr pane process-info --pane <selected-pane-id>",
-        ArgvPath = "result.process_info.foreground_processes[].argv",
-        AgreementRule =
-            "From each selected pane, retain the foreground process whose argv executable matches <resolved-kind>. Use the full argv only when every inspected same-kind candidate reports the same model/effort invocation; disagreement is unresolved and proceeds to the human fallback.",
-        HumanFallback =
-            "Ask the human for the full invocation only after the ledger miss and this live same-kind argv procedure returns zero candidates, no readable argv, or disagreement.",
-    };
+        "intent-cli session-layer model-resolution query --routing-root <absolute-host-root> --domain <domain> --team <team> --role <logical-role> --kind <codex|claude> --informal-name <informal-mapping-or-attribution> --requested-effort <effort> [--requested-model <model-id>] [--candidate-invocation <full-invocation>] --format json";
 
     public static readonly AgentLaunchEvidenceWorkflow LaunchEvidenceWorkflow = new()
     {
         Mandatory = true,
         Rule =
-            "After every rendered launch attempt, run exactly one matching record step before retrying or continuing: verified only after the READY proof captures the launched invocation plus banner/running-argv evidence; refused immediately after the captured error returns the seat to a shell. This is a required workflow step, not an operator-maintained ledger task.",
+            "After every launch attempt permitted by the existing workflow, run exactly one matching READY/refused record step before retrying or continuing. Verified requires READY plus capture of the exact invocation, selected target, current foreground argv, and local process generation before the mapping can serve as a scoped baseline. Refusal records the raw refused invocation and captured error without target capture. This is a mandatory evidence step and does not change the existing launch-authorization boundary; the CLI never launches or authorizes a provider. Commands use informal mapping by default; add --requested-model <model-id> for an explicit-model request, where informal-name is attribution only.",
         Verified = CreateRecordStep(
             ModelResolutionLedgerCommand.VerifiedOutcome,
             "After the launched seat passes READY with captured banner/running-argv evidence.",
@@ -407,16 +369,28 @@ internal static class AgentModelResolutionGuidance
         string evidenceOption,
         string evidencePlaceholder)
     {
-        var arguments = new[]
+        var arguments = new List<string>
         {
             "session-layer", "model-resolution", "record",
+            "--routing-root", "<absolute-host-root>",
+            "--domain", "<domain>",
+            "--team", "<team>",
+            "--role", "<logical-role>",
             "--kind", "<resolved-kind>",
-            "--informal-name", "<captured-informal-name-and-effort>",
+            "--informal-name", "<informal-mapping-or-attribution>",
+            "--requested-effort", "<requested-effort>",
             "--outcome", outcome,
             "--invocation", "<captured-exact-launched-invocation>",
-            evidenceOption, evidencePlaceholder,
-            "--write", "--format", "json",
         };
+        if (outcome == ModelResolutionLedgerCommand.VerifiedOutcome)
+        {
+            arguments.AddRange([evidenceOption, evidencePlaceholder, "--capture-target-evidence"]);
+        }
+        else
+        {
+            arguments.AddRange([evidenceOption, evidencePlaceholder]);
+        }
+        arguments.AddRange(["--write", "--format", "json"]);
         return new AgentLaunchEvidenceRecordStep
         {
             Outcome = outcome,
@@ -424,8 +398,8 @@ internal static class AgentModelResolutionGuidance
             Command = "intent-cli " + string.Join(' ', arguments.Select(RenderArgument)),
             CommandArguments = arguments,
             CapturedFields = outcome == ModelResolutionLedgerCommand.VerifiedOutcome
-                ? ["kind", "informal name and effort", "exact launched invocation", "READY banner and running argv evidence"]
-                : ["kind", "informal name and effort", "exact refused invocation", "refusal error text"],
+                ? ["routing root", "domain/team/logical role", "kind", "informal mapping or attribution", "requested effort", "exact launched invocation", "READY banner", "stable selected target argv and process-generation evidence"]
+                : ["routing root", "domain/team/logical role", "kind", "informal mapping or attribution", "requested effort", "exact raw refused invocation", "refusal error text"],
         };
     }
 
@@ -461,7 +435,6 @@ internal sealed record ModelResolutionQueryResult
     public ModelResolutionLedgerEntry? NegativeEntry { get; init; }
     public bool? CandidateRetryPermitted { get; init; }
     public required IReadOnlyList<string> ResolutionOrder { get; init; }
-    public AgentLiveArgvFallback? LiveArgvFallback { get; init; }
     public required string NextStep { get; init; }
     public required string NeverGuessRule { get; init; }
     public required string ProviderOperation { get; init; }
@@ -485,6 +458,10 @@ internal static class ModelResolutionLedgerCommand
     private const string QueryUsage =
         "Usage: intent-cli session-layer model-resolution query --kind <codex|claude> --informal-name <name> "
         + "[--candidate-invocation <full-invocation>] [--format markdown|json]";
+    private const string ScopedRecordUsage =
+        "Scoped verified/refused capture: " + AgentModelResolutionGuidance.RecordCommand;
+    private const string ScopedQueryUsage =
+        "Scoped read-only current-target query: " + AgentModelResolutionGuidance.QueryCommand;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -501,6 +478,9 @@ internal static class ModelResolutionLedgerCommand
             writer.WriteLine(Usage);
             writer.WriteLine(RecordUsage);
             writer.WriteLine(QueryUsage);
+            writer.WriteLine(ScopedRecordUsage);
+            writer.WriteLine(ScopedQueryUsage);
+            writer.WriteLine("Unscoped ledger entries and queries remain readable diagnostic history, never authorization.");
             writer.WriteLine("Preview-through-1.x host-local measurement only; launches no provider and performs no provider validation.");
             return args.Length == 0 ? 1 : 0;
         }
@@ -660,7 +640,6 @@ internal static class ModelResolutionLedgerCommand
             NegativeEntry = negative,
             CandidateRetryPermitted = retryPermitted,
             ResolutionOrder = ["recorded-target-scoped-query", "ask-human"],
-            LiveArgvFallback = null,
             NextStep = "query-recorded-target-or-ask-human",
             NeverGuessRule = AgentModelResolutionGuidance.NeverGuessRule,
             ProviderOperation = "none",

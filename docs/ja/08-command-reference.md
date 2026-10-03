@@ -125,28 +125,44 @@ intent-cli guide intent-work setup --format json
 ### host-local model-resolution ledger（G685 — preview-through-1.x）
 
 ```bash
-intent-cli session-layer model-resolution query --kind <codex|claude> \
-  --informal-name <name> [--candidate-invocation <full-invocation>] --format json
-intent-cli session-layer model-resolution record --kind <codex|claude> \
-  --informal-name <name> --outcome verified --invocation <full-invocation> \
-  --evidence <banner-or-argv-evidence> --write --format json
-intent-cli session-layer model-resolution record --kind <codex|claude> \
-  --informal-name <name> --outcome refused --invocation <refused-invocation> \
-  --error <error-text> --write --format json
+intent-cli session-layer model-resolution query --routing-root <absolute-host-root> \
+  --domain <domain> --team <team> --role <logical-role> --kind <codex|claude> \
+  --informal-name <mapping-or-attribution> --requested-effort <effort> \
+  [--requested-model <explicit-id>] [--candidate-invocation <full-invocation>] --format json
+intent-cli session-layer model-resolution record --routing-root <absolute-host-root> \
+  --domain <domain> --team <team> --role <logical-role> --kind <codex|claude> \
+  --informal-name <mapping-or-attribution> --requested-effort <effort> \
+  [--requested-model <explicit-id>] --outcome verified --invocation <full-invocation> \
+  --evidence <READY-proof> --capture-target-evidence --write --format json
+intent-cli session-layer model-resolution record --routing-root <absolute-host-root> \
+  --domain <domain> --team <team> --role <logical-role> --kind <codex|claude> \
+  --informal-name <mapping-or-attribution> --requested-effort <effort> \
+  [--requested-model <explicit-id>] --outcome refused --invocation <raw-invocation> \
+  --error <captured-error> --write --format json
 ```
 
-ledger hit、currently-running same-kind seat argv、human への質問の順で解決します。
-miss の場合は `herdr agent list` を実行し、`result.agents[].agent` が resolved kind と
-完全一致する running entry を選択します。各 entry に
-`herdr pane process-info --pane <selected-pane-id>` を実行し、
-`result.process_info.foreground_processes[].argv` を読みます。選択した同一 kind の seat
-すべてで full invocation が一致するときだけ再利用し、不一致なら human に質問します。
+query では absolute routing root、domain、team、logical role、kind、informal name、requested
+effort が必須です。`--requested-model` と candidate invocation だけは optional です。必須項目の
+欠落は invalid argument として nonzero になります。informal request は mapping name を使い、
+explicit-model request では `--requested-model` を追加します（この場合 informal name は attribution
+のみです）。
+read-only query は最も新しい matching scoped verified baseline を completeness 判定より先に選び、
+exact selected target の full argv、local PID と実際の UTC process start time、host、選択された
+routing/role digest が bounded observation で一致した場合だけ解決します。reader ごとの deadline は
+5 秒です。query は別 pane を scan せず、ledger に書き込まず、model を置き換えません。
+scoped baseline 不足、refusal、identity/argv の読取失敗、process generation の変更、request/topology
+mismatch は human が exact invocation を許可するまで unresolved です。妥当な query で scoped baseline
+が無い場合は `resolved=false` と `human_required=true` を返して exit `0` になります。不正引数と
+unreadable ledger は nonzero です。
 
-表示された launch attempt ごとに、retry または続行の前に対応する記録 step が必須です。
-READY の後は取得した exact invocation と banner / running argv evidence を `verified` として、
-refusal の後は取得した exact invocation と error text を `refused` として記録します。
-bare id を推測せず、shipped list を参照しません。追記専用 ledger は host-local です。
-これらの command は provider を起動せず provider 側の検証もしません。
+既存 workflow が許可した各 launch attempt の後、retry / 続行より前に matching READY/refusal evidence を
+必ず記録します。verified capture は READY を条件とし、selected target の identity と current argv
+だけを取得します。refusal は raw invocation と error を保存し、target capture はしません。
+`--dry-run` の verified operation は bounded observation を実行できますが ledger と ignore file を
+書き込みません。permission、cwd、`--add-dir` はコピーしません。provider の起動・検証も行いません。
+legacy の unscoped row は migration なしで読める diagnostic history として残り、モデルの自動解決を許可しません。legacy query は `resolved=false`、`human_required=true`、
+`next_step=query-recorded-target-or-ask-human`、resolution order
+`[recorded-target-scoped-query, ask-human]` を返します。baseline を自動置換しません。
 
 ### Operator-recorded envelope profile（G686 — preview-through-1.x）
 

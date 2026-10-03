@@ -170,7 +170,9 @@ internal static class SessionLayerSeatPreflightCommand
         // G808: when the operator omits --launch-at, use the durable verified
         // launch evidence already recorded by model-resolution.  The role's
         // recorded kind is the join key; observed_at is never a launch-time
-        // substitute.
+        // substitute. This is a launch-time/freshness hint for seat-preflight
+        // only: legacy unscoped rows may still supply RecordedAt here, but they
+        // cannot authorize a model-resolution query or replace a scoped baseline.
         var topology = NotifyRoleTopologyStore.Resolve(repoRoot, domain, team);
         if (topology.Resolved
             && topology.Topology is { } resolvedTopology

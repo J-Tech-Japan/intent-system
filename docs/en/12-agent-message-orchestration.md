@@ -555,43 +555,47 @@ preview-through-1.x boundaries without changing them.
 
 ### Host-local model resolution (G685 — preview-through-1.x)
 
-For bootstrap, seat recovery, and a kind switch, resolve an operator's informal
-model/effort name in exactly this order:
+For bootstrap, seat recovery, and kind switches, use the exact read-only scoped
+query for absolute routing root, domain, team, logical role, kind, request form,
+and requested effort (plus requested model for an explicit-model request).
+Informal requests use the mapping name; explicit requests treat it only as
+attribution. The query selects the newest matching scoped verified baseline
+before checking completeness, then requires two bounded observations of the
+same selected target and full argv, local PID and actual UTC process start time,
+host, and selected routing/role digest. Each external observation has a
+five-second deadline. It never reads another pane, writes the ledger, or
+reselects a target. Missing scope/baseline, refusal, identity or argv failure,
+generation change, and request/topology mismatch remain unresolved and require
+the human to authorize the exact invocation; do not guess, substitute, or
+auto-replace a model. Valid unresolved queries exit `0`.
 
-1. query the host-local measured ledger with `intent-cli session-layer
-   model-resolution query`;
-2. if it misses, run `herdr agent list`; retain running entries whose
-   `result.agents[].agent` exactly equals the resolved kind, sort by workspace
-   and pane, and inspect every selected pane with
-   `herdr pane process-info --pane <selected-pane-id>`;
-3. read `result.process_info.foreground_processes[].argv` and reuse the full
-   invocation only when every selected same-kind seat agrees;
-4. if there is no readable agreed argv, ask the human.
+Every launch attempt permitted by the existing workflow has one mandatory
+matching record before retry or continuation. After READY, record verified
+evidence and capture the selected target; after refusal, record the raw
+invocation and captured error without target capture. Verified capture stores
+the exact selected argv and process-generation identity; it copies no permission,
+cwd, or `--add-dir` values. A verified `--dry-run` can observe but writes
+neither ledger nor ignore file. The append-only JSONL is host-local and legacy
+unscoped rows remain readable diagnostic history, without migration or model
+authority. Legacy query output is unresolved with `human_required=true`,
+`next_step=query-recorded-target-or-ask-human`, and resolution order
+`[recorded-target-scoped-query, ask-human]`.
 
-Never guess a bare model id and never consult a shipped list. intent-cli ships
-only measured stable flag shapes: Codex uses `--model <id> -c
-model_reasoning_effort=<level>`, and Claude uses exactly
-`claude --model <id> --add-dir <host-root>`. The Claude entry is grammar-only;
-it ships no model id or catalogue. No grammar is invented for another kind.
+Role responsibilities follow the team shape: a solo conductor carries
+architecture/orchestration/building and uses a fresh independent reviewer for
+each review; distributed session-layer behavior applies conditionally to the
+recorded delivery team. A Steward only relays and makes no design or review
+judgments.
 
-Every rendered launch attempt has one mandatory matching record step before
-retry or continuation. After READY, run the rendered `model-resolution record
---outcome verified` command with the captured informal name, kind, exact
-launched invocation, and banner/running-argv evidence. After refusal, run the
-rendered `--outcome refused` command with the captured exact invocation and
-error text. A later query names that negative evidence and prevents retry of
-the same invocation. The JSONL ledger is machine-local at
-`.intent-cli/model-resolution/ledger.jsonl`, is measurement rather than
-configuration, and has no sharing or catalogue mechanism.
+The recorded Claude launch recipe remains `claude --model <id> --add-dir <host-root> --effort <level>`; this is a placeholder-only flag shape, not a
+shipped model id, and no permission, cwd, or add-dir value is copied from an
+existing process.
 
-Measured on 2026-08-12 during btx-mvc setup: `--model sol` received an
-account-shaped HTTP 400. Reading another workspace's running Codex argv supplied
-the working full invocation. That provider id remains host-local evidence and
-is deliberately absent from intent-cli and these guides.
-
-These commands launch no provider and validate no id against a provider API.
-G647 envelope fields and G684's model/effort-as-wish drift semantics are
-unchanged.
+The 2026-08-12 btx-mvc `--model sol` HTTP 400 and manual argv recovery are a
+historical incident record, not current recovery policy. Current policy uses
+only the exact scoped baseline and bounded selected-target evidence. intent-cli
+ships no model ids or catalogue, launches no provider, and validates no id
+against a provider API. G647 envelope fields and G684's model/effort-as-wish drift semantics remain unchanged.
 
 ## Design-thread operating contract (G654 — preview-through-1.x)
 

@@ -108,7 +108,6 @@ internal static class GuideBootstrapCommand
                 QueryCommand = AgentModelResolutionGuidance.QueryCommand,
                 RecordCommand = AgentModelResolutionGuidance.RecordCommand,
                 Incident = AgentModelResolutionGuidance.Incident,
-                LiveArgvFallback = AgentModelResolutionGuidance.LiveArgvFallback,
                 LaunchEvidenceWorkflow = AgentModelResolutionGuidance.LaunchEvidenceWorkflow,
             },
             Steps =
@@ -117,13 +116,8 @@ internal static class GuideBootstrapCommand
                 {
                     Number = 1,
                     Id = "ask-seat-cli-and-model",
-                    Instruction = "Ask the human which CLI and informal model/effort each design, orchestration, implementation, and review seat should run. Resolve each answer in exactly this order: host-local ledger hit, currently-running same-kind seat argv, then ask the human for the full invocation. Never guess a bare id or consult a shipped list.",
-                    EmittedCommands =
-                    [
-                        AgentModelResolutionGuidance.QueryCommand,
-                        AgentModelResolutionGuidance.LiveArgvFallback.ListCommand,
-                        AgentModelResolutionGuidance.LiveArgvFallback.InspectCommand,
-                    ],
+                    Instruction = "Ask the human which CLI and model/effort each design, orchestration, implementation, and review seat should run. Query the exact routing root, domain, team, role, kind, request form, and requested effort. Only a newest scoped verified baseline whose selected pane argv, local process generation, host, and selected topology digest still match can resolve. A missing baseline, omitted scope, refusal, identity failure, or mismatch requires the human to authorize the exact invocation; never scan another pane, guess a bare id, consult a shipped list, or auto-replace a model.",
+                    EmittedCommands = [AgentModelResolutionGuidance.QueryCommand],
                 },
                 new BootstrapStep
                 {
@@ -541,12 +535,7 @@ internal static class GuideBootstrapCommand
             foreach (var item in modelResolution.ResolutionOrder) writer.WriteLine($"- {item}");
             writer.WriteLine($"- {modelResolution.NeverGuessRule}");
             writer.WriteLine($"- query: `{modelResolution.QueryCommand}`");
-            writer.WriteLine($"- live selection: {modelResolution.LiveArgvFallback.Selection}");
-            writer.WriteLine($"- live list (read-only): `{modelResolution.LiveArgvFallback.ListCommand}`");
-            writer.WriteLine($"- argv inspection (read-only): `{modelResolution.LiveArgvFallback.InspectCommand}`");
-            writer.WriteLine($"- argv field: `{modelResolution.LiveArgvFallback.ArgvPath}`");
-            writer.WriteLine($"- agreement: {modelResolution.LiveArgvFallback.AgreementRule}");
-            writer.WriteLine($"- human fallback: {modelResolution.LiveArgvFallback.HumanFallback}");
+            writer.WriteLine($"- record: `{modelResolution.RecordCommand}`");
             writer.WriteLine($"- **mandatory launch evidence:** {modelResolution.LaunchEvidenceWorkflow.Rule}");
             writer.WriteLine($"- verified READY record: `{modelResolution.LaunchEvidenceWorkflow.Verified.Command}`");
             writer.WriteLine($"- refusal record: `{modelResolution.LaunchEvidenceWorkflow.Refused.Command}`");
@@ -656,7 +645,6 @@ internal sealed record BootstrapModelResolution
     public required string QueryCommand { get; init; }
     public required string RecordCommand { get; init; }
     public required string Incident { get; init; }
-    public required AgentLiveArgvFallback LiveArgvFallback { get; init; }
     public required AgentLaunchEvidenceWorkflow LaunchEvidenceWorkflow { get; init; }
 }
 

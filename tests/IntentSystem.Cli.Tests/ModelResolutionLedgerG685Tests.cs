@@ -105,7 +105,7 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
     [Theory]
     [InlineData("verified")]
     [InlineData("refused")]
-    public void RenderedLaunchWorkflow_RequiresAndAppendsCapturedEvidenceThroughRealCommandRouter(string outcome)
+    public void RenderedLaunchWorkflow_EmitsFullyScopedEvidenceCommandWithOutcomeSpecificCapture(string outcome)
     {
         var context = CreateContext();
         var guide = GuideBootstrapCommand.BuildResult(context, root, "intent-cli", "dev", "owner/repo");
@@ -122,30 +122,30 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
             ? "<captured-ready-banner-and-running-argv-evidence>"
             : "<captured-refusal-error-text>", renderedStep.Command, StringComparison.Ordinal);
 
-        var invocation = "codex --model fixture-id -c model_reasoning_effort=medium";
-        var arguments = renderedStep.CommandArguments.Select(value => value switch
-        {
-            "<resolved-kind>" => "codex",
-            "<captured-informal-name-and-effort>" => "fixture medium",
-            "<captured-exact-launched-invocation>" => invocation,
-            "<captured-ready-banner-and-running-argv-evidence>" => "READY banner plus running argv",
-            "<captured-refusal-error-text>" => "captured provider refusal",
-            _ => value,
-        }).ToArray();
-
-        using var writer = new StringWriter();
-        Assert.Equal(0, CommandRouter.Execute(arguments, context, writer));
-        using var result = JsonDocument.Parse(writer.ToString());
-        Assert.True(result.RootElement.GetProperty("applied").GetBoolean());
-        Assert.Equal("none", result.RootElement.GetProperty("provider_operation").GetString());
-
-        var entry = Assert.Single(ModelResolutionLedgerStore.Read(root).Entries);
-        Assert.Equal(outcome, entry.Outcome);
-        Assert.Equal(invocation, entry.Invocation);
+        var arguments = renderedStep.CommandArguments;
+        Assert.Contains("--routing-root", arguments);
+        Assert.Contains("<absolute-host-root>", arguments);
+        Assert.Contains("--domain", arguments);
+        Assert.Contains("--team", arguments);
+        Assert.Contains("--role", arguments);
+        Assert.Contains("--requested-effort", arguments);
+        Assert.Contains("--informal-name", arguments);
+        Assert.Contains("--invocation", arguments);
+        Assert.Contains(outcome, arguments);
+        Assert.DoesNotContain(arguments, value => value.Contains('[', StringComparison.Ordinal)
+            || value.Contains(']', StringComparison.Ordinal));
         if (outcome == "verified")
-            Assert.Equal("READY banner plus running argv", entry.Evidence);
+        {
+            Assert.Contains("--capture-target-evidence", arguments);
+            Assert.Contains("--evidence", arguments);
+            Assert.DoesNotContain("--error", arguments);
+        }
         else
-            Assert.Equal("captured provider refusal", entry.ErrorText);
+        {
+            Assert.Contains("--error", arguments);
+            Assert.DoesNotContain("--capture-target-evidence", arguments);
+            Assert.DoesNotContain("--evidence", arguments);
+        }
     }
 
     [Fact]
@@ -263,7 +263,7 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
     [InlineData("bootstrap")]
     [InlineData("orchestrator-agmsg")]
     [InlineData("orchestrator-herdr-only")]
-    public void RealGuides_RenderLedgerThenLiveArgvThenHuman_AndNeverGuess(string guide)
+    public void RealGuides_RenderScopedQueryThenHumanFallback_AndNeverScanForReplacement(string guide)
     {
         var output = guide switch
         {
@@ -273,17 +273,18 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
             _ => throw new InvalidOperationException(),
         };
 
-        var ledger = output.IndexOf(AgentModelResolutionGuidance.QueryCommand, StringComparison.Ordinal);
-        var live = output.IndexOf(AgentModelResolutionGuidance.LiveArgvFallback.ListCommand, ledger + 1,
-            StringComparison.Ordinal);
-        var inspect = output.IndexOf(AgentModelResolutionGuidance.LiveArgvFallback.InspectCommand, live + 1,
-            StringComparison.Ordinal);
-        var human = output.IndexOf("ask the human", inspect + 1, StringComparison.OrdinalIgnoreCase);
-        Assert.True(ledger >= 0, output);
-        Assert.True(live > ledger, output);
-        Assert.True(inspect > live, output);
-        Assert.True(human > inspect, output);
-        Assert.Contains("result.process_info.foreground_processes[].argv", output, StringComparison.Ordinal);
+        var scopedQuery = output.IndexOf(AgentModelResolutionGuidance.QueryCommand, StringComparison.Ordinal);
+        Assert.True(scopedQuery >= 0, output);
+        Assert.Contains("ask the human", output, StringComparison.OrdinalIgnoreCase);
+        Assert.True(output.Contains("selected target", StringComparison.OrdinalIgnoreCase)
+            || output.Contains("selected pane argv", StringComparison.OrdinalIgnoreCase), output);
+        Assert.True(output.Contains("selected routing/role digest", StringComparison.OrdinalIgnoreCase)
+            || output.Contains("selected topology digest", StringComparison.OrdinalIgnoreCase), output);
+        var activeResolution = string.Join(' ', AgentModelResolutionGuidance.ResolutionOrder);
+        Assert.DoesNotContain("herdr agent list", activeResolution, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("foreground_processes[].argv", activeResolution, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("never scans another pane", activeResolution, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("live_argv_fallback", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(AgentModelResolutionGuidance.LaunchEvidenceWorkflow.Verified.Command, output,
             StringComparison.Ordinal);
         Assert.Contains(AgentModelResolutionGuidance.LaunchEvidenceWorkflow.Refused.Command, output,
@@ -293,6 +294,8 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
         Assert.Contains("ships no model identifiers", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("--model sol", output, StringComparison.Ordinal);
         Assert.Contains("HTTP 400", output, StringComparison.Ordinal);
+        Assert.Contains("historical", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not the current fallback", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

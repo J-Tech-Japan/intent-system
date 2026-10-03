@@ -95,7 +95,7 @@ public sealed class GuideDesignThreadCommandTests
             Assert.Contains("G811 completion channel", rendered, StringComparison.Ordinal);
             var parentProjection = RemoveG811CompletionGuidance(rendered);
             var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(parentProjection)));
-                Assert.Equal("d8b8ea2eabde5180ffe760b91d79354a626eab15c69e574f9fcc190b6d0b88f5", hash);
+                Assert.Equal("92e2efc6e54af6b01aa11f1d100eca5c2db16aaace216dbb4b72b3a9ee7b0bad", hash);
         }
         finally
         {

@@ -99,6 +99,7 @@ ExistingIntakeDelegation	src/IntentSystem.Cli/Commands/AutomationStalledWorkComm
 ExpectedOption	src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.cs
 FailureProjection	src/IntentSystem.Cli/Commands/TaskingPublishReviewedBridgeCommand.cs
 FileCompactionPlan	src/IntentSystem.Cli/Commands/NotifySupervisionStore.cs
+ForegroundProvider	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
 GhCliExistingIssueChecker	src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs
 GhCliGitHubApiQuotaProbe	src/IntentSystem.Cli/Commands/GitHubApiQuota.cs
 GhCliGitHubAutomationCandidateLister	src/IntentSystem.Cli/Commands/IGitHubAutomationCandidateLister.cs
@@ -200,6 +201,7 @@ GuideSubcommandEntry	src/IntentSystem.Cli/Commands/GuideHelpCommand.cs
 HerdrAgentState	src/IntentSystem.Cli/Commands/NotifyTransport.cs
 HerdrNotifyTransport	src/IntentSystem.Cli/Commands/NotifyTransport.cs
 HerdrPaneLabelValidation	src/IntentSystem.Cli/Commands/HerdrPaneLabelValidation.cs
+HerdrReadResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
 HostDataRootResolver	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe.cs
 HostLoopIdentityCapture	src/IntentSystem.Cli/Commands/HostLoopIdentityCapture.cs
 HostOwnershipModel	src/IntentSystem.Cli/Commands/HostOwnershipModel.cs
@@ -239,6 +241,7 @@ IStandaloneBinaryReplacer	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 IStandaloneUpdateInstaller	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 IUpdateProcessRunner	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 IUpdateReleaseClient	src/IntentSystem.Cli/Commands/UpdateCommand.cs
+IdentityReadResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
 InspectOptions	src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs
 InstalledCliProbeResult	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe.cs
 InstalledCliResolution	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe.cs
@@ -466,6 +469,7 @@ PrivatePreviewExpiryGate	src/IntentSystem.Cli/Infrastructure/PrivatePreviewExpir
 ProcessExecutablePathResolver	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 ProcessOutputEncoding	src/IntentSystem.Cli/ProcessOutputEncoding.cs
 ProcessUpdateRunner	src/IntentSystem.Cli/Commands/UpdateCommand.cs
+ProviderReadResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
 PublishLifecycleExclusion	src/IntentSystem.Cli/Commands/AutomationPublishLifecycleRepairCommand.cs
 PublishLifecycleRepairResult	src/IntentSystem.Cli/Commands/AutomationPublishLifecycleRepairCommand.cs
 QueueDispatchCommand	src/IntentSystem.Cli/Commands/QueueDispatchCommand.cs
@@ -474,6 +478,7 @@ QueueStateEntry	src/IntentSystem.Cli/Commands/MetadataValidateAnalyzer.cs
 ReconcileOptions	src/IntentSystem.Cli/Commands/NotifySuperviseReconcileCommand.cs
 ReconcileResult	src/IntentSystem.Cli/Commands/NotifySuperviseReconcileCommand.cs
 RecordedSeatIdentity	src/IntentSystem.Cli/Commands/SessionLayerSeatPreflightCommand.cs
+RegistrationReadResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
 RepairCycleHistoryResult	src/IntentSystem.Cli/Commands/NotifySuperviseRepairCycleHistoryCommand.cs
 RepairOptions	src/IntentSystem.Cli/Commands/NotifySuperviseRepairCycleHistoryCommand.cs
 ReplaceLabelsRequestBody	src/IntentSystem.Cli/Commands/IGitHubLabelMutator.cs
@@ -481,6 +486,14 @@ RequiredSurface	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe
 SafetyNestedProviderHandoffCommand	src/IntentSystem.Cli/Commands/SafetyNestedProviderHandoffCommand.cs
 SameRepoMetadataPreflightProbe	src/IntentSystem.Cli/Commands/AutomationSameRepoMetadataPreflightCommand.cs
 SameRepoMetadataPreflightResult	src/IntentSystem.Cli/Commands/AutomationSameRepoMetadataPreflightCommand.cs
+ScopedLocalProcessIdentityReadResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionReaders.cs
+ScopedLocalProcessIdentityReader	src/IntentSystem.Cli/Commands/ScopedModelResolutionReaders.cs
+ScopedModelResolutionObservationParser	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
+ScopedModelResolutionObservationResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
+ScopedModelResolutionObservedEvidence	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
+ScopedModelResolutionReaders	src/IntentSystem.Cli/Commands/ScopedModelResolutionReaders.cs
+ScopedModelResolutionTargetObserver	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
+ScopedObservedProvider	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
 ScopedRuntimePaths	src/IntentSystem.Cli/Commands/MetadataUpdateCommand.cs
 SeatGroup	src/IntentSystem.Cli/Commands/SessionLayerSeatPreflightCommand.cs
 SelectedRole	src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs
