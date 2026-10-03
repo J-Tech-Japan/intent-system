@@ -30,6 +30,66 @@ internal sealed record ModelResolutionLedgerEntry
     [JsonPropertyName("recorded_at")]
     public required DateTimeOffset RecordedAt { get; init; }
 
+    // G814 keeps the existing JSONL ledger readable. Legacy rows omit these
+    // fields and remain diagnostic evidence only; scoped verified rows use
+    // scope_version=1 and carry the captured target/process provenance.
+    [JsonPropertyName("scope_version")]
+    public int? ScopeVersion { get; init; }
+
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
+
+    [JsonPropertyName("team")]
+    public string? Team { get; init; }
+
+    [JsonPropertyName("role")]
+    public string? Role { get; init; }
+
+    [JsonPropertyName("role_aliases")]
+    public IReadOnlyList<string>? RoleAliases { get; init; }
+
+    [JsonPropertyName("workspace_id")]
+    public string? WorkspaceId { get; init; }
+
+    [JsonPropertyName("pane_id")]
+    public string? PaneId { get; init; }
+
+    [JsonPropertyName("request_form")]
+    public string? RequestForm { get; init; }
+
+    [JsonPropertyName("requested_model")]
+    public string? RequestedModel { get; init; }
+
+    [JsonPropertyName("requested_effort")]
+    public string? RequestedEffort { get; init; }
+
+    [JsonPropertyName("host")]
+    public string? Host { get; init; }
+
+    [JsonPropertyName("pid")]
+    public long? ProcessId { get; init; }
+
+    [JsonPropertyName("process_start_time_utc")]
+    public string? ProcessStartTimeUtc { get; init; }
+
+    [JsonPropertyName("identity_source")]
+    public string? IdentitySource { get; init; }
+
+    [JsonPropertyName("topology_digest")]
+    public string? TopologyDigest { get; init; }
+
+    [JsonPropertyName("observed_at")]
+    public DateTimeOffset? ObservedAt { get; init; }
+
+    [JsonPropertyName("observed_argv")]
+    public IReadOnlyList<string>? ObservedArgv { get; init; }
+
+    [JsonPropertyName("observed_model")]
+    public string? ObservedModel { get; init; }
+
+    [JsonPropertyName("observed_effort")]
+    public string? ObservedEffort { get; init; }
+
     [JsonIgnore]
     public string Invocation => FullInvocation ?? RefusedInvocation ?? string.Empty;
 }
@@ -391,6 +451,7 @@ internal sealed record ModelResolutionQueryResult
     public required string Operation { get; init; }
     public required string PreviewStatus { get; init; }
     public required bool Resolved { get; init; }
+    public required bool HumanRequired { get; init; }
     public required string Status { get; init; }
     public required string RecordPath { get; init; }
     public required string Kind { get; init; }
@@ -522,6 +583,7 @@ internal static class ModelResolutionLedgerCommand
                 Operation = "model-resolution-query",
                 PreviewStatus = AgentModelResolutionGuidance.PreviewStatus,
                 Resolved = false,
+                HumanRequired = true,
                 Status = "ledger-unreadable",
                 RecordPath = read.Path,
                 Kind = grammar.Kind,
@@ -537,30 +599,35 @@ internal static class ModelResolutionLedgerCommand
             return 1;
         }
 
-        var matching = read.Entries.Where(entry =>
+        var matching = read.Entries.Where(entry => entry.ScopeVersion is null &&
                 string.Equals(entry.Kind, grammar.Kind, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(entry.InformalName, parsed.InformalName, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(entry => entry.RecordedAt)
             .ToArray();
-        var positive = matching.LastOrDefault(entry => entry.Outcome == VerifiedOutcome);
-        var negative = matching.LastOrDefault(entry => entry.Outcome == RefusedOutcome);
+        var ordered = matching.Select((entry, index) => (Entry: entry, Index: index))
+            .OrderBy(item => item.Entry.RecordedAt)
+            .ThenBy(item => item.Index)
+            .ToArray();
+        var positivePair = ordered.LastOrDefault(item => item.Entry.Outcome == VerifiedOutcome);
+        var positive = positivePair.Entry;
+        var negative = ordered.LastOrDefault(item => item.Entry.Outcome == RefusedOutcome).Entry;
         if (positive is not null)
         {
-            var laterSameInvocationRefusal = matching.LastOrDefault(entry =>
-                entry.RecordedAt > positive.RecordedAt
-                && entry.Outcome == RefusedOutcome
-                && string.Equals(entry.RefusedInvocation, positive.FullInvocation, StringComparison.Ordinal));
-            if (laterSameInvocationRefusal is not null)
+            var laterSameInvocationRefusal = ordered.LastOrDefault(item =>
+                item.Entry.Outcome == RefusedOutcome
+                && string.Equals(item.Entry.RefusedInvocation, positive.FullInvocation, StringComparison.Ordinal)
+                && (item.Entry.RecordedAt > positive.RecordedAt
+                    || item.Entry.RecordedAt == positive.RecordedAt && item.Index > positivePair.Index));
+            if (laterSameInvocationRefusal.Entry is not null)
             {
                 positive = null;
-                negative = laterSameInvocationRefusal;
+                negative = laterSameInvocationRefusal.Entry;
             }
         }
         bool? retryPermitted = null;
         if (parsed.CandidateInvocation is not null)
         {
-            var latestCandidate = matching.LastOrDefault(entry =>
-                string.Equals(entry.Invocation, parsed.CandidateInvocation, StringComparison.Ordinal));
+            var latestCandidate = ordered.LastOrDefault(item =>
+                string.Equals(item.Entry.Invocation, parsed.CandidateInvocation, StringComparison.Ordinal)).Entry;
             retryPermitted = latestCandidate?.Outcome != RefusedOutcome;
             if (retryPermitted == false) negative = latestCandidate;
         }
@@ -576,7 +643,9 @@ internal static class ModelResolutionLedgerCommand
         {
             Operation = "model-resolution-query",
             PreviewStatus = AgentModelResolutionGuidance.PreviewStatus,
-            Resolved = positive is not null && retryPermitted != false,
+            // Unscoped queries are retained for historical diagnostics only.
+            Resolved = false,
+            HumanRequired = true,
             Status = status,
             RecordPath = read.Path,
             Kind = grammar.Kind,
@@ -585,22 +654,18 @@ internal static class ModelResolutionLedgerCommand
             PositiveEntry = positive,
             NegativeEntry = negative,
             CandidateRetryPermitted = retryPermitted,
-            ResolutionOrder = AgentModelResolutionGuidance.ResolutionOrder,
-            LiveArgvFallback = positive is null || retryPermitted == false
-                ? AgentModelResolutionGuidance.LiveArgvFallback
-                : null,
-            NextStep = positive is not null && retryPermitted != false
-                ? "use-ledger-full-invocation"
-                : "inspect-live-same-kind-argv",
+            ResolutionOrder = ["recorded-target-scoped-query", "ask-human"],
+            LiveArgvFallback = null,
+            NextStep = "query-recorded-target-or-ask-human",
             NeverGuessRule = AgentModelResolutionGuidance.NeverGuessRule,
             ProviderOperation = "none",
         };
         Emit(writer, parsed.Format, result, status switch
         {
-            "ledger-hit" => $"Host-local ledger hit for '{parsed.InformalName}' ({grammar.Kind}).",
-            "refused-invocation" => "The candidate invocation has negative evidence and must not be retried.",
-            "negative-evidence-available" => "Negative host-local evidence exists; inspect it, then continue to live argv or ask the human.",
-            _ => "No host-local ledger hit; continue to live same-kind argv, then ask the human.",
+            "ledger-hit" => $"Diagnostic host-local ledger hit for '{parsed.InformalName}' ({grammar.Kind}); a scoped query is required before use.",
+            "refused-invocation" => "The candidate invocation has negative evidence and must not be retried; use a scoped query or ask the human.",
+            "negative-evidence-available" => "Negative host-local evidence exists; use a scoped query or ask the human.",
+            _ => "No host-local ledger hit; use a scoped query or ask the human.",
         });
         return 0;
     }
@@ -729,14 +794,12 @@ internal static class ModelResolutionLedgerCommand
         writer.WriteLine();
         writer.WriteLine($"- status: **{AgentModelResolutionGuidance.PreviewStatus}**");
         writer.WriteLine($"- {summary}");
-        if (result is ModelResolutionQueryResult { LiveArgvFallback: { } fallback } query)
+        if (result is ModelResolutionQueryResult query)
         {
+            writer.WriteLine("- resolved: **false**");
+            writer.WriteLine("- human required: **true**");
             writer.WriteLine($"- next step: **{query.NextStep}**");
-            writer.WriteLine($"- list same-kind seats: `{fallback.ListCommand}`");
-            writer.WriteLine($"- selection: {fallback.Selection}");
-            writer.WriteLine($"- inspect selected argv: `{fallback.InspectCommand}` → `{fallback.ArgvPath}`");
-            writer.WriteLine($"- agreement: {fallback.AgreementRule}");
-            writer.WriteLine($"- human fallback: {fallback.HumanFallback}");
+            writer.WriteLine($"- resolution order: `{string.Join(" → ", query.ResolutionOrder)}`");
         }
         writer.WriteLine($"- {AgentModelResolutionGuidance.NeverGuessRule}");
         writer.WriteLine("- provider operation: **none**");

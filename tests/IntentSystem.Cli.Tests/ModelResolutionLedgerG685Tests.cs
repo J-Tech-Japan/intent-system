@@ -35,7 +35,7 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
     }
 
     [Fact]
-    public void VerifiedRecord_AppendsFullInvocation_AndSubsequentQueryHits()
+    public void VerifiedLegacyRecord_AppendsFullInvocation_AndSubsequentQueryRemainsDiagnosticOnly()
     {
         var context = CreateContext();
         const string workingInvocation =
@@ -62,8 +62,15 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
             ["query", "--kind", "codex", "--informal-name", "sol medium", "--format", "json"],
             queryWriter));
         using var query = JsonDocument.Parse(queryWriter.ToString());
-        Assert.True(query.RootElement.GetProperty("resolved").GetBoolean());
+        Assert.False(query.RootElement.GetProperty("resolved").GetBoolean());
+        Assert.True(query.RootElement.GetProperty("human_required").GetBoolean());
         Assert.Equal("ledger-hit", query.RootElement.GetProperty("status").GetString());
+        Assert.Equal("query-recorded-target-or-ask-human",
+            query.RootElement.GetProperty("next_step").GetString());
+        Assert.Equal(new[] { "recorded-target-scoped-query", "ask-human" },
+            query.RootElement.GetProperty("resolution_order").EnumerateArray()
+                .Select(value => value.GetString()).ToArray());
+        Assert.False(query.RootElement.TryGetProperty("live_argv_fallback", out _));
         Assert.Equal(workingInvocation,
             query.RootElement.GetProperty("positive_entry").GetProperty("full_invocation").GetString());
 
@@ -217,7 +224,7 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
     }
 
     [Fact]
-    public void LedgerMiss_ExposesStructuredReadOnlyLiveArgvFallbackBeforeHuman()
+    public void LedgerMiss_IsDiagnosticOnlyAndDirectsToScopedQueryOrHuman()
     {
         using var writer = new StringWriter();
         Assert.Equal(0, CommandRouter.Execute(
@@ -228,18 +235,28 @@ public sealed class ModelResolutionLedgerG685Tests : IDisposable
         using var result = JsonDocument.Parse(writer.ToString());
         var rootElement = result.RootElement;
         Assert.Equal("ledger-miss", rootElement.GetProperty("status").GetString());
-        Assert.Equal("inspect-live-same-kind-argv", rootElement.GetProperty("next_step").GetString());
-        var fallback = rootElement.GetProperty("live_argv_fallback");
-        Assert.Equal("read-only", fallback.GetProperty("mode").GetString());
-        Assert.Equal("herdr agent list", fallback.GetProperty("list_command").GetString());
-        Assert.Equal("herdr pane process-info --pane <selected-pane-id>",
-            fallback.GetProperty("inspect_command").GetString());
-        Assert.Equal("result.process_info.foreground_processes[].argv",
-            fallback.GetProperty("argv_path").GetString());
-        Assert.Contains("agent equals <resolved-kind>", fallback.GetProperty("selection").GetString(),
-            StringComparison.Ordinal);
-        Assert.Contains("only after the ledger miss", fallback.GetProperty("human_fallback").GetString(),
-            StringComparison.Ordinal);
+        Assert.False(rootElement.GetProperty("resolved").GetBoolean());
+        Assert.True(rootElement.GetProperty("human_required").GetBoolean());
+        Assert.Equal("query-recorded-target-or-ask-human", rootElement.GetProperty("next_step").GetString());
+        Assert.False(rootElement.TryGetProperty("live_argv_fallback", out _));
+        Assert.Equal(new[] { "recorded-target-scoped-query", "ask-human" },
+            rootElement.GetProperty("resolution_order").EnumerateArray()
+                .Select(value => value.GetString()).ToArray());
+    }
+
+    [Fact]
+    public void LegacyMarkdownQuery_StatesItIsNonAuthorizingAndOmitsLiveFallback()
+    {
+        using var writer = new StringWriter();
+        Assert.Equal(0, ModelResolutionLedgerCommand.Execute(
+            CreateContext(), ["query", "--kind", "codex", "--informal-name", "fixture medium"], writer));
+
+        var markdown = writer.ToString();
+        Assert.Contains("resolved: **false**", markdown, StringComparison.Ordinal);
+        Assert.Contains("human required: **true**", markdown, StringComparison.Ordinal);
+        Assert.Contains("query-recorded-target-or-ask-human", markdown, StringComparison.Ordinal);
+        Assert.Contains("recorded-target-scoped-query → ask-human", markdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("herdr agent list", markdown, StringComparison.Ordinal);
     }
 
     [Theory]
