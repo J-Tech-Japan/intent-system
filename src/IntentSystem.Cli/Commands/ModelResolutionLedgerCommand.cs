@@ -615,8 +615,7 @@ internal static class ModelResolutionLedgerCommand
             var laterSameInvocationRefusal = ordered.LastOrDefault(item =>
                 item.Entry.Outcome == RefusedOutcome
                 && string.Equals(item.Entry.RefusedInvocation, positive.FullInvocation, StringComparison.Ordinal)
-                && (item.Entry.RecordedAt > positive.RecordedAt
-                    || item.Entry.RecordedAt == positive.RecordedAt && item.Index > positivePair.Index));
+                && item.Entry.RecordedAt > positive.RecordedAt);
             if (laterSameInvocationRefusal.Entry is not null)
             {
                 positive = null;
