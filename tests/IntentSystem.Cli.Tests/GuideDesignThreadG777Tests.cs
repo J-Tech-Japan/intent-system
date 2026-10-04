@@ -40,10 +40,10 @@ public sealed class GuideDesignThreadG777Tests
         "external_residence_operating_contract",
     ];
 
-    // Immutable G776 parent oracle from cfdacb4a657d9a60ab82fea3faa435ff732f389f.
-    // The current head is projected back to that parent by removing only the
-    // G789 nested additions before this hash is computed.
-    private const string G776BaselinePayloadOracleHash = "313f6eb44f538042a3818899866a40b5a8dc26c13b247573af8a7a8306248998";
+    // G853 updates only the bounded G775 Orca summary prose and adds its own
+    // top-level contract; project that contract away before checking this
+    // preserved parent payload.
+    private const string G776BaselinePayloadOracleHash = "2af4756d6231dc6920646744437c682f1ffc83357ceaf6e0979ba8331ae4f938";
 
     [Fact]
     public void RenderedLivenessGuidance_NamesTheSanctionedDryRunBeforeWriteResponse_G777()
@@ -165,6 +165,7 @@ public sealed class GuideDesignThreadG777Tests
         // oracle scoped to the pre-G800 guide surface.
         projected.Remove("research_delegation");
         projected.Remove("completion_channel");
+        projected.Remove("orca_mailbox_lifecycle");
         projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
         projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
         projected["observation_boundary"]?.AsObject().Remove("inspect_route");

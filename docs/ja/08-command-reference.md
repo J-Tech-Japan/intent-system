@@ -58,6 +58,21 @@ role-facing route も構造化され、テストされています。`guide revi
 さらに、意図的な topology rebuild 用のインストール済み `guide topology-workspace-move` recipe も
 これらの surface から到達できます。
 
+## Orca mailbox lifecycle guidance（G853 — preview-through-1.x）
+
+`guide bootstrap`、`guide onboarding`、`guide design-thread`、
+`guide solo-conductor`、`guide steward-thread` は、共通の
+`orca-mailbox-lifecycle/v1` contract を JSON / Markdown で公開します。記録済み team shape と
+G837 binding health のみを projection し、installed capability / caller check、意図的な create/adopt、
+canonical `record-orca-run` の dry-run/CAS write、recipient discovery、durable enqueue、bounded FIFO
+receive/ACK、exact-request recovery を扱います。手順の詳細は
+[agent-message orchestration lifecycle](12-agent-message-orchestration.md)
+を参照してください。
+
+Orca command を実行するのは agent です。`intent-cli` は command を render して host metadata を読むだけで、
+Orca 起動、provider launch、binding mutation、mail transport、receive policy の schedule は行いません。
+既存の `orca-push` / `inbox-pull`、binding-health cause、CAS behavior、canonical notify authority は維持します。
+
 ## topology workspace move (G697)
 
 記録済み team を新しい herdr workspace へ意図的に rebuild するときは、最初にインストール済み

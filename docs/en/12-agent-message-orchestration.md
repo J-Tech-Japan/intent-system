@@ -665,9 +665,11 @@ receive, and omits `--since` only for the first receive:
 intent-cli notify collect --domain <domain> --team <team> --role design --since <cursor> --wait --timeout-ms <timeout-ms> --routing-root <routing-root> --format json
 ```
 
-**Dual-send after the loop is established.** Canonical `intent-cli notify` is
-the durable record. A wake channel is a courtesy-only signal; dual-send is the
-practiced form.
+**Optional dual-send after the loop is established.** Canonical
+`intent-cli notify` is the durable workflow record. An Orca wake/nudge is
+courtesy-only, best effort, and not acceptance. A second terminal send is
+optional and is never required; do not resend durable mail because attention
+is unproven.
 
 **Declare the courtesy wake explicitly (G776).** Only an operator may add a
 literal, one-line `--wake-command` template to an `external` topology record.
@@ -683,54 +685,139 @@ substitutes for the durable record. `intent-cli` renders this operator-supplied
 text only: it never executes, validates by shelling out, health-checks, launches,
 or manages the command.
 
-> **Non-normative Orca worked example.** A design operator may bind the
-> coordinator terminal before reading, then perform Orca's bounded blocking
-> check:
->
-> ```text
-> orca orchestration run-use --id <run-id>
-> orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json
-> ```
->
-> Orca is only a courtesy wake receiver beside canonical `intent-cli notify`;
-> intent-cli neither launches nor manages Orca.
->
-> An external design seat may also declare its durable run-addressed courtesy
-> wake template (not a routing input):
->
-> ```text
-> orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
-> ```
+### Orca mailbox lifecycle contract (G853 — preview-through-1.x)
 
-> **Non-normative Orca operating order (G789/G837).** Before any seat message,
-> create or bind the Run, share its identifier, record the adopted Run id on
-> the seat the recorded team shape selects, and have each sender provide its
-> own handle in this order:
->
-> ```text
-> orca orchestration run-create --objective <text> [--from <handle>]
-> orca orchestration run-use --id <run-id> [--from <handle>]
-> intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <role> --current absent --new <run-id> --receive-policy <orca-push|inbox-pull> [--frontend <name>] --confirm-record-orca-run --dry-run --format json
-> ```
->
-> 1. Use exactly one of the create-or-bind forms, then share the resulting
->    `<run-id>` with every sender before anyone addresses `run:<run-id>`.
-> 2. Record the adopted `<run-id>` on the required external seat
->    (`session-layer topology record-orca-run … --dry-run` first).
-> 3. Each sender supplies its own `--from <role>` handle. Use the declared
->    wake send form unchanged, then use the bounded check:
->
->    ```text
->    orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
->    orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json
->    ```
->
-> The same Orca channel carries herdr seats' courtesy wakes and
-> design-to-design messages. Neither is durable workflow evidence: canonical
-> `intent-cli notify` remains durable. intent-cli records an adopted Run id
-> with `session-layer topology record-orca-run` and shows it in
-> `session-layer topology show`, `session-layer topology orca-runs`, and
-> `guide bootstrap`, but never runs, launches, verifies, or manages Orca.
+`guide bootstrap`, `guide onboarding`, `guide design-thread`,
+`guide solo-conductor`, and `guide steward-thread` render the same versioned
+`orca-mailbox-lifecycle/v1` contract in JSON and Markdown. The acting agent
+executes its steps. `intent-cli` reads recorded team mode, roster, and binding
+health, and renders commands; it never invokes Orca, launches a provider,
+sends/checks/ACKs mail, changes bindings, installs a timer, or runs a receive
+policy. Existing G837 binding locations, locks, CAS rules, health causes, and
+canonical notify authority remain unchanged.
+
+The measured forms below target installed Orca 1.4.219. Check installed help
+before acting and stop if its required capability is unavailable:
+
+```text
+orca --version
+orca skills get orchestration --json
+orca orchestration run-create --help
+orca orchestration request-show --help
+orca orchestration check --help
+intent-cli session-layer topology orca-runs --format json
+```
+
+Resolve the team shape only from its recorded mode and roster. `solo-conductor`
+uses the design/Architect sidecar and needs no seat roster; four-seat delivery
+uses the exact recorded Architect alias key; five-seat delivery uses Steward.
+For `frontend=orca`, preserve `receive_policy=orca-push`; for `codex-app` or
+`claude-app`, preserve `inbox-pull`. A missing or unsupported frontend is a
+prerequisite, not a provider-kind inference. A missing team, mode, roster, or
+frontend stays unresolved in the guide.
+
+The caller must be proven independently of the frontend. An authenticated
+Orca session uses only its injected session identity and omits terminal caller
+flags. A terminal caller consistently uses only its verified own handle as
+`--from` for create/use/send and `--terminal` for check. An identity-less app
+caller stops lifecycle mutation, retains canonical inbox workflow, and reports
+the missing identity; it never borrows another pane, fabricates a session, or
+launches a worker workaround.
+
+For a healthy binding, inspect that exact Run and resume with its own caller;
+skip create. With no binding, inspect `run-current` for the same caller and
+deliberately adopt only an exact Run whose caller authority is established.
+Create only after capability and caller checks plus an explicit create choice.
+Choose one session or terminal form, then use the actual returned `run.id`:
+
+```text
+orca orchestration run-current --json
+orca orchestration run-current --from <own-terminal-handle> --json
+orca orchestration run-show --id <exact-run-id> --json
+orca orchestration run-use --id <exact-run-id> --json
+orca orchestration run-use --id <exact-run-id> --from <own-terminal-handle> --json
+orca orchestration run-create --objective "<domain>/<team> <selected-seat> mailbox" --json
+orca orchestration run-create --objective "<domain>/<team> <selected-seat> mailbox" --from <own-terminal-handle> --json
+```
+
+`run-use` is deliberate authorized adoption/resume; do not use
+`--takeover-legacy`, objective matching, or run-list order as ownership proof.
+Create once only. If recording fails, retain the same confirmed id for repair;
+never create a replacement. Unusable or contradictory bindings follow the
+existing health remedy or explicit reconciliation; no automatic clear,
+takeover, or rebind occurs.
+
+Record from the canonical host routing root with the selected role key and the
+actual current token (`absent` only when truly absent). Inspect dry-run output
+before the CAS write. For solo-conductor, append the recorded frontend to both
+commands; topology-role binding commands do not take `--frontend`:
+
+```text
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> [--frontend <recorded-frontend>] --confirm-record-orca-run --dry-run --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> [--frontend <recorded-frontend>] --confirm-record-orca-run --write --format json
+intent-cli guide bootstrap --domain <d> --team <t> --format json
+```
+
+The bracketed frontend option above denotes a separate optional flag in this
+documentation template. Follow the guide's structured `arguments[]` list for
+each actual invocation; do not pass brackets literally. Verify recorded
+binding health and handover through the shape-appropriate show/validate and
+`orca-runs` readers. This checks host records, not the Orca runtime.
+
+Discover the recipient through `session-layer topology orca-runs`, check its
+recorded health, and address exactly `run:<id>`. For intent-cli task/report
+activity, complete canonical notify first; independent cross-team discussion
+does not need an invented notify task. Send proves durable enqueue only:
+attention is best effort, not acceptance, and a duplicate terminal send is not
+mandatory.
+
+```text
+orca orchestration send --to run:<recipient-run-id> --type status --subject "<subject>" --body "<body>" --json
+orca orchestration send --to run:<recipient-run-id> --from <own-terminal-handle> --type status --subject "<subject>" --body "<body>" --json
+orca orchestration check --run <own-run-id> --wait --timeout-ms 30000 --json
+orca orchestration check --run <own-run-id> --terminal <own-terminal-handle> --wait --timeout-ms 30000 --json
+orca orchestration check --run <own-run-id> --ack <returned-delivery-id> --json
+orca orchestration check --run <own-run-id> --terminal <own-terminal-handle> --ack <returned-delivery-id> --json
+```
+
+Check is an agent-executed mutation. Process the entire FIFO batch before ACK;
+`--types` changes wake conditions, not batch membership. Replay an
+unacknowledged batch without repeating completed canonical actions. ACK covers
+transport delivery only, not task completion, review acceptance, or the
+canonical notify receipt. Keep the whole batch unacknowledged if processing is
+incomplete. ACK can return another batch: inspect and retain it for processing.
+`--peek` and `--all` inspect without consuming. Use finite waits and the
+existing `inbox-pull` wake/checkpoint cadence; add no timer, provider wake loop,
+lifecycle dispatch identity, or arbitrary wake command.
+
+For an unknown create/send/ACK result, retain the exact original command,
+executable, caller, payload, and reported request id. Inspect that request and
+use only its exact replay form:
+
+```text
+orca orchestration request-show --request <reported-request-id> --json
+<exact-original-command> --retry-request <same-reported-request-id>
+```
+
+Completed uses the recorded receipt/outcome. Pending waits for the live
+original command or performs the documented exact replay with the same id.
+Absent is not proof of non-execution; missing/malformed receipt, absent request
+id, inaccessible runtime, or caller mismatch remains unknown. Unknown never
+authorizes a fresh create/send/ACK or a guessed Delivery id. No objective-based
+create idempotency, empirical replay proof, or exactly-once processing is
+claimed.
+
+The parent #1771 disposition remains explicit:
+
+| Parent ask | G853 disposition |
+| --- | --- |
+| Create once, record the Run id, and hand over | G837 storage plus agent-executed G853 create/adopt/recover/record flow |
+| Cross-team Run discovery | Retain G837 `orca-runs` discovery and exact-id addressing |
+| Durable attention and receive | Agent-executed enqueue, bounded whole-batch processing/ACK, existing cadence |
+| Report recovery in seat errors | Retain G837 equal-root reconciliation |
+| Missing-binding validation | Retain G837 informational validation for recorded delivery shapes; caller checks availability |
+| Owned live acceptance | Parent owns adoption/self-mail rehearsal after implementation gates; not performed by this code change |
+| Automatic Orca adapters | Not implemented under the standing no-executor ruling |
 
 **Mixed-kind review-seat selection (G789).** The recorded topology fields
 decide: use `kind` for a herdr seat and `frontend` for an external seat; do

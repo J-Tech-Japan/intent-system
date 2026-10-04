@@ -159,7 +159,12 @@ public sealed class G833SoloConductorTests : IDisposable
         Assert.Equal(0, RunSet(TeamMode.SoloConductor).ExitCode);
         var after = RenderBootstrap(withTeam: false);
         Assert.Equal(before, after);
-        Assert.DoesNotContain("solo-conductor", after, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(after);
+        Assert.True(document.RootElement.TryGetProperty("orca_mailbox_lifecycle", out _), after);
+        Assert.True(document.RootElement.TryGetProperty("orca_mailbox_lifecycle", out var lifecycle), after);
+        var selection = lifecycle.GetProperty("binding_selection");
+        Assert.Equal("prerequisite", selection.GetProperty("context_status").GetString());
+        Assert.False(selection.TryGetProperty("team_shape", out _));
     }
 
     // ── guide next ─────────────────────────────────────────────────────

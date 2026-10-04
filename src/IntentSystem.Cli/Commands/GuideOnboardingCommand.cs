@@ -65,6 +65,7 @@ internal static class GuideOnboardingCommand
         {
             InvokingRole = GuideRoleContractGuidance.Normalize(role),
             RoleContractFirst = GuideRoleContractGuidance.Resolve(role),
+            OrcaMailboxLifecycle = OrcaMailboxLifecycleGuidance.CreateTemplate(),
             Summary = "AI-agent onboarding smoke: the first calls a fresh agent should make to learn the collaboration model from intent-cli itself, without reading local skill files or copied rules folders.",
             FirstCallSequence = new[]
             {
@@ -272,6 +273,9 @@ internal static class GuideOnboardingCommand
         {
             writer.WriteLine($"- {rule}");
         }
+
+        writer.WriteLine();
+        OrcaMailboxLifecycleGuidance.WriteMarkdown(writer, result.OrcaMailboxLifecycle);
     }
 
     private static bool TryParseArguments(string[] args, out string? role, out string format, out string error)
@@ -346,6 +350,9 @@ internal sealed record GuideOnboardingResult
     [JsonPropertyName("role_contract_first")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public GuideRoleContractPointer? RoleContractFirst { get; init; }
+
+    [JsonPropertyName("orca_mailbox_lifecycle")]
+    public required OrcaMailboxLifecycleContract OrcaMailboxLifecycle { get; init; }
 
     [JsonPropertyName("summary")]
     public required string Summary { get; init; }

@@ -194,6 +194,7 @@ internal static class GuideBootstrapCommand
             ],
             FinalHandoffStatement = "HANDOFF: State which recorded thread is now the design seat. The application conversation remains the operator's front door for new requests; it is not a design, orchestration, implementation, review, or supervision loop seat.",
             OrcaRunBinding = OrcaRunBindingHealth.TryResolveBootstrapBinding(routingRoot, domainArg, teamArg),
+            OrcaMailboxLifecycle = OrcaMailboxLifecycleGuidance.ResolveBootstrap(routingRoot, domain, team),
         };
     }
 
@@ -379,6 +380,7 @@ internal static class GuideBootstrapCommand
             ],
             FinalHandoffStatement = "HANDOFF: This seat is the solo conductor. Run `intent-cli guide solo-conductor` for the per-unit loop; reviews are carried by fresh independent reviewer subagents.",
             OrcaRunBinding = OrcaRunBindingHealth.TryResolveBootstrapBinding(routingRoot, domain, team),
+            OrcaMailboxLifecycle = OrcaMailboxLifecycleGuidance.ResolveBootstrap(routingRoot, domain, team),
         };
     }
 
@@ -567,6 +569,12 @@ internal static class GuideBootstrapCommand
             writer.WriteLine(OrcaRunBindingHealth.BootstrapMarkdownLine(result.OrcaRunBinding));
         }
 
+        if (result.OrcaMailboxLifecycle is not null)
+        {
+            writer.WriteLine();
+            OrcaMailboxLifecycleGuidance.WriteMarkdown(writer, result.OrcaMailboxLifecycle);
+        }
+
         writer.WriteLine(result.FinalHandoffStatement);
     }
 
@@ -635,6 +643,9 @@ internal sealed record BootstrapGuideResult
     public required string FinalHandoffStatement { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BootstrapOrcaRunBinding? OrcaRunBinding { get; init; }
+    [JsonPropertyName("orca_mailbox_lifecycle")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OrcaMailboxLifecycleContract? OrcaMailboxLifecycle { get; init; }
 }
 
 internal sealed record BootstrapModelResolution

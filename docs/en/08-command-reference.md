@@ -768,3 +768,20 @@ semantics or add fields.
 
 The inventory is descriptive: it does not migrate queue-state values, add a
 Steward route, introduce a vendor enum, or rename an installed guide route.
+
+## Orca mailbox lifecycle guidance (G853 — preview-through-1.x)
+
+The `guide bootstrap`, `guide onboarding`, `guide design-thread`,
+`guide solo-conductor`, and `guide steward-thread` surfaces expose one shared
+`orca-mailbox-lifecycle/v1` contract in JSON and Markdown. It projects only
+recorded team shape and G837 binding health. The rendered sequence covers
+installed capability and caller checks, deliberate create/adopt, canonical
+record-orca-run dry-run/CAS write, recipient discovery, durable enqueue,
+bounded FIFO receive/ACK, and exact-request recovery. Follow the detailed
+[agent-message orchestration lifecycle](12-agent-message-orchestration.md).
+
+Every Orca step belongs to the acting agent. `intent-cli` renders commands and
+reads host metadata only; it does not invoke Orca, start providers, mutate
+bindings, transport mail, or schedule receive policy. Existing `orca-push`,
+`inbox-pull`, binding-health causes, CAS behavior, and canonical notify
+authority remain unchanged.

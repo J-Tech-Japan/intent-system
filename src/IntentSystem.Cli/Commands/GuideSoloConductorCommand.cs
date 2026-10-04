@@ -296,6 +296,7 @@ internal static class GuideSoloConductorCommand
         ],
         NoExecutionBoundary = "This guide renders text only. The conductor seat starts reviewer subagents; intent-cli does not start, launch, or manage any agent, and reads no host metadata to render this contract.",
         Builder = BuildBuilder(),
+        OrcaMailboxLifecycle = OrcaMailboxLifecycleGuidance.CreateTemplate(),
     };
 
     private static bool TryParseFormat(string[] args, out string format, out string error)
@@ -381,6 +382,8 @@ internal static class GuideSoloConductorCommand
         writer.WriteLine("## No-execution boundary");
         writer.WriteLine();
         writer.WriteLine(guide.NoExecutionBoundary);
+        writer.WriteLine();
+        OrcaMailboxLifecycleGuidance.WriteMarkdown(writer, guide.OrcaMailboxLifecycle);
     }
 
     private static void WriteBuilder(TextWriter writer, SoloConductorBuilder builder)
@@ -443,6 +446,7 @@ internal sealed record SoloConductorGuide
     [JsonPropertyName("limits")] public required IReadOnlyList<string> Limits { get; init; }
     [JsonPropertyName("no_execution_boundary")] public required string NoExecutionBoundary { get; init; }
     [JsonPropertyName("builder")] public required SoloConductorBuilder Builder { get; init; }
+    [JsonPropertyName("orca_mailbox_lifecycle")] public required OrcaMailboxLifecycleContract OrcaMailboxLifecycle { get; init; }
 }
 
 internal sealed record SoloConductorBuilder

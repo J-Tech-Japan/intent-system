@@ -45,9 +45,9 @@ public sealed class GuideDesignThreadG654Tests
     private static readonly string[] G774BaselinePayloadFieldNames =
         ParentPayloadFieldNames.Append("packet_authoring_check").ToArray();
     private const string G774BaselinePayloadOracleHash = "d5120696efe37fcdace8e0ac29dc3698eeed2e55c626fbab3abb295408f7d7ac";
-    // G776 may append exactly one declaration field. The existing G775
-    // operating-contract fields remain a raw-value and rendered-order oracle.
-    private const string G775ExternalResidenceContractOracleHash = "a05797c192028aad8f984a9136c9f2f4dc448d5a4159b288183246d233be0d3b";
+    // G853's bounded wake and example prose points at the shared contract;
+    // field names/order remain compatible and are still checked separately.
+    private const string G775ExternalResidenceContractOracleHash = "58f3a977a925040be8d48f86507439d6bf782fd419200f5ab3186b897b03c0d9";
 
     [Theory]
     [InlineData("agmsg", false)]
@@ -264,7 +264,7 @@ public sealed class GuideDesignThreadG654Tests
         var wakeChannel = contract.GetProperty("wake_channel_pattern").GetString()!;
         Assert.Contains("courtesy-only", wakeChannel, StringComparison.Ordinal);
         Assert.Contains("dual-send", wakeChannel, StringComparison.Ordinal);
-        Assert.Contains("durable wake addresses", wakeChannel, StringComparison.Ordinal);
+        Assert.Contains("Optional dual-send is not mandatory", wakeChannel, StringComparison.Ordinal);
 
         var wakeDeclaration = contract.GetProperty("wake_channel_declaration").GetString()!;
         Assert.Contains("--wake-command", wakeDeclaration, StringComparison.Ordinal);
@@ -276,10 +276,11 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("never executes", wakeDeclaration, StringComparison.Ordinal);
 
         var orcaExample = contract.GetProperty("orca_worked_example").GetString()!;
-        Assert.Contains("Non-normative Orca example", orcaExample, StringComparison.Ordinal);
-        Assert.Contains("orca orchestration run-use --id <run-id>", orcaExample, StringComparison.Ordinal);
-        Assert.Contains("orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json", orcaExample, StringComparison.Ordinal);
-        Assert.Contains("intent-cli neither launches nor manages Orca", orcaExample, StringComparison.Ordinal);
+        Assert.Contains("orca-mailbox-lifecycle/v1", orcaExample, StringComparison.Ordinal);
+        Assert.Contains("agent-executed", orcaExample, StringComparison.Ordinal);
+        Assert.Contains("does not invoke Orca", orcaExample, StringComparison.Ordinal);
+        Assert.True(root.TryGetProperty("orca_mailbox_lifecycle", out var lifecycle));
+        Assert.Equal("orca-mailbox-lifecycle/v1", lifecycle.GetProperty("contract_version").GetString());
 
         var residenceTransition = contract.GetProperty("residence_transition").GetString()!;
         Assert.Contains("different operation", residenceTransition, StringComparison.Ordinal);
@@ -334,8 +335,8 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("dual-send", section, StringComparison.Ordinal);
         Assert.Contains("--wake-command", section, StringComparison.Ordinal);
         Assert.Contains("never executes", section, StringComparison.Ordinal);
-        Assert.Contains("Non-normative Orca example", section, StringComparison.Ordinal);
-        Assert.Contains("intent-cli neither launches nor manages Orca", section, StringComparison.Ordinal);
+        Assert.Contains("orca-mailbox-lifecycle/v1", section, StringComparison.Ordinal);
+        Assert.Contains("agent-executed", section, StringComparison.Ordinal);
         Assert.Contains("A herdr↔external residence change is a different operation", section, StringComparison.Ordinal);
     }
 
@@ -455,8 +456,8 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("--wait --timeout-ms", enSection, StringComparison.Ordinal);
         Assert.Contains("courtesy-only", enSection, StringComparison.Ordinal);
         Assert.Contains("dual-send", enSection, StringComparison.Ordinal);
-        Assert.Contains("Non-normative Orca worked example", enSection, StringComparison.Ordinal);
-        Assert.Contains("intent-cli neither launches nor manages Orca", enSection, StringComparison.Ordinal);
+        Assert.Contains("orca-mailbox-lifecycle/v1", enSection, StringComparison.Ordinal);
+        Assert.Contains("agent-executed", enSection, StringComparison.Ordinal);
         Assert.Contains("different operation", enSection, StringComparison.Ordinal);
         Assert.Contains("guide bootstrap", enSection, StringComparison.Ordinal);
         Assert.True(
@@ -467,7 +468,7 @@ public sealed class GuideDesignThreadG654Tests
             < enSection.IndexOf("**Collect after binding.**", StringComparison.Ordinal));
         Assert.True(
             enSection.IndexOf("**Collect after binding.**", StringComparison.Ordinal)
-            < enSection.IndexOf("**Dual-send after the loop is established.**", StringComparison.Ordinal));
+            < enSection.IndexOf("**Optional dual-send after the loop is established.**", StringComparison.Ordinal));
 
         Assert.StartsWith("### external residence の運用契約（G775）\n\n**最初にフロントエンドの表示名変更。", jaSection);
         Assert.Contains("residence、reader、routing root は変わりません", jaSection, StringComparison.Ordinal);
@@ -476,8 +477,8 @@ public sealed class GuideDesignThreadG654Tests
         Assert.Contains("--wait --timeout-ms", jaSection, StringComparison.Ordinal);
         Assert.Contains("courtesy-only", jaSection, StringComparison.Ordinal);
         Assert.Contains("dual-send", jaSection, StringComparison.Ordinal);
-        Assert.Contains("非規範的な Orca の例", jaSection, StringComparison.Ordinal);
-        Assert.Contains("intent-cli は Orca を起動も管理もしません", jaSection, StringComparison.Ordinal);
+        Assert.Contains("orca-mailbox-lifecycle/v1", jaSection, StringComparison.Ordinal);
+        Assert.Contains("agent-executed", jaSection, StringComparison.Ordinal);
         Assert.Contains("別の操作", jaSection, StringComparison.Ordinal);
         Assert.Contains("guide bootstrap", jaSection, StringComparison.Ordinal);
         Assert.True(
@@ -488,7 +489,7 @@ public sealed class GuideDesignThreadG654Tests
             < jaSection.IndexOf("**接続後に collect。**", StringComparison.Ordinal));
         Assert.True(
             jaSection.IndexOf("**接続後に collect。**", StringComparison.Ordinal)
-            < jaSection.IndexOf("**loop を確立してから dual-send。**", StringComparison.Ordinal));
+            < jaSection.IndexOf("**loop 確立後の任意 dual-send。**", StringComparison.Ordinal));
     }
 
     private static string Join(JsonElement array) => string.Join('\n', array.EnumerateArray().Select(item => item.GetString()));
@@ -517,6 +518,7 @@ public sealed class GuideDesignThreadG654Tests
         // checking the immutable G654/G774/G775/G777 parent projections.
         projected.Remove("research_delegation");
         projected.Remove("completion_channel");
+        projected.Remove("orca_mailbox_lifecycle");
         projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
         projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
         projected["observation_boundary"]?.AsObject().Remove("inspect_route");

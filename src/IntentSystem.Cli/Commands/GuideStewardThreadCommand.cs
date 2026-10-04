@@ -103,6 +103,7 @@ internal static class GuideStewardThreadCommand
             "No G796 routing or ruling boundary is weakened; a missing upstream delegation or ruling remains a hard refusal.",
             "No guide route, queue-state field, lifecycle label, or product behavior is renamed or mutated by rendering this contract.",
         },
+        OrcaMailboxLifecycle = OrcaMailboxLifecycleGuidance.CreateTemplate(),
     };
 
     private static bool TryParseFormat(string[] args, out string format, out string error)
@@ -198,6 +199,8 @@ internal static class GuideStewardThreadCommand
         {
             writer.WriteLine($"- {boundary}");
         }
+        writer.WriteLine();
+        OrcaMailboxLifecycleGuidance.WriteMarkdown(writer, guide.OrcaMailboxLifecycle);
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -222,6 +225,7 @@ internal sealed record StewardThreadGuide
     [JsonPropertyName("working_tree_discipline")] public required StewardWorkingTreeDiscipline WorkingTreeDiscipline { get; init; }
     [JsonPropertyName("g796_boundary")] public required string G796Boundary { get; init; }
     [JsonPropertyName("negative_boundaries")] public required IReadOnlyList<string> NegativeBoundaries { get; init; }
+    [JsonPropertyName("orca_mailbox_lifecycle")] public required OrcaMailboxLifecycleContract OrcaMailboxLifecycle { get; init; }
 }
 
 internal sealed record StewardIdentityAndReaderPath

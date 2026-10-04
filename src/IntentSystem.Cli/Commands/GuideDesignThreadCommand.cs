@@ -13,8 +13,8 @@ namespace IntentSystem.Cli.Commands;
 internal static class GuideDesignThreadCommand
 {
     public const string CommandName = "intent-cli guide design-thread";
-    internal const string OrcaWakeSendForm = "orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}";
-    internal const string OrcaCheckForm = "orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json";
+    internal const string OrcaWakeSendForm = "orca orchestration send --to run:<recipient-run-id> --type status --subject \"<subject>\" --body \"<body>\" --json";
+    internal const string OrcaCheckForm = "orca orchestration check --run <own-run-id> --wait --timeout-ms 30000 --json";
     internal const string SessionLayerInspectRoute =
         "Read-only live observation: `intent-cli session-layer inspect --domain <domain> --team <team> [--role <role>] [--tail <lines>] [--routing-root <host-root>] --format json` reads recorded roles and explicit herdr pane state without focus, prompt, key, or process-management operations.";
     private const string UsageLine =
@@ -229,30 +229,32 @@ internal static class GuideDesignThreadCommand
                 FrontendRelabel = $"External-to-external frontend relabel: an external seat may change its frontend application freely; residence, reader, and routing root stay unchanged; no transition command is involved; do not use `session-layer topology update-residence`; frontend is an operator label, never a routing input; on an existing role, use `intent-cli session-layer topology update-field --domain {domainArg} --team {teamArg} --role <role> --field frontend --current <value|absent> --new <value|absent> --confirm-update-field --write --format json`.",
                 RoutingRootMust = "Routing-root MUST: every notify send and receive uses the canonical routing root. A wrong root strands notify records outside canonical state while the sender still returns `delivered: true`.",
                 CollectLoop = $"Collect loop: `intent-cli notify collect --domain {domainArg} --team {teamArg} --role design --since <cursor> --wait --timeout-ms <timeout-ms> --routing-root {root} --format json`; the caller holds the cursor, consumes the returned next cursor, and omits `--since` only for the first receive.",
-                WakeChannelPattern = "Wake-channel pattern: canonical `intent-cli notify` is the durable record; a wake channel is a courtesy-only signal; dual-send is the practiced form. Bind durable wake addresses before reading and never substitute a terminal-only address for a durable bound address.",
-                WakeChannelDeclaration = $"Declared external wake: an operator may record one literal one-line `--wake-command` template on an external role, for example `{OrcaWakeSendForm}`. On an existing external role, set or clear that label only with `intent-cli session-layer topology update-field --domain {domainArg} --team {teamArg} --role <role> --field wake_command --current <value|absent> --new <value|absent> --confirm-update-field --write --format json`. `notify delegate` renders `{{task_id}}` and `{{summary}}` only as text, leaves unknown placeholders untouched, and never executes, validates, health-checks, launches, or manages the command. The canonical notify write always comes first; the rendered declared wake is courtesy-only and never substitutes for that durable record.",
-                OrcaWorkedExample = $"Non-normative Orca example: bind the design coordinator terminal before reading with `orca orchestration run-use --id <run-id>`, then use the blocking check `{OrcaCheckForm}`. Orca is only a courtesy wake receiver alongside canonical `intent-cli notify`; intent-cli neither launches nor manages Orca.",
+                WakeChannelPattern = "Wake-channel pattern: canonical `intent-cli notify` is the workflow record. Orca mail is a separate durable mailbox; an Orca wake/nudge is courtesy-only, best effort, and not acceptance. Optional dual-send is not mandatory; no duplicate terminal send is required.",
+                WakeChannelDeclaration = $"Declared external wake: an operator may record one literal one-line `--wake-command` template on an external role. On an existing external role, set or clear that label only with `intent-cli session-layer topology update-field --domain {domainArg} --team {teamArg} --role <role> --field wake_command --current <value|absent> --new <value|absent> --confirm-update-field --write --format json`. `notify delegate` renders `{{task_id}}` and `{{summary}}` only as text, leaves unknown placeholders untouched, and never executes, validates, health-checks, launches, or manages the command. For intent-cli workflow activity, canonical notify comes first; follow the shared `{OrcaMailboxLifecycleGuidance.ContractVersion}` contract below for any agent-executed Orca send.",
+                OrcaWorkedExample = $"Follow the shared `{OrcaMailboxLifecycleGuidance.ContractVersion}` contract below. Its Orca commands are agent-executed; intent-cli does not invoke Orca.",
                 OrcaOperatingBlock = orcaOperatingBlock,
                 ResidenceTransition = $"A herdr↔external residence change is a different operation from an external-to-external frontend relabel: `intent-cli session-layer topology update-residence --domain {domainArg} --team {teamArg} --role design --current-resident <herdr|external> --new-resident <herdr|external> [destination fields] --confirm-update-residence --write --format json`.",
             },
             UnreadableRepairResponse = "When liveness reports a non-zero `unreadable_record_count`, the sanctioned response is `intent-cli notify supervise repair-unreadable`: run `--dry-run` first, inspect the evidence, and use `--write` only second; it is never automatic and never performed on read. The repair quarantines unreadable lines verbatim as evidence and makes no reconstruction claim.",
+            OrcaMailboxLifecycle = OrcaMailboxLifecycleGuidance.CreateTemplate(),
         };
     }
 
     private static DesignThreadOrcaOperatingBlock CreateOrcaOperatingBlock() => new()
     {
-        Label = "Non-normative Orca operating block",
+        Label = "Shared Orca mailbox lifecycle contract",
         SetupOrder =
         [
-            "Create or bind a Run before seat messages: `orca orchestration run-create --objective <text> [--from <handle>]` or `orca orchestration run-use --id <run-id> [--from <handle>]`.",
-            "Share the resulting `<run-id>` with every sender before anyone addresses `run:<run-id>`.",
-            "Each sender supplies its own `--from <role>` handle; it is a sender handle, not a routing identity.",
-            "Record the adopted <run-id> on the seat the recorded team shape selects (steward for five-seat, design for four-seat and solo-conductor; the seat must be external with frontend orca, claude-app, or codex-app) with intent-cli session-layer topology record-orca-run … --dry-run first.",
+            "Run the installed Orca capability and caller-identity checks before considering a mutation.",
+            "Select solo-conductor design sidecar, the recorded four-seat Architect alias, or five-seat Steward from recorded mode and topology.",
+            "Inspect current binding health and caller-owned Run state; adopt deliberately or create once after an explicit choice.",
+            "Record with canonical record-orca-run dry-run/CAS write, then discover and address the exact recipient Run id.",
+            "Use finite FIFO check, process the whole batch, and ACK only its returned Delivery after processing completes.",
         ],
         SendForm = OrcaWakeSendForm,
         CheckForm = OrcaCheckForm,
-        SharedChannel = "The same Orca channel carries herdr seats' courtesy wakes and design-to-design messages; neither replaces the canonical notify record.",
-        DurableRecord = "Canonical intent-cli notify remains durable. intent-cli records an adopted Run id with session-layer topology record-orca-run and shows it in topology show and guide bootstrap, but never runs, launches, verifies, or manages Orca.",
+        SharedChannel = "Orca send durably enqueues mail; attention is best effort, not acceptance, and a duplicate terminal send is not mandatory.",
+        DurableRecord = "Canonical intent-cli notify remains first for workflow messages. This shared contract supplies agent-executed Orca lifecycle instructions; intent-cli only renders and reads recorded host state.",
     };
 
     private static void WriteMarkdown(TextWriter writer, DesignThreadGuideResult result)
@@ -391,6 +393,8 @@ internal static class GuideDesignThreadCommand
         }
         writer.WriteLine($"- **different transition:** {result.ExternalResidenceOperatingContract.ResidenceTransition}");
         WriteList(writer, "## Negative invariants", result.NegativeInvariants);
+        writer.WriteLine();
+        OrcaMailboxLifecycleGuidance.WriteMarkdown(writer, result.OrcaMailboxLifecycle);
     }
 
     private static void WriteList(TextWriter writer, string heading, IEnumerable<string> values)
@@ -475,6 +479,8 @@ internal sealed record DesignThreadGuideResult
     public required DesignThreadPacketAuthoringCheck PacketAuthoringCheck { get; init; }
     public required DesignThreadExternalResidenceOperatingContract ExternalResidenceOperatingContract { get; init; }
     public required string UnreadableRepairResponse { get; init; }
+    [JsonPropertyName("orca_mailbox_lifecycle")]
+    public required OrcaMailboxLifecycleContract OrcaMailboxLifecycle { get; init; }
 }
 
 internal sealed record DesignThreadReachability
