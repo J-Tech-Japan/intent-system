@@ -207,47 +207,11 @@ internal static class OrcaRunBindingHealth
     public static BootstrapOrcaRunBinding? TryResolveBootstrapBinding(string routingRoot, string domain, string team)
     {
         var shape = OrcaRunTeamShape.Resolve(routingRoot, domain, team);
-        if (shape.BindingLocation == OrcaRunBinding.TopologyRoleLocation)
-        {
-            var resolution = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
-            if (!resolution.Resolved || resolution.Topology is null)
-            {
-                return TryBootstrapFromRawTopology(routingRoot, domain, team);
-            }
-
-            foreach (var (roleKey, record) in resolution.Topology.Roles)
-            {
-                if (record.OrcaRun is null)
-                {
-                    continue;
-                }
-
-                var health = EvaluateTopologyRole(routingRoot, domain, team, roleKey, record, record.OrcaRun, shape);
-                return BuildBootstrap(roleKey, OrcaRunBinding.TopologyRoleLocation, health, record.OrcaRun, domain, team);
-            }
-
-            return TryBootstrapFromRawTopology(routingRoot, domain, team);
-        }
-
-        if (shape.BindingLocation == OrcaRunBinding.OrcaRunFileLocation)
-        {
-            var file = OrcaRunSoloStore.TryRead(routingRoot, domain, team);
-            if (!file.Exists || file.IsUnparseable)
-            {
-                return null;
-            }
-
-            var health = EvaluateSoloFile(routingRoot, domain, team, file, shape);
-            var binding = new OrcaRunRoleBinding(file.RunId, file.ReceivePolicy, file.HasOrcaRunObject, null);
-            return BuildBootstrap(file.Role ?? "design", OrcaRunBinding.OrcaRunFileLocation, health, binding, domain, team);
-        }
-
         var soloFile = OrcaRunSoloStore.TryRead(routingRoot, domain, team);
-        if (soloFile.Exists && !soloFile.IsUnparseable)
+
+        if (shape.BindingLocation != OrcaRunBinding.TopologyRoleLocation && soloFile.Exists)
         {
-            var health = EvaluateSoloFile(routingRoot, domain, team, soloFile, shape);
-            var binding = new OrcaRunRoleBinding(soloFile.RunId, soloFile.ReceivePolicy, soloFile.HasOrcaRunObject, null);
-            return BuildBootstrap(soloFile.Role ?? "design", OrcaRunBinding.OrcaRunFileLocation, health, binding, domain, team);
+            return BuildBootstrapFromSoloFile(routingRoot, domain, team, soloFile, shape);
         }
 
         var topologyResolution = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
@@ -261,11 +225,81 @@ internal static class OrcaRunBindingHealth
                 }
 
                 var health = EvaluateTopologyRole(routingRoot, domain, team, roleKey, record, record.OrcaRun, shape);
-                return BuildBootstrap(roleKey, OrcaRunBinding.TopologyRoleLocation, health, record.OrcaRun, domain, team);
+                if (soloFile.Exists)
+                {
+                    var soloHealth = EvaluateSoloFile(routingRoot, domain, team, soloFile, shape);
+                    health = Build(health.Findings.Concat(soloHealth.Findings).ToList());
+                }
+
+                return BuildBootstrap(roleKey, OrcaRunBinding.TopologyRoleLocation, health, record.OrcaRun, domain, team, record.Frontend);
             }
         }
 
-        return TryBootstrapFromRawTopology(routingRoot, domain, team);
+        var rawTopologyBinding = TryBootstrapFromRawTopology(routingRoot, domain, team);
+        if (rawTopologyBinding is not null)
+        {
+            if (soloFile.Exists)
+            {
+                var soloHealth = EvaluateSoloFile(routingRoot, domain, team, soloFile, shape);
+                var findings = soloHealth.Findings.ToList();
+                findings.Add(rawTopologyBinding.Health == OrcaRunBinding.RecordedHealth
+                    ? "binding-location-conflict"
+                    : rawTopologyBinding.Health);
+                var combinedHealth = Build(findings);
+                rawTopologyBinding = rawTopologyBinding with
+                {
+                    Health = combinedHealth.Health,
+                    RunId = combinedHealth.Health == OrcaRunBinding.RecordedHealth ? rawTopologyBinding.RunId : null,
+                    ReceivePolicy = combinedHealth.Health == OrcaRunBinding.RecordedHealth ? rawTopologyBinding.ReceivePolicy : null,
+                    ReceiveInstruction = combinedHealth.Health == OrcaRunBinding.RecordedHealth ? rawTopologyBinding.ReceiveInstruction : null,
+                };
+            }
+
+            return rawTopologyBinding;
+        }
+
+        if (soloFile.Exists)
+        {
+            return BuildBootstrapFromSoloFile(routingRoot, domain, team, soloFile, shape);
+        }
+
+        var topologyPath = NotifyRoleTopologyStore.ResolvePath(routingRoot, domain, team);
+        if (File.Exists(topologyPath) && !topologyResolution.Resolved)
+        {
+            return new BootstrapOrcaRunBinding
+            {
+                Role = shape.RequiredSeat ?? "unknown",
+                BindingLocation = OrcaRunBinding.TopologyRoleLocation,
+                Health = topologyResolution.Cause ?? "topology-unresolved",
+                Domain = domain,
+                Team = team,
+            };
+        }
+
+        return null;
+    }
+
+    private static BootstrapOrcaRunBinding BuildBootstrapFromSoloFile(
+        string routingRoot,
+        string domain,
+        string team,
+        SoloBindingReadResult file,
+        OrcaRunTeamShapeResult shape)
+    {
+        var health = EvaluateSoloFile(routingRoot, domain, team, file, shape);
+        var binding = new OrcaRunRoleBinding(
+            file.RunId,
+            file.ReceivePolicy,
+            file.HasOrcaRunObject,
+            file.IsUnparseable ? "orca-run-binding-malformed" : null);
+        var result = BuildBootstrap(file.Role ?? "design", OrcaRunBinding.OrcaRunFileLocation, health, binding, domain, team);
+        return result with
+        {
+            CurrentToken = file.RunId is not null && OrcaRunBinding.IsValidRunId(file.RunId)
+                ? file.RunId
+                : "malformed",
+            Frontend = file.Frontend,
+        };
     }
 
     private static BootstrapOrcaRunBinding? TryBootstrapFromRawTopology(string routingRoot, string domain, string team)
@@ -298,7 +332,7 @@ internal static class OrcaRunBindingHealth
                 var binding = OrcaRunBinding.ParseRoleBindingNode(roleObject["orca_run"]!);
                 var record = BuildRecordFromRoleObject(roleObject);
                 var health = EvaluateTopologyRole(routingRoot, domain, team, property.Name, record, binding, shape);
-                return BuildBootstrap(property.Name, OrcaRunBinding.TopologyRoleLocation, health, binding, domain, team);
+                return BuildBootstrap(property.Name, OrcaRunBinding.TopologyRoleLocation, health, binding, domain, team, record.Frontend);
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
@@ -315,12 +349,17 @@ internal static class OrcaRunBindingHealth
         OrcaRunHealthEvaluation health,
         OrcaRunRoleBinding binding,
         string domain,
-        string team) => new()
+        string team,
+        string? frontend = null) => new()
     {
         Role = role,
         BindingLocation = location,
         Health = health.Health,
         RunId = health.Health == OrcaRunBinding.RecordedHealth ? binding.RunId : null,
+        CurrentToken = binding.RunId is not null && OrcaRunBinding.IsValidRunId(binding.RunId)
+            ? binding.RunId
+            : "malformed",
+        Frontend = frontend,
         ReceivePolicy = health.Health == OrcaRunBinding.RecordedHealth ? binding.ReceivePolicy : null,
         ReceiveInstruction = health.Health == OrcaRunBinding.RecordedHealth
             ? OrcaRunBinding.ReceiveInstructionForPolicy(binding.ReceivePolicy)
@@ -815,6 +854,10 @@ internal sealed record BootstrapOrcaRunBinding
     public required string BindingLocation { get; init; }
     public required string Health { get; init; }
     public string? RunId { get; init; }
+    [JsonIgnore]
+    public string? CurrentToken { get; init; }
+    [JsonIgnore]
+    public string? Frontend { get; init; }
     public string? ReceivePolicy { get; init; }
     public string? ReceiveInstruction { get; init; }
     [JsonIgnore]

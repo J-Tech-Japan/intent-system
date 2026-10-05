@@ -88,10 +88,14 @@ public sealed class GuideSeatSelectionG789Tests
             ["label", "setup_order", "send_form", "check_form", "shared_channel", "durable_record"],
             operatingBlock.EnumerateObject().Select(property => property.Name));
         Assert.Equal(
-            5,
-            operatingBlock.GetProperty("setup_order").GetArrayLength());
-        Assert.All(operatingBlock.GetProperty("setup_order").EnumerateArray(), item =>
-            Assert.False(string.IsNullOrWhiteSpace(item.GetString())));
+            [
+                "Run the installed Orca capability and caller-identity checks before considering a mutation.",
+                "Select solo-conductor design sidecar, the recorded four-seat Architect alias, or five-seat Steward from recorded mode and topology.",
+                "Inspect current binding health and caller-owned Run state; adopt deliberately or create once after an explicit choice.",
+                "Record with canonical record-orca-run dry-run/CAS write, then discover and address the exact recipient Run id.",
+                "Use finite FIFO check, process the whole batch, and ACK only its returned Delivery after processing completes.",
+            ],
+            operatingBlock.GetProperty("setup_order").EnumerateArray().Select(item => item.GetString()));
         Assert.Equal("Shared Orca mailbox lifecycle contract", operatingBlock.GetProperty("label").GetString());
         Assert.Equal(GuideDesignThreadCommand.OrcaWakeSendForm, operatingBlock.GetProperty("send_form").GetString());
         Assert.Equal(GuideDesignThreadCommand.OrcaCheckForm, operatingBlock.GetProperty("check_form").GetString());

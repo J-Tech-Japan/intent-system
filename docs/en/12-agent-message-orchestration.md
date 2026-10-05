@@ -715,6 +715,10 @@ For `frontend=orca`, preserve `receive_policy=orca-push`; for `codex-app` or
 `claude-app`, preserve `inbox-pull`. A missing or unsupported frontend is a
 prerequisite, not a provider-kind inference. A missing team, mode, roster, or
 frontend stays unresolved in the guide.
+For a topology binding, the selected delivery seat must be an external seat
+with a supported recorded frontend; a herdr seat is refused by
+`record-orca-run` (`receive-policy-herdr-seat`) and bootstrap keeps that
+prerequisite visible before any Run is created.
 
 The caller must be proven independently of the frontend. An authenticated
 Orca session uses only its injected session identity and omits terminal caller
@@ -748,13 +752,16 @@ existing health remedy or explicit reconciliation; no automatic clear,
 takeover, or rebind occurs.
 
 Record from the canonical host routing root with the selected role key and the
-actual current token (`absent` only when truly absent). Inspect dry-run output
-before the CAS write. For solo-conductor, append the recorded frontend to both
-commands; topology-role binding commands do not take `--frontend`:
+actual current token (`absent` only when truly absent; `malformed` only when
+the existing record is unreadable or has no valid Run id). Preserve malformed
+records as unusable and follow their existing repair path instead of treating
+them as absent. Inspect dry-run output before the CAS write. For
+solo-conductor, append the recorded frontend to both commands; topology-role
+binding commands do not take `--frontend`:
 
 ```text
-intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> [--frontend <recorded-frontend>] --confirm-record-orca-run --dry-run --format json
-intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> [--frontend <recorded-frontend>] --confirm-record-orca-run --write --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> [--frontend <recorded-frontend>] --confirm-record-orca-run --dry-run --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> [--frontend <recorded-frontend>] --confirm-record-orca-run --write --format json
 intent-cli guide bootstrap --domain <d> --team <t> --format json
 ```
 

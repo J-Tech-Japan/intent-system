@@ -653,6 +653,8 @@ design/Architect sidecar、4-seat delivery は記録済み Architect alias key�
 Steward を使います。`frontend=orca` は `receive_policy=orca-push`、`codex-app` / `claude-app` は
 `inbox-pull` を保持します。frontend の欠落や未対応は prerequisite であり、provider kind から推測しません。
 team、mode、roster、frontend が欠けていれば guide でも unresolved のままです。
+topology binding を記録する delivery seat は、supported frontend が記録された external seat である必要があります。
+選択席が herdr の場合、`record-orca-run` は `receive-policy-herdr-seat` で拒否します。bootstrap は Run 作成前にこの prerequisite を表示します。
 
 caller identity は frontend label とは別に確かめます。認証済み Orca session caller は、その session が
 注入した identity のみを使い、terminal caller flag は省略します。terminal caller は、自身の identity と
@@ -682,14 +684,15 @@ run-list の順番から所有者を推測しません。create は一度だけ�
 reconciliation に従い、自動 clear / takeover / rebind はしません。
 
 canonical host routing root から、選択済み role key と実際の current token を使って記録します。`absent` は
-binding が本当にない場合だけです。dry-run 結果を確認してから CAS で書き込みます。solo-conductor の sidecar では
+binding が本当にない場合だけです。既存 record が読めない、または有効な Run id を持たない場合だけ `malformed` を使います。
+malformed record は unusable のまま保ち、absent として扱わず既存の修復手順に従います。dry-run 結果を確認してから CAS で書き込みます。solo-conductor の sidecar では
 次の二つの command に記録済み frontend を追加します。topology-role binding では `--frontend` は使いません。
 
 ```text
-intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --confirm-record-orca-run --dry-run --format json
-intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --confirm-record-orca-run --write --format json
-intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role design --current <actual-current|absent> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --frontend <recorded-frontend> --confirm-record-orca-run --dry-run --format json
-intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role design --current <actual-current|absent> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --frontend <recorded-frontend> --confirm-record-orca-run --write --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --confirm-record-orca-run --dry-run --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --confirm-record-orca-run --write --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role design --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --frontend <recorded-frontend> --confirm-record-orca-run --dry-run --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role design --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --frontend <recorded-frontend> --confirm-record-orca-run --write --format json
 intent-cli guide bootstrap --domain <d> --team <t> --format json
 ```
 

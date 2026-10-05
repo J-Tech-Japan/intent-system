@@ -49,6 +49,8 @@ public sealed class OrcaMailboxLifecycleGuidanceTests
 
         Assert.Contains(contract.CompletionBoundary.NoExecutionBoundary, text, StringComparison.Ordinal);
         Assert.Contains(contract.Recovery.UnknownBranch, text, StringComparison.Ordinal);
+        Assert.Contains($"- ACK from authenticated session: `{contract.Receive.SessionAckCommand.Render()}` — {contract.Receive.AckRule}", text, StringComparison.Ordinal);
+        Assert.Contains($"- ACK from verified terminal: `{contract.Receive.TerminalAckCommand.Render()}` — {contract.Receive.AckRule}", text, StringComparison.Ordinal);
         Assert.Contains("#1771 disposition and completion boundary", text, StringComparison.Ordinal);
     }
 
@@ -77,7 +79,7 @@ public sealed class OrcaMailboxLifecycleGuidanceTests
         var dryRun = contract.RecordBinding.DryRunCommand.Arguments;
         var write = contract.RecordBinding.WriteCommand.Arguments;
         Assert.Contains("--current", dryRun);
-        Assert.Contains("<actual-current|absent>", dryRun);
+        Assert.Contains("<actual-current|absent|malformed>", dryRun);
         Assert.Contains("--new", dryRun);
         Assert.DoesNotContain("--routing-root", dryRun);
         Assert.DoesNotContain("--frontend", dryRun);
@@ -143,6 +145,12 @@ public sealed class OrcaMailboxLifecycleGuidanceTests
         Assert.Equal(OrcaRunTestSupport.RunId, contract.BindingSelection.RecordedRunId);
         Assert.Equal(policy, contract.BindingSelection.ReceivePolicy);
         Assert.Equal(OrcaRunBinding.RecordedHealth, contract.BindingSelection.BindingHealth);
+        using var lifecycleJson = JsonDocument.Parse(JsonSerializer.Serialize(contract));
+        var selection = lifecycleJson.RootElement.GetProperty("binding_selection");
+        Assert.Equal(contract.BindingSelection.BindingLocation, selection.GetProperty("binding_location").GetString());
+        Assert.Equal(contract.BindingSelection.BindingHealth, selection.GetProperty("binding_health").GetString());
+        Assert.Equal(contract.BindingSelection.BindingCurrentToken, selection.GetProperty("binding_current_token").GetString());
+        Assert.Equal(frontend, selection.GetProperty("selected_frontend").GetString());
 
         using var markdown = new StringWriter();
         OrcaMailboxLifecycleGuidance.WriteMarkdown(markdown, contract);
@@ -152,6 +160,10 @@ public sealed class OrcaMailboxLifecycleGuidanceTests
         Assert.Contains($"- selected recorded role key: `{selectedRole}`", rendered, StringComparison.Ordinal);
         Assert.Contains($"- recorded Run id: `{OrcaRunTestSupport.RunId}`", rendered, StringComparison.Ordinal);
         Assert.Contains($"- recorded receive policy: `{policy}`", rendered, StringComparison.Ordinal);
+        Assert.Contains($"- binding location: `{contract.BindingSelection.BindingLocation}`", rendered, StringComparison.Ordinal);
+        Assert.Contains($"- binding health: `{contract.BindingSelection.BindingHealth}`", rendered, StringComparison.Ordinal);
+        Assert.Contains($"- binding current token: `{contract.BindingSelection.BindingCurrentToken}`", rendered, StringComparison.Ordinal);
+        Assert.Contains($"- selected frontend: `{frontend}`", rendered, StringComparison.Ordinal);
     }
 
     public static IEnumerable<object[]> ShapeFrontendCases()
@@ -183,7 +195,7 @@ public sealed class OrcaMailboxLifecycleGuidanceTests
         Assert.Equal("unusable", unusableContract.BindingSelection.ContextStatus);
         Assert.Equal("orca-run-id-malformed", unusableContract.BindingSelection.BindingHealth);
         Assert.NotEqual(OrcaRunBinding.RecordedHealth, unusableContract.BindingSelection.BindingHealth);
-        Assert.Null(unusableContract.BindingSelection.BindingCurrentToken);
+        Assert.Equal("malformed", unusableContract.BindingSelection.BindingCurrentToken);
         Assert.Null(unusableContract.BindingSelection.RecordedRunId);
 
         using var ambiguous = new OrcaRunTestSupport.OrcaRunWorkspace("mail-ambiguous");
@@ -196,6 +208,243 @@ public sealed class OrcaMailboxLifecycleGuidanceTests
         var missingScope = OrcaMailboxLifecycleGuidance.ResolveBootstrap(absent.Root, domain: null, team: null);
         Assert.Equal("prerequisite", missingScope.BindingSelection.ContextStatus);
         Assert.Null(missingScope.BindingSelection.TeamShape);
+    }
+
+    [Fact]
+    public void Bootstrap_MalformedSoloSidecarIsUnusableAndPreservesItsCanonicalCurrentToken()
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace("mail-solo-malformed");
+        workspace.InstallSoloFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.SoloBindingPath)!);
+        var malformedBytes = Encoding.UTF8.GetBytes("{\"orca_run\":{\"run_id\":\n");
+        File.WriteAllBytes(workspace.SoloBindingPath, malformedBytes);
+        var before = File.ReadAllBytes(workspace.SoloBindingPath);
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("unusable", contract.BindingSelection.ContextStatus);
+        Assert.Equal("orca-run-binding-malformed", contract.BindingSelection.BindingHealth);
+        Assert.Equal("malformed", contract.BindingSelection.BindingCurrentToken);
+        Assert.Equal(OrcaRunBinding.OrcaRunFileLocation, contract.BindingSelection.BindingLocation);
+        Assert.Equal(before, File.ReadAllBytes(workspace.SoloBindingPath));
+    }
+
+    [Fact]
+    public void Bootstrap_UnreadableTopologyIsNotReportedAsAbsentAndPreservesItsBytes()
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace("mail-topology-unreadable");
+        workspace.InstallFourSeatDeliveryFixture();
+        var unreadableBytes = Encoding.UTF8.GetBytes("{\"roles\":\n");
+        File.WriteAllBytes(workspace.TopologyPath, unreadableBytes);
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("unusable", contract.BindingSelection.ContextStatus);
+        Assert.Equal("topology-unreadable", contract.BindingSelection.BindingHealth);
+        Assert.Null(contract.BindingSelection.BindingCurrentToken);
+        Assert.Equal(unreadableBytes, File.ReadAllBytes(workspace.TopologyPath));
+    }
+
+    [Fact]
+    public void Bootstrap_ConflictingSoloAndTopologyRecordsStayUnusableAndPreserveBoth()
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace("mail-cross-location-conflict");
+        workspace.InstallFourSeatDeliveryFixture();
+        workspace.WriteTopologyOrcaRun("design", OrcaRunTestSupport.RunId, OrcaRunBinding.InboxPullPolicy);
+        var topologyBefore = workspace.TopologyBytes();
+        workspace.WriteSoloBinding(new
+        {
+            schema_version = "1",
+            domain = OrcaRunTestSupport.Domain,
+            team = workspace.Team,
+            orca_run = new
+            {
+                role = "design",
+                run_id = "run_111111111111",
+                receive_policy = OrcaRunBinding.InboxPullPolicy,
+                frontend = "claude-app",
+            },
+        });
+        var soloBefore = File.ReadAllBytes(workspace.SoloBindingPath);
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("unusable", contract.BindingSelection.ContextStatus);
+        Assert.Equal("binding-location-not-allowed", contract.BindingSelection.BindingHealth);
+        Assert.Equal(OrcaRunBinding.TopologyRoleLocation, contract.BindingSelection.BindingLocation);
+        Assert.Equal(OrcaRunTestSupport.RunId, contract.BindingSelection.BindingCurrentToken);
+        Assert.Equal(topologyBefore, workspace.TopologyBytes());
+        Assert.Equal(soloBefore, File.ReadAllBytes(workspace.SoloBindingPath));
+    }
+
+    [Fact]
+    public void Bootstrap_StrangerTopologyBindingUnderSoloModeIsUnusableAndPreserved()
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace("mail-solo-stranded-topology");
+        workspace.InstallFourSeatDeliveryFixture();
+        workspace.WriteTopologyOrcaRun("design", OrcaRunTestSupport.RunId, OrcaRunBinding.InboxPullPolicy);
+        workspace.InstallSoloFixture();
+        var topologyBefore = workspace.TopologyBytes();
+        Assert.False(File.Exists(workspace.SoloBindingPath));
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("unusable", contract.BindingSelection.ContextStatus);
+        Assert.Equal("binding-location-not-allowed", contract.BindingSelection.BindingHealth);
+        Assert.Equal(OrcaRunBinding.TopologyRoleLocation, contract.BindingSelection.BindingLocation);
+        Assert.Equal(OrcaRunTestSupport.RunId, contract.BindingSelection.BindingCurrentToken);
+        Assert.Equal(topologyBefore, workspace.TopologyBytes());
+        Assert.False(File.Exists(workspace.SoloBindingPath));
+    }
+
+    [Theory]
+    [InlineData("four-seat", "herdr", "receive-policy-herdr-seat")]
+    [InlineData("four-seat", "missing-frontend", "receive-policy-seat-kind-unrecorded")]
+    [InlineData("four-seat", "unsupported-frontend", "receive-policy-seat-kind-unrecorded")]
+    [InlineData("five-seat", "herdr", "receive-policy-herdr-seat")]
+    [InlineData("five-seat", "missing-frontend", "receive-policy-seat-kind-unrecorded")]
+    [InlineData("five-seat", "unsupported-frontend", "receive-policy-seat-kind-unrecorded")]
+    public void Bootstrap_AbsentDeliveryBindingRequiresRecordableSelectedSeat(
+        string shapeName,
+        string selectedSeatState,
+        string expectedCause)
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace($"mail-seat-prerequisite-{shapeName}-{selectedSeatState}");
+        var selectedRole = shapeName == "four-seat" ? "design" : "steward";
+        object selectedSeat = selectedSeatState switch
+        {
+            "herdr" => OrcaRunTestSupport.OrcaRunWorkspace.HerdrRole("w1:p9"),
+            "missing-frontend" => new
+            {
+                resident = "external",
+                reader = $".intent-cli/events/{OrcaRunTestSupport.Domain}/{workspace.Team}-reader.jsonl",
+            },
+            _ => new
+            {
+                resident = "external",
+                reader = $".intent-cli/events/{OrcaRunTestSupport.Domain}/{workspace.Team}-reader.jsonl",
+                frontend = "unsupported-app",
+            },
+        };
+        var roles = new Dictionary<string, object>
+        {
+            ["orchestration"] = OrcaRunTestSupport.OrcaRunWorkspace.HerdrRole("w1:p1"),
+            ["implementation"] = OrcaRunTestSupport.OrcaRunWorkspace.HerdrRole("w1:p2"),
+            ["review"] = OrcaRunTestSupport.OrcaRunWorkspace.HerdrRole("w1:p3"),
+            ["design"] = shapeName == "four-seat"
+                ? selectedSeat
+                : OrcaRunTestSupport.OrcaRunWorkspace.ExternalRoleFor(workspace.Team, "claude-app"),
+        };
+        if (shapeName == "five-seat")
+        {
+            roles["steward"] = selectedSeat;
+        }
+        workspace.WriteDeliveryTopology(roles);
+        var topologyBefore = workspace.TopologyBytes();
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("prerequisite", contract.BindingSelection.ContextStatus);
+        Assert.Equal(selectedRole, contract.BindingSelection.BindingSeatKey);
+        Assert.Equal("absent", contract.BindingSelection.BindingCurrentToken);
+        Assert.Contains(expectedCause, contract.BindingSelection.UnresolvedReason, StringComparison.Ordinal);
+        Assert.Contains("Do not create a Run", contract.BindingSelection.UnresolvedReason, StringComparison.Ordinal);
+        Assert.Equal(topologyBefore, workspace.TopologyBytes());
+    }
+
+    [Fact]
+    public void Bootstrap_SoloModeWithNoBindingIsGenuinelyAbsent()
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace("mail-solo-absent");
+        workspace.InstallSoloFixture();
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("absent", contract.BindingSelection.ContextStatus);
+        Assert.Equal("design", contract.BindingSelection.BindingSeatKey);
+        Assert.Equal(OrcaRunBinding.OrcaRunFileLocation, contract.BindingSelection.BindingLocation);
+        Assert.Equal("absent", contract.BindingSelection.BindingCurrentToken);
+    }
+
+    [Fact]
+    public void Bootstrap_RecordedAuthoringOnlyModeRemainsAPrerequisite()
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace("mail-authoring-only");
+        workspace.WriteTeamModeFile(TeamMode.AuthoringOnly, workspace.Team);
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("prerequisite", contract.BindingSelection.ContextStatus);
+        Assert.Null(contract.BindingSelection.TeamShape);
+        Assert.Null(contract.BindingSelection.BindingCurrentToken);
+        Assert.Contains("Recorded team mode or roster is a prerequisite", contract.BindingSelection.UnresolvedReason, StringComparison.Ordinal);
+        Assert.Contains("Repair canonical mode or roster", contract.BindingSelection.UnresolvedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bootstrap_UnrecordedTeamModeRemainsAPrerequisite()
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace("mail-mode-unrecorded");
+        workspace.WriteDeliveryTopology(new Dictionary<string, object>
+        {
+            ["orchestration"] = OrcaRunTestSupport.OrcaRunWorkspace.HerdrRole("w1:p1"),
+            ["implementation"] = OrcaRunTestSupport.OrcaRunWorkspace.HerdrRole("w1:p2"),
+            ["review"] = OrcaRunTestSupport.OrcaRunWorkspace.HerdrRole("w1:p3"),
+            ["design"] = OrcaRunTestSupport.OrcaRunWorkspace.ExternalRoleFor(workspace.Team, "claude-app"),
+        });
+        File.Delete(workspace.TeamModePath);
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("prerequisite", contract.BindingSelection.ContextStatus);
+        Assert.Null(contract.BindingSelection.TeamShape);
+        Assert.Null(contract.BindingSelection.BindingCurrentToken);
+        Assert.Contains("no shape or frontend is guessed", contract.BindingSelection.UnresolvedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bootstrap_WrongSeatBindingIsUnusableAndRetainsItsCurrentToken()
+    {
+        using var workspace = new OrcaRunTestSupport.OrcaRunWorkspace("mail-wrong-seat");
+        workspace.InstallFourSeatDeliveryFixture();
+        workspace.WriteTopologyOrcaRun("review", OrcaRunTestSupport.RunId, OrcaRunBinding.InboxPullPolicy);
+        var before = workspace.TopologyBytes();
+
+        var contract = OrcaMailboxLifecycleGuidance.ResolveBootstrap(
+            workspace.Root,
+            OrcaRunTestSupport.Domain,
+            workspace.Team);
+
+        Assert.Equal("unusable", contract.BindingSelection.ContextStatus);
+        Assert.Equal("binding-seat-not-allowed", contract.BindingSelection.BindingHealth);
+        Assert.Equal("review", contract.BindingSelection.ObservedBindingRole);
+        Assert.Equal("design", contract.BindingSelection.BindingSeatKey);
+        Assert.Equal(OrcaRunTestSupport.RunId, contract.BindingSelection.BindingCurrentToken);
+        Assert.Equal(before, workspace.TopologyBytes());
     }
 
     [Fact]

@@ -122,9 +122,9 @@ internal static class OrcaMailboxLifecycleGuidance
         RecordBinding = new OrcaMailboxRecordBinding
         {
             WorkingDirectory = "Run record-orca-run from the canonical host routing root so its existing CAS lock/current-token behavior applies; there is no --routing-root flag.",
-            CurrentTokenRule = "Supply the actual current binding token (`absent` only when the selected binding is truly absent) and the confirmed returned Run id. Use the shape-selected recorded role key. Solo-conductor also supplies its recorded frontend.",
-            DryRunCommand = Cmd("intent-cli", "agent in canonical routing root", "session-layer", "topology", "record-orca-run", "--domain", "<d>", "--team", "<t>", "--role", "<selected-role>", "--current", "<actual-current|absent>", "--new", "<confirmed-run-id>", "--receive-policy", "<orca-push|inbox-pull>", "--confirm-record-orca-run", "--dry-run", "--format", "json"),
-            WriteCommand = Cmd("intent-cli", "agent in canonical routing root", "session-layer", "topology", "record-orca-run", "--domain", "<d>", "--team", "<t>", "--role", "<selected-role>", "--current", "<actual-current|absent>", "--new", "<confirmed-run-id>", "--receive-policy", "<orca-push|inbox-pull>", "--confirm-record-orca-run", "--write", "--format", "json"),
+            CurrentTokenRule = "Supply the actual current binding token (`absent` only when the selected binding is truly absent; use `malformed` only when the existing record is unreadable or has no valid Run id) and the confirmed returned Run id. Use the shape-selected recorded role key. Solo-conductor also supplies its recorded frontend.",
+            DryRunCommand = Cmd("intent-cli", "agent in canonical routing root", "session-layer", "topology", "record-orca-run", "--domain", "<d>", "--team", "<t>", "--role", "<selected-role>", "--current", "<actual-current|absent|malformed>", "--new", "<confirmed-run-id>", "--receive-policy", "<orca-push|inbox-pull>", "--confirm-record-orca-run", "--dry-run", "--format", "json"),
+            WriteCommand = Cmd("intent-cli", "agent in canonical routing root", "session-layer", "topology", "record-orca-run", "--domain", "<d>", "--team", "<t>", "--role", "<selected-role>", "--current", "<actual-current|absent|malformed>", "--new", "<confirmed-run-id>", "--receive-policy", "<orca-push|inbox-pull>", "--confirm-record-orca-run", "--write", "--format", "json"),
             SoloFrontendOption = "For solo-conductor, append `--frontend <recorded-frontend>` to both record commands; select orca, codex-app, or claude-app from the actual recorded frontend. Topology-role bindings keep frontend on the role record and do not pass --frontend to record-orca-run.",
             Verification = "Re-read guide bootstrap, the shape-appropriate show/validate/team-mode validate surface, and topology orca-runs. Confirm recorded health and handover; this does not verify an Orca runtime.",
             FailureAction = "If CAS or health validation fails, preserve the same confirmed Run id and follow the canonical refusal remedy. Never create a replacement, clear a binding, or infer a new current token.",
@@ -214,8 +214,11 @@ internal static class OrcaMailboxLifecycleGuidance
         var roleSelectionAmbiguous = shape.Resolved
             && string.Equals(shape.BindingLocation, OrcaRunBinding.TopologyRoleLocation, StringComparison.Ordinal)
             && bindingSeatKey is null;
+        var selectedSeatRefusal = binding is null && !roleSelectionAmbiguous
+            ? ResolveSelectedSeatEligibility(routingRoot, normalizedDomain, normalizedTeam, shape, bindingSeatKey)
+            : null;
         var bindingStatus = binding is null
-            ? shape.Resolved && !roleSelectionAmbiguous ? "absent" : "prerequisite"
+            ? shape.Resolved && !roleSelectionAmbiguous && selectedSeatRefusal?.Refusal is null ? "absent" : "prerequisite"
             : string.Equals(binding.Health, OrcaRunBinding.RecordedHealth, StringComparison.Ordinal) ? "healthy" : "unusable";
 
         return template with
@@ -227,20 +230,62 @@ internal static class OrcaMailboxLifecycleGuidance
                 BindingSeatKey = bindingSeatKey,
                 BindingLocation = binding?.BindingLocation ?? shape.BindingLocation,
                 BindingHealth = binding?.Health,
-                BindingCurrentToken = binding is null
-                    ? shape.Resolved ? "absent" : null
-                    : string.Equals(binding.Health, OrcaRunBinding.RecordedHealth, StringComparison.Ordinal) ? binding.RunId : null,
+                BindingCurrentToken = binding?.CurrentToken ?? (shape.Resolved ? "absent" : null),
                 ObservedBindingRole = binding?.Role,
+                SelectedFrontend = binding?.Frontend ?? selectedSeatRefusal?.Frontend,
                 ReceivePolicy = binding?.ReceivePolicy,
                 RecordedRunId = binding?.RunId,
-                    UnresolvedReason = shape.Resolved
+                UnresolvedReason = shape.Resolved
                     ? roleSelectionAmbiguous
                         ? $"The recorded roster has more than one role key normalized as '{shape.RequiredSeat}'. Resolve the exact selected role key before recording a binding."
-                        : null
+                        : selectedSeatRefusal?.Refusal
                     : "Recorded team mode or roster is a prerequisite. Repair canonical mode or roster before selecting a binding branch; no shape or frontend is guessed.",
             },
         };
     }
+
+    private static SelectedSeatEligibility? ResolveSelectedSeatEligibility(
+        string routingRoot,
+        string domain,
+        string team,
+        OrcaRunTeamShapeResult shape,
+        string? bindingSeatKey)
+    {
+        if (!shape.Resolved
+            || !string.Equals(shape.BindingLocation, OrcaRunBinding.TopologyRoleLocation, StringComparison.Ordinal)
+            || bindingSeatKey is null)
+        {
+            return null;
+        }
+
+        var resolution = NotifyRoleTopologyStore.Resolve(routingRoot, domain, team);
+        if (!resolution.Resolved || resolution.Topology is null)
+        {
+            return new SelectedSeatEligibility(null, $"Selected binding seat eligibility is unresolved (cause: {resolution.Cause ?? "topology-unresolved"}); record-orca-run prerequisites remain unmet. Do not create a Run for this binding.");
+        }
+
+        if (!resolution.Topology.Roles.TryGetValue(bindingSeatKey, out var seat))
+        {
+            return new SelectedSeatEligibility(null, $"Selected recorded role key '{bindingSeatKey}' is missing; record-orca-run prerequisite cause: topology-role-missing. Do not create a Run for this binding.");
+        }
+
+        if (string.Equals(seat.Resident, NotifyRecordedRole.HerdrResident, StringComparison.Ordinal))
+        {
+            return new SelectedSeatEligibility(seat.Frontend, $"Selected recorded role key '{bindingSeatKey}' is a herdr seat; record-orca-run refusal cause: receive-policy-herdr-seat. Do not create a Run until the recorded residence is repaired.");
+        }
+
+        if (string.Equals(seat.Resident, NotifyRecordedRole.ExternalResident, StringComparison.Ordinal)
+            && (string.IsNullOrWhiteSpace(seat.Frontend)
+                || seat.Frontend is not ("orca" or "claude-app" or "codex-app")))
+        {
+            var frontend = string.IsNullOrWhiteSpace(seat.Frontend) ? "absent" : $"'{seat.Frontend}'";
+            return new SelectedSeatEligibility(seat.Frontend, $"Selected external role key '{bindingSeatKey}' has frontend {frontend}; record-orca-run refusal cause: receive-policy-seat-kind-unrecorded. Do not create a Run until a supported frontend is recorded.");
+        }
+
+        return new SelectedSeatEligibility(seat.Frontend, null);
+    }
+
+    private sealed record SelectedSeatEligibility(string? Frontend, string? Refusal);
 
     private static string? ResolveBindingSeatKey(
         string routingRoot,
@@ -301,6 +346,10 @@ internal static class OrcaMailboxLifecycleGuidance
         writer.WriteLine($"- context status: `{contract.BindingSelection.ContextStatus}`");
         if (contract.BindingSelection.TeamShape is not null) writer.WriteLine($"- recorded team shape: `{contract.BindingSelection.TeamShape}`");
         if (contract.BindingSelection.BindingSeatKey is not null) writer.WriteLine($"- selected recorded role key: `{contract.BindingSelection.BindingSeatKey}`");
+        writer.WriteLine($"- binding location: `{contract.BindingSelection.BindingLocation ?? "unresolved"}`");
+        writer.WriteLine($"- binding health: `{contract.BindingSelection.BindingHealth ?? (contract.BindingSelection.ContextStatus == "absent" ? "absent" : contract.BindingSelection.ContextStatus == "prerequisite" && contract.BindingSelection.BindingCurrentToken == "absent" ? "absent" : "unresolved")}`");
+        writer.WriteLine($"- binding current token: `{contract.BindingSelection.BindingCurrentToken ?? "unknown"}`");
+        writer.WriteLine($"- selected frontend: `{contract.BindingSelection.SelectedFrontend ?? (contract.BindingSelection.BindingSeatKey is null ? "unresolved" : "absent")}`");
         if (contract.BindingSelection.ObservedBindingRole is not null) writer.WriteLine($"- role key carrying the observed binding: `{contract.BindingSelection.ObservedBindingRole}`");
         if (contract.BindingSelection.RecordedRunId is not null) writer.WriteLine($"- recorded Run id: `{contract.BindingSelection.RecordedRunId}`");
         if (contract.BindingSelection.ReceivePolicy is not null) writer.WriteLine($"- recorded receive policy: `{contract.BindingSelection.ReceivePolicy}`");
@@ -338,7 +387,7 @@ internal static class OrcaMailboxLifecycleGuidance
         writer.WriteLine($"- check from authenticated session: `{contract.Receive.SessionCheckCommand.Render()}`");
         writer.WriteLine($"- check from verified terminal: `{contract.Receive.TerminalCheckCommand.Render()}`");
         writer.WriteLine($"- batch: {contract.Receive.BatchRule}");
-        writer.WriteLine($"- ACK from authenticated session: `{contract.Receive.SessionAckCommand.Render()}`");
+        writer.WriteLine($"- ACK from authenticated session: `{contract.Receive.SessionAckCommand.Render()}` — {contract.Receive.AckRule}");
         writer.WriteLine($"- ACK from verified terminal: `{contract.Receive.TerminalAckCommand.Render()}` — {contract.Receive.AckRule}");
         writer.WriteLine($"- inspection and cadence: {contract.Receive.InspectionRule}");
         writer.WriteLine($"- receive failure: {contract.Receive.FailureAction}");
@@ -427,6 +476,7 @@ internal sealed record OrcaMailboxBindingSelection
     [JsonPropertyName("team_shape")] public string? TeamShape { get; init; }
     [JsonPropertyName("binding_seat_key")] public string? BindingSeatKey { get; init; }
     [JsonPropertyName("observed_binding_role")] public string? ObservedBindingRole { get; init; }
+    [JsonPropertyName("selected_frontend")] public string? SelectedFrontend { get; init; }
     [JsonPropertyName("binding_location")] public string? BindingLocation { get; init; }
     [JsonPropertyName("binding_health")] public string? BindingHealth { get; init; }
     [JsonPropertyName("binding_current_token")] public string? BindingCurrentToken { get; init; }
