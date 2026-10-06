@@ -89,17 +89,19 @@ public sealed class GuideSeatSelectionG789Tests
             operatingBlock.EnumerateObject().Select(property => property.Name));
         Assert.Equal(
             [
-                "Create or bind a Run before seat messages: `orca orchestration run-create --objective <text> [--from <handle>]` or `orca orchestration run-use --id <run-id> [--from <handle>]`.",
-                "Share the resulting `<run-id>` with every sender before anyone addresses `run:<run-id>`.",
-                "Each sender supplies its own `--from <role>` handle; it is a sender handle, not a routing identity.",
-                "Record the adopted <run-id> on the seat the recorded team shape selects (steward for five-seat, design for four-seat and solo-conductor; the seat must be external with frontend orca, claude-app, or codex-app) with intent-cli session-layer topology record-orca-run … --dry-run first.",
+                "Run the installed Orca capability and caller-identity checks before considering a mutation.",
+                "Select solo-conductor design sidecar, the recorded four-seat Architect alias, or five-seat Steward from recorded mode and topology.",
+                "Inspect current binding health and caller-owned Run state; adopt deliberately or create once after an explicit choice.",
+                "Record with canonical record-orca-run dry-run/CAS write, then discover and address the exact recipient Run id.",
+                "Use finite FIFO check, process the whole batch, and ACK only its returned Delivery after processing completes.",
             ],
             operatingBlock.GetProperty("setup_order").EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal("Shared Orca mailbox lifecycle contract", operatingBlock.GetProperty("label").GetString());
         Assert.Equal(GuideDesignThreadCommand.OrcaWakeSendForm, operatingBlock.GetProperty("send_form").GetString());
         Assert.Equal(GuideDesignThreadCommand.OrcaCheckForm, operatingBlock.GetProperty("check_form").GetString());
-        Assert.Contains("courtesy wakes and design-to-design messages", operatingBlock.GetProperty("shared_channel").GetString(), StringComparison.Ordinal);
-        Assert.Contains("records an adopted Run id with session-layer topology record-orca-run", operatingBlock.GetProperty("durable_record").GetString(), StringComparison.Ordinal);
-        Assert.Contains(GuideDesignThreadCommand.OrcaWakeSendForm, contract.GetProperty("wake_channel_declaration").GetString(), StringComparison.Ordinal);
+        Assert.Contains("best effort, not acceptance", operatingBlock.GetProperty("shared_channel").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Canonical intent-cli notify remains first", operatingBlock.GetProperty("durable_record").GetString(), StringComparison.Ordinal);
+        Assert.Equal("orca-mailbox-lifecycle/v1", designDocument.RootElement.GetProperty("orca_mailbox_lifecycle").GetProperty("contract_version").GetString());
 
         var selection = designDocument.RootElement.GetProperty("team_and_duty_split").GetProperty("review_seat_selection");
         Assert.Equal(
@@ -122,14 +124,15 @@ public sealed class GuideSeatSelectionG789Tests
             ["--domain", Domain, "--team", fixture.Team, "--routing-root", fixture.Root, "--format", "markdown"],
             markdownWriter));
         var markdown = markdownWriter.ToString();
-        var blockStart = markdown.IndexOf("Non-normative Orca operating block", StringComparison.Ordinal);
-        var createIndex = markdown.IndexOf("run-create --objective <text>", blockStart, StringComparison.Ordinal);
-        var bindIndex = markdown.IndexOf("run-use --id <run-id>", blockStart, StringComparison.Ordinal);
-        var shareIndex = markdown.IndexOf("Share the resulting `<run-id>`", blockStart, StringComparison.Ordinal);
-        var senderIndex = markdown.IndexOf("Each sender supplies its own", blockStart, StringComparison.Ordinal);
-        var sendIndex = markdown.IndexOf(GuideDesignThreadCommand.OrcaWakeSendForm, blockStart, StringComparison.Ordinal);
-        var checkIndex = markdown.IndexOf(GuideDesignThreadCommand.OrcaCheckForm, blockStart, StringComparison.Ordinal);
-        Assert.True(blockStart >= 0 && createIndex >= 0 && bindIndex > createIndex && shareIndex > bindIndex && senderIndex > shareIndex && sendIndex > senderIndex && checkIndex > sendIndex, markdown);
+        var blockStart = markdown.IndexOf("## Orca mailbox lifecycle", StringComparison.Ordinal);
+        var capabilityIndex = markdown.IndexOf("orca --version", blockStart, StringComparison.Ordinal);
+        var createIndex = markdown.IndexOf("run-create", capabilityIndex, StringComparison.Ordinal);
+        var recordIndex = markdown.IndexOf("record-orca-run", createIndex, StringComparison.Ordinal);
+        var discoverIndex = markdown.IndexOf("orca-runs", recordIndex, StringComparison.Ordinal);
+        var sendIndex = markdown.IndexOf("orchestration send", discoverIndex, StringComparison.Ordinal);
+        var checkIndex = markdown.IndexOf("orchestration check", sendIndex, StringComparison.Ordinal);
+        var ackIndex = markdown.IndexOf("--ack", checkIndex, StringComparison.Ordinal);
+        Assert.True(blockStart >= 0 && capabilityIndex > blockStart && createIndex > capabilityIndex && recordIndex > createIndex && discoverIndex > recordIndex && sendIndex > discoverIndex && checkIndex > sendIndex && ackIndex > checkIndex, markdown);
         Assert.Contains("review-seat selection (G789)", markdown, StringComparison.Ordinal);
 
         Fixture("mixed design-thread Orca block JSON", operatingBlock.GetRawText());
@@ -137,7 +140,7 @@ public sealed class GuideSeatSelectionG789Tests
         Fixture("mixed design-thread review-seat JSON", selection.GetRawText());
         Fixture("mixed design-thread Markdown Orca block", Section(
             markdown,
-            "- **Non-normative Orca operating block:**",
+            "- **Shared Orca mailbox lifecycle contract:**",
             "- **different transition:**"));
     }
 
@@ -327,7 +330,7 @@ public sealed class GuideSeatSelectionG789Tests
         AssertStaticSelectionWithoutResolution(designSelection);
         var designContract = designRoot.GetProperty("external_residence_operating_contract");
         Assert.True(designContract.TryGetProperty("orca_operating_block", out var designOrca));
-        Assert.Equal("Non-normative Orca operating block", designOrca.GetProperty("label").GetString());
+        Assert.Equal("Shared Orca mailbox lifecycle contract", designOrca.GetProperty("label").GetString());
 
         designArgs[^1] = "markdown";
         using var designMarkdownWriter = new StringWriter();
@@ -338,7 +341,7 @@ public sealed class GuideSeatSelectionG789Tests
             "- **review-seat selection (G789):**",
             "- **different transition:**");
         Assert.Contains("When recorded seat kinds differ", designSelectionSection, StringComparison.Ordinal);
-        Assert.Contains("Non-normative Orca operating block", designMarkdown, StringComparison.Ordinal);
+        Assert.Contains("Shared Orca mailbox lifecycle contract", designMarkdown, StringComparison.Ordinal);
         Assert.DoesNotContain("- recorded topology:", designSelectionSection, StringComparison.Ordinal);
         Assert.DoesNotContain("- selection:", designSelectionSection, StringComparison.Ordinal);
 
@@ -382,8 +385,9 @@ public sealed class GuideSeatSelectionG789Tests
 
         foreach (var document in new[] { english, japanese })
         {
-            Assert.Contains("run-create --objective <text> [--from <handle>]", document, StringComparison.Ordinal);
-            Assert.Contains("run-use --id <run-id> [--from <handle>]", document, StringComparison.Ordinal);
+            Assert.Contains("run-create --objective \"<domain>/<team> <selected-seat> mailbox\"", document, StringComparison.Ordinal);
+            Assert.Contains("run-create --objective \"<domain>/<team> <selected-seat> mailbox\" --from <own-terminal-handle>", document, StringComparison.Ordinal);
+            Assert.Contains("run-use --id <exact-run-id> --from <own-terminal-handle>", document, StringComparison.Ordinal);
             Assert.Contains(GuideDesignThreadCommand.OrcaWakeSendForm, document, StringComparison.Ordinal);
             Assert.Contains(GuideDesignThreadCommand.OrcaCheckForm, document, StringComparison.Ordinal);
             Assert.Contains("review_seat_selection", document, StringComparison.Ordinal);
@@ -557,6 +561,7 @@ public sealed class GuideSeatSelectionG789Tests
         // G800 is another additive guide payload.  Keep this immutable G789
         // oracle scoped to the parent surface by projecting it away too.
         projected.Remove("research_delegation");
+        projected.Remove("orca_mailbox_lifecycle");
         projected["team_and_duty_split"]?.AsObject().Remove("review_seat_selection");
         projected["external_residence_operating_contract"]?.AsObject().Remove("orca_operating_block");
         projected["review_standing_policy"]?.AsObject().Remove("review_seat_selection");

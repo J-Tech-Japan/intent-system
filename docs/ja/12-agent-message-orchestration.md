@@ -609,8 +609,10 @@ address を永続的に接続済みの address の代わりにはしません。
 intent-cli notify collect --domain <domain> --team <team> --role design --since <cursor> --wait --timeout-ms <timeout-ms> --routing-root <routing-root> --format json
 ```
 
-**loop を確立してから dual-send。** canonical な `intent-cli notify` は永続的な record
-です。wake channel は `courtesy-only` の signal であり、`dual-send` が実践する形です。
+**loop 確立後の任意 dual-send。** canonical な `intent-cli notify` は workflow の永続 record
+です。Orca wake/nudge は `courtesy-only` の best-effort であり、acceptance ではありません。
+2 回目の terminal send は任意で、必須ではありません。attention が確認できないことを理由に
+永続メールを再送しないでください。
 
 **courtesy wake を明示的に宣言（G776）。** `external` topology record に literal な
 一行の `--wake-command` template を追加できるのは operator だけです。record と
@@ -624,52 +626,126 @@ placeholder は literal のまま残します。canonical notify write が必ず
 operator が渡した text を render するだけで、shell を起動して実行・検証・`health-check` を
 行ったり、command を起動・管理したりしません。
 
-> **非規範的な Orca の例。** design operator は読む前に coordinator terminal を接続し、
-> Orca の bounded blocking check を実行できます。
->
-> ```text
-> orca orchestration run-use --id <run-id>
-> orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json
-> ```
->
-> Orca は canonical な `intent-cli notify` に添える courtesy wake receiver だけです。
-> intent-cli は Orca を起動も管理もしません。
->
-> external design seat は永続的な run address 向けの courtesy wake template も
-> 宣言できます（routing input ではありません）。
->
-> ```text
-> orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
-> ```
+### Orca mailbox lifecycle contract（G853 — preview-through-1.x）
 
-> **非規範的な Orca の操作順序（G789/G837）。** seat message の前に Run を create または
-> 接続し、id を共有し、recorded team shape が選ぶ seat に adopted Run id を記録し、各
-> sender が自身の handle を与えます。順序は次のとおりです。
->
-> ```text
-> orca orchestration run-create --objective <text> [--from <handle>]
-> orca orchestration run-use --id <run-id> [--from <handle>]
-> intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <role> --current absent --new <run-id> --receive-policy <orca-push|inbox-pull> [--frontend <name>] --confirm-record-orca-run --dry-run --format json
-> ```
->
-> 1. create-or-bind form のどちらか一つを使い、誰かが `run:<run-id>` を宛先にする前に、
->    得られた `<run-id>` を全 sender と共有します。
-> 2. 必要な external seat に adopted `<run-id>` を記録します
->    （まず `session-layer topology record-orca-run … --dry-run`）。
-> 3. 各 sender は自身の `--from <role>` handle を渡します。宣言済みの wake send form を
->    変更せずに使い、続けて bounded check を行います。
->
->    ```text
->    orca orchestration send --run <run-id> --to run:<run-id> --from <role> --subject {task_id} --body {summary}
->    orca orchestration check --run <run-id> --wait --timeout-ms <timeout-ms> --json
->    ```
->
-> 同じ Orca channel が herdr seat の courtesy wake と design-to-design message を運びます。
-> どちらも永続的な workflow evidence ではありません。canonical な `intent-cli notify` が
-> 永続的な記録のままです。intent-cli は adopted Run id を
-> `session-layer topology record-orca-run` で記録し、`session-layer topology show`、
-> `session-layer topology orca-runs`、`guide bootstrap` で表示しますが、Orca を実行・
-> 起動・検証・管理はしません。
+`guide bootstrap`、`guide onboarding`、`guide design-thread`、
+`guide solo-conductor`、`guide steward-thread` は、同じ versioned な
+`orca-mailbox-lifecycle/v1` contract を JSON / Markdown で表示します。手順を実行するのは
+agent です。`intent-cli` は記録済みの team mode、roster、binding health を読み、command text を
+案内を出すだけです。Orca の起動、provider launch、mail の send/check/ACK、binding 変更、timer の
+install、receive policy の実行は行いません。G837 の binding location、lock、CAS、health cause と
+canonical notify の位置付けは変更しません。
+
+次の測定済み form は Orca 1.4.219 を対象にしています。実行前にインストール済み help を確認し、
+必要な capability がなければ停止します。
+
+```text
+orca --version
+orca skills get orchestration --json
+orca orchestration run-create --help
+orca orchestration request-show --help
+orca orchestration check --help
+intent-cli session-layer topology orca-runs --format json
+```
+
+team shape は記録済み mode と roster だけから解決します。`solo-conductor` は roster 不要の
+design/Architect sidecar、4-seat delivery は記録済み Architect alias key、5-seat delivery は
+Steward を使います。`frontend=orca` は `receive_policy=orca-push`、`codex-app` / `claude-app` は
+`inbox-pull` を保持します。frontend の欠落や未対応は prerequisite であり、provider kind から推測しません。
+team、mode、roster、frontend が欠けていれば guide でも unresolved のままです。
+topology binding を記録する delivery seat は、supported frontend が記録された external seat である必要があります。
+選択席が herdr の場合、`record-orca-run` は `receive-policy-herdr-seat` で拒否します。bootstrap は Run 作成前にこの prerequisite を表示します。
+
+caller identity は frontend label とは別に確かめます。認証済み Orca session caller は、その session が
+注入した identity のみを使い、terminal caller flag は省略します。terminal caller は、自身の identity と
+確認できた handle のみを create/use/send の `--from` と check の `--terminal` に一貫して使います。
+identity を持たない app caller は lifecycle mutation を停止し、canonical inbox workflow を保ったまま
+不足している Orca caller identity を報告します。他 pane の handle を借りたり、session identity を偽造したり、
+worker workaround を起動したりしてはいけません。
+
+binding が healthy なら、その exact Run を調べて同じ caller で再開し、create はしません。binding がない
+ときは、同じ caller の `run-current` を確認し、caller の権限が確認できた exact Run だけを明示的に採用
+します。capability と caller を確認し、明示的に create を選んだ場合だけ新規作成します。session/terminal
+form はどちらか一つを選び、実際に返った `run.id` を使います。
+
+```text
+orca orchestration run-current --json
+orca orchestration run-current --from <own-terminal-handle> --json
+orca orchestration run-show --id <exact-run-id> --json
+orca orchestration run-use --id <exact-run-id> --json
+orca orchestration run-use --id <exact-run-id> --from <own-terminal-handle> --json
+orca orchestration run-create --objective "<domain>/<team> <selected-seat> mailbox" --json
+orca orchestration run-create --objective "<domain>/<team> <selected-seat> mailbox" --from <own-terminal-handle> --json
+```
+
+`run-use` は権限を確認した意図的な adopt/resume に限ります。`--takeover-legacy` を使わず、objective text や
+run-list の順番から所有者を推測しません。create は一度だけです。記録に失敗したら同じ確定済み id を保持して
+修復し、代わりの Run は作りません。unusable / contradictory binding は既存 health remedy または明示的な
+reconciliation に従い、自動 clear / takeover / rebind はしません。
+
+canonical host routing root から、選択済み role key と実際の current token を使って記録します。`absent` は
+binding が本当にない場合だけです。既存 record が読めない、または有効な Run id を持たない場合だけ `malformed` を使います。
+malformed record は unusable のまま保ち、absent として扱わず既存の修復手順に従います。dry-run 結果を確認してから CAS で書き込みます。solo-conductor の sidecar では
+次の二つの command に記録済み frontend を追加します。topology-role binding では `--frontend` は使いません。
+
+```text
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --confirm-record-orca-run --dry-run --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role <selected-role> --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --confirm-record-orca-run --write --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role design --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --frontend <recorded-frontend> --confirm-record-orca-run --dry-run --format json
+intent-cli session-layer topology record-orca-run --domain <d> --team <t> --role design --current <actual-current|absent|malformed> --new <confirmed-run-id> --receive-policy <orca-push|inbox-pull> --frontend <recorded-frontend> --confirm-record-orca-run --write --format json
+intent-cli guide bootstrap --domain <d> --team <t> --format json
+```
+
+show/validate と `orca-runs` で、shape に応じた binding health と handover を確認します。これは host record の確認であり、
+Orca runtime の検証ではありません。
+
+recipient は `session-layer topology orca-runs` から発見し、binding health を確認して exact `run:<id>` を指定します。
+intent-cli task/report activity では canonical notify を先に完了させます。独立した cross-team discussion のために
+架空の notify task を作る必要はありません。send 成功が示すのは mail の永続登録だけです。attention は best effort で
+acceptance ではなく、terminal send の重複は必須ではありません。
+
+```text
+orca orchestration send --to run:<recipient-run-id> --type status --subject "<subject>" --body "<body>" --json
+orca orchestration send --to run:<recipient-run-id> --from <own-terminal-handle> --type status --subject "<subject>" --body "<body>" --json
+orca orchestration check --run <own-run-id> --wait --timeout-ms 30000 --json
+orca orchestration check --run <own-run-id> --terminal <own-terminal-handle> --wait --timeout-ms 30000 --json
+orca orchestration check --run <own-run-id> --ack <returned-delivery-id> --json
+orca orchestration check --run <own-run-id> --terminal <own-terminal-handle> --ack <returned-delivery-id> --json
+```
+
+check は agent が実行する mutation です。FIFO batch 全体を処理してから ACK を完了します。`--types` は wake condition を
+変えるだけで、delivery 済み batch の membership は変えません。未 ACK batch を再度受信しても、完了済みの canonical
+action を繰り返さないよう処理します。ACK が確認するのは transport delivery だけであり、task completion、review
+acceptance、canonical notify receipt ではありません。処理が未完了なら batch 全体の ACK を保留します。ACK が次の
+batch を返す場合は出力を調べて保持し、処理します。`--peek` と `--all` は調査のみで消費しません。
+有限 wait と既存の `inbox-pull` wake/checkpoint cadence を使い、新 timer、provider wake loop、lifecycle dispatch identity、
+任意の wake command は追加しません。
+
+create/send/ACK の結果が unknown なら、元の exact command、executable、caller、payload、報告された request id を
+保持します。その request を確認し、同じ id を付けた exact replay だけを使います。
+
+```text
+orca orchestration request-show --request <reported-request-id> --json
+<exact-original-command> --retry-request <same-reported-request-id>
+```
+
+completed なら記録済み receipt/outcome を使います。pending なら生存している元 command を待つか、同じ id・同じ caller の
+documented exact replay を行います。absent は未実行の証拠ではありません。receipt の欠落/不正、request id 不在、runtime
+に接続不能、caller mismatch は unknown のままです。unknown は新しい create/send/ACK や推測した Delivery id を許可しません。
+objective による create idempotency、実測済み replay、exactly-once processing は主張しません。
+
+親 #1771 の disposition は次のとおりです。
+
+| 親 issue の ask | G853 の disposition |
+| --- | --- |
+| Run を一度作成し、id を記録して引き渡す | G837 storage と agent-executed G853 create/adopt/recover/record flow |
+| cross-team Run discovery | G837 `orca-runs` discovery と exact-id addressing を保持 |
+| 永続的な attention と receive | agent-executed enqueue、bounded whole-batch processing/ACK、既存 cadence |
+| seat error の report recovery | G837 equal-root reconciliation を保持 |
+| missing-binding validation | delivery shape が記録済みなら G837 informational validation を保持。caller が availability を確認 |
+| owner による live acceptance | 実装 gate 後の adoption/self-mail rehearsal は親が担当。本変更では実施していない |
+| automatic Orca adapter | no-executor ruling に基づき未実装 |
+
 
 **mixed-kind review-seat selection（G789）。** recorded topology field が決定します。herdr
 seat には `kind`、external seat には `frontend` を使い、role name、model、residence、

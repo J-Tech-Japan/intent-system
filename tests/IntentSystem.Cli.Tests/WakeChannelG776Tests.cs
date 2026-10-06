@@ -319,7 +319,7 @@ public sealed class WakeChannelG776Tests : IDisposable
             Assert.Contains("{task_id}", document, StringComparison.Ordinal);
             Assert.Contains("{summary}", document, StringComparison.Ordinal);
             Assert.Contains("{foo}", document, StringComparison.Ordinal);
-            Assert.Contains("orca orchestration send --run <run-id> --to run:<run-id>", document, StringComparison.Ordinal);
+            Assert.Contains("orca orchestration send --to run:<recipient-run-id>", document, StringComparison.Ordinal);
         }
 
         Assert.Contains("never executes, validates by shelling out, health-checks, launches,", en, StringComparison.Ordinal);
