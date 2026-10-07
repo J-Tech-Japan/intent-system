@@ -1,4 +1,5 @@
 using IntentSystem.Cli.Commands;
+using YamlDotNet.RepresentationModel;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -38,6 +39,74 @@ public sealed class GuideReachabilityPlacementTests
     {
         AssertMisplaced("implementation_issue_packet:\n  guide_reachability: null\n");
         AssertMisplaced("{ implementation_issue_packet: { guide_reachability: null } }");
+    }
+
+    [Fact]
+    public void ExplicitStringTaggedParentKeyStillRejectsNestedNullDeclaration()
+    {
+        const string yaml = "!!str implementation_issue_packet:\n  guide_reachability: null\n";
+        var stream = new YamlStream();
+        using (var reader = new StringReader(yaml))
+        {
+            stream.Load(reader);
+        }
+
+        var root = Assert.IsType<YamlMappingNode>(Assert.Single(stream.Documents).RootNode);
+        Assert.False(root.Children.TryGetValue(new YamlScalarNode("implementation_issue_packet"), out _));
+
+        AssertMisplaced(yaml);
+    }
+
+    [Fact]
+    public void ExplicitStringTaggedParentControlsRemainAccepted()
+    {
+        AssertAccepted("!!str implementation_issue_packet:\n  source_execution_unit: G854\n", declared: false);
+        AssertAccepted(
+            "!!str implementation_issue_packet: {}\n"
+                + "guide_reachability:\n  no_role_facing_surface: true\n  routes: []\n",
+            declared: true);
+
+        const string unrelatedTagged = """
+            !!str unrelated_metadata:
+              guide_reachability: unrelated
+            implementation_issue_packet:
+              source_execution_unit: G854
+            """;
+        AssertAccepted(unrelatedTagged, declared: false);
+    }
+
+    [Fact]
+    public void TaggedAndUntaggedMatchingParentMappingsAreBothCheckedWhenYamlPreservesThem()
+    {
+        const string yaml = """
+            implementation_issue_packet: {}
+            !!str implementation_issue_packet:
+              guide_reachability: null
+            """;
+        var stream = new YamlStream();
+        try
+        {
+            using var reader = new StringReader(yaml);
+            stream.Load(reader);
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            // This YAML parser version may treat tagged and implicit string
+            // keys as duplicates before a node tree exists. The single tagged
+            // parent case above still exercises the value-based lookup fix.
+            return;
+        }
+
+        var root = Assert.IsType<YamlMappingNode>(Assert.Single(stream.Documents).RootNode);
+        var matchingParents = root.Children.Keys
+            .OfType<YamlScalarNode>()
+            .Count(key => string.Equals(key.Value, "implementation_issue_packet", StringComparison.Ordinal));
+        if (matchingParents < 2)
+        {
+            return;
+        }
+
+        AssertMisplaced(yaml);
     }
 
     [Fact]
@@ -136,8 +205,9 @@ public sealed class GuideReachabilityPlacementTests
     private static void AssertMisplaced(string yaml)
     {
         Assert.False(PacketYamlDocument.TryParse(yaml, out _, out var message));
+        Assert.Equal(GuideReachabilityPlacement.ErrorMessage, message);
         Assert.Contains(OffendingPath, message, StringComparison.Ordinal);
-        Assert.Contains(ExpectedPath, message, StringComparison.Ordinal);
+        Assert.Contains("at the packet root as 'guide_reachability'", message, StringComparison.Ordinal);
 
         Assert.False(PacketYamlDocument.TryParseWithLocation(yaml, out _, out var error));
         Assert.Equal(GuideReachabilityPlacement.ErrorMessage, error!.Message);

@@ -25,18 +25,21 @@ internal static class GuideReachabilityPlacement
         ArgumentNullException.ThrowIfNull(root);
         keyNode = null;
 
-        if (!root.Children.TryGetValue(new YamlScalarNode("implementation_issue_packet"), out var implementationNode)
-            || implementationNode is not YamlMappingNode implementationMapping)
+        foreach (var (rootKey, implementationNode) in root.Children)
         {
-            return false;
-        }
-
-        foreach (var (candidate, _) in implementationMapping.Children)
-        {
-            if (candidate is YamlScalarNode { Value: "guide_reachability" })
+            if (rootKey is not YamlScalarNode { Value: "implementation_issue_packet" }
+                || implementationNode is not YamlMappingNode implementationMapping)
             {
-                keyNode = candidate;
-                return true;
+                continue;
+            }
+
+            foreach (var (candidate, _) in implementationMapping.Children)
+            {
+                if (candidate is YamlScalarNode { Value: "guide_reachability" })
+                {
+                    keyNode = candidate;
+                    return true;
+                }
             }
         }
 

@@ -68,6 +68,10 @@ public sealed class G841PacketDraftTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.False(json.RootElement.GetProperty("contract_publishable").GetBoolean());
         Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, RefusalReasons(json)[0]);
+
+        var packetYaml = File.ReadAllText(G841TestHelpers.PacketPath(root, Unit));
+        Assert.False(PacketYamlDocument.TryParse(packetYaml, out _, out var diagnostic));
+        Assert.Equal(GuideReachabilityPlacement.ErrorMessage, diagnostic);
     }
 
     [Fact]
