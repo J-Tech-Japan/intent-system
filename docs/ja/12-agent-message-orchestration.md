@@ -894,6 +894,12 @@ Related Links を含む TODO scaffold は validator の理由付きで not ready
 `issue-cut-ready` として提示されません。`packet draft` の guide reachability も、作者が次の accepted
 form のどちらかを選ぶまで comment のままです。declaration 欠落 warning は両 fragment をそのまま表示します。
 
+`guide_reachability` は packet の root に置きます。直下の
+`implementation_issue_packet.guide_reachability` は、root に有効な declaration が
+併記されていても packet YAML の parse、readiness、publication で拒否されます。
+`issue validate-body` は Markdown section を確認し、facet check は evidence を評価しますが、
+どちらもこの YAML の配置を検証しません。
+
 ```yaml
 guide_reachability:
   no_role_facing_surface: false

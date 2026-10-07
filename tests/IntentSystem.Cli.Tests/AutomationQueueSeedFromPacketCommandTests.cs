@@ -428,6 +428,43 @@ public sealed class AutomationQueueSeedFromPacketCommandTests : IDisposable
     }
 
     [Fact]
+    public void Execute_MisplacedGuideReachability_RefusesWriteWithoutQueueOrRunsChanges()
+    {
+        const string unit = "Z4R-G854";
+        const string targetRepo = "J-Tech-Creations/Zero4Racer";
+        workspace.WritePreparedPacket(unit, targetRepo, domain: "intent-cli");
+        workspace.WriteBindings("intent-cli", "^Z4R-G[0-9]+$");
+        File.WriteAllText(Path.Combine(workspace.RootPath, ".intent-cli", "issues", unit, "packet.yaml"), $"""
+            implementation_issue_packet:
+              source_execution_unit: {unit}
+              issue_title: Demo
+              target_repo: {targetRepo}
+              guide_reachability: null
+            """);
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationQueueSeedFromPacketCommand.Execute(
+            workspace.Context,
+            [
+                "--execution-unit", unit,
+                "--domain", "intent-cli",
+                "--target-repo", targetRepo,
+                "--write",
+                "--format", "json",
+            ],
+            writer);
+
+        Assert.Equal(1, exitCode);
+        using var document = JsonDocument.Parse(writer.ToString());
+        Assert.Equal(AutomationQueueSeedFromPacketCommand.ClassificationUnsafe, document.RootElement.GetProperty("classification").GetString());
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, document.RootElement.GetProperty("unsafe_reason").GetString());
+        Assert.Contains("implementation_issue_packet.guide_reachability", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("guide_reachability", writer.ToString(), StringComparison.Ordinal);
+        Assert.False(File.Exists(workspace.QueueStatePath));
+        Assert.False(File.Exists(workspace.RunsPath));
+    }
+
+    [Fact]
     public void Execute_PacketYamlDeclaresDependenciesAndBlockedBy_PreservesThemInSeed()
     {
         // PR #830 review repair: when packet.yaml carries

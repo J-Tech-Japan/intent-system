@@ -988,6 +988,12 @@ the validator's reason and is never offered as `issue-cut-ready`. `packet draft`
 also leaves guide reachability commented until the author chooses one of these
 accepted forms; a missing-declaration warning prints both fragments verbatim:
 
+Keep `guide_reachability` at the packet root. A direct
+`implementation_issue_packet.guide_reachability` key is rejected during packet
+YAML parsing, readiness, and publication, even when a valid root declaration
+also exists. `issue validate-body` checks Markdown sections, and the facet check
+evaluates its evidence; neither validates this YAML placement.
+
 ```yaml
 guide_reachability:
   no_role_facing_surface: false
