@@ -129,6 +129,12 @@ internal sealed class PacketYamlDocument
             return false;
         }
 
+        if (GuideReachabilityPlacement.TryFindMisplacedDeclarationKey(root, out _))
+        {
+            error = GuideReachabilityPlacement.ErrorMessage;
+            return false;
+        }
+
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         var sequences = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         Flatten(root, prefix: null, fields, sequences);
@@ -183,6 +189,16 @@ internal sealed class PacketYamlDocument
                 "packet.yaml is empty or its top-level document is not a mapping.",
                 null,
                 null);
+            return false;
+        }
+
+        if (GuideReachabilityPlacement.TryFindMisplacedDeclarationKey(root, out var misplacedKey))
+        {
+            var start = misplacedKey!.Start;
+            error = new PacketYamlParseError(
+                GuideReachabilityPlacement.ErrorMessage,
+                (int)start.Line,
+                (int)start.Column);
             return false;
         }
 

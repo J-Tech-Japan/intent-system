@@ -311,6 +311,29 @@ public sealed class G833SoloConductorTests : IDisposable
     }
 
     [Fact]
+    public void Route_Step3NamesPacketRootGuideReachabilityPlacement_InMarkdownAndJson()
+    {
+        const string misplacedPath = "implementation_issue_packet.guide_reachability";
+        const string rootPath = "guide_reachability";
+        var step3 = GuideSoloConductorCommand.BuildGuide().Loop.Single(step => step.Number == 3);
+        Assert.Contains(misplacedPath, step3.Instruction, StringComparison.Ordinal);
+        Assert.Contains(rootPath, step3.Instruction, StringComparison.Ordinal);
+        Assert.Contains("Body validation and the facet check do not validate YAML placement.", step3.Instruction, StringComparison.Ordinal);
+
+        using var markdown = new StringWriter();
+        Assert.Equal(0, GuideSoloConductorCommand.Execute(CreateContext(), ["--format", "markdown"], markdown));
+        Assert.Contains(misplacedPath, markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("do not validate YAML placement", markdown.ToString(), StringComparison.Ordinal);
+
+        using var json = new StringWriter();
+        Assert.Equal(0, GuideSoloConductorCommand.Execute(CreateContext(), ["--format", "json"], json));
+        using var document = JsonDocument.Parse(json.ToString());
+        var jsonStep3 = Assert.Single(document.RootElement.GetProperty("loop").EnumerateArray(), step => step.GetProperty("number").GetInt32() == 3);
+        Assert.Contains(misplacedPath, jsonStep3.GetProperty("instruction").GetString(), StringComparison.Ordinal);
+        Assert.Contains(rootPath, jsonStep3.GetProperty("instruction").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Route_LabelsEveryCommand_AndEmittedIntentCliCommandsExistInSource()
     {
         var guide = GuideSoloConductorCommand.BuildGuide();

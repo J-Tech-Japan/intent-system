@@ -53,6 +53,24 @@ public sealed class G841PacketDraftTests : IDisposable
     }
 
     [Fact]
+    public void PacketDraft_MisplacedGuideReachability_RefusesOtherwiseCompletePacket()
+    {
+        WritePacket($"""
+            implementation_issue_packet:
+              issue_title: "{Title}"
+              domain: {G841TestHelpers.Domain}
+              target_repo: {Repo}
+              guide_reachability: null
+            """);
+        WriteBorrowedGithubBody();
+
+        var (exitCode, json) = RunPacketDraftDryRun();
+        Assert.Equal(0, exitCode);
+        Assert.False(json.RootElement.GetProperty("contract_publishable").GetBoolean());
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, RefusalReasons(json)[0]);
+    }
+
+    [Fact]
     public void PacketDraft_UnreadablePacket_RefusesWithPacketYamlUnreadable_G841Ac14a()
     {
         WritePacket(G841TestHelpers.LegacyEquivalentPacket());

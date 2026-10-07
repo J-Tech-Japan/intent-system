@@ -78,6 +78,39 @@ public sealed class G841PublishFlowTests : IDisposable
         Assert.False(json.RootElement.TryGetProperty("cross_runtime_design_review", out _));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PublishFlow_MisplacedGuideReachabilityRefusesBeforeGithubOrDurableWrites(bool write)
+    {
+        using var workspace = new G841PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, G841TestHelpers.Repo, yaml: $"""
+            implementation_issue_packet:
+              issue_title: "{Title}"
+              domain: {G841TestHelpers.Domain}
+              target_repo: {G841TestHelpers.Repo}
+              guide_reachability: null
+            """);
+        workspace.CaptureDurableBaseline();
+
+        var checker = new RecordingExistingIssueChecker(defaultChecker);
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        var (exit, output) = Run(workspace, Unit, G841TestHelpers.Repo, write);
+
+        Assert.Equal(1, exit);
+        using var json = JsonDocument.Parse(output);
+        Assert.Equal(PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnparseable, json.RootElement.GetProperty("cause").GetString());
+        Assert.False(json.RootElement.GetProperty("created").GetBoolean());
+        var review = json.RootElement.GetProperty("cross_runtime_design_review");
+        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, review.GetProperty("decision").GetString());
+        var detail = review.GetProperty("reasons")[0].GetProperty("detail").GetString();
+        Assert.Contains("implementation_issue_packet.guide_reachability", detail, StringComparison.Ordinal);
+        Assert.Contains("guide_reachability", detail, StringComparison.Ordinal);
+        Assert.Equal(0, checker.CallCount);
+        AssertZeroCreates();
+        workspace.AssertDurableBaselineUntouched(Unit);
+    }
+
     [Fact]
     public void PublishFlow_Ungated_UnreadablePacket_RefusesWithPacketYamlUnreadable_G841Ac14a()
     {

@@ -100,6 +100,11 @@ internal sealed record GuideReachabilityDeclaration
             throw new InvalidOperationException($"Packet YAML could not be parsed: {exception.Message}");
         }
 
+        if (GuideReachabilityPlacement.TryFindMisplacedDeclarationKey(root, out _))
+        {
+            throw new InvalidOperationException(GuideReachabilityPlacement.ErrorMessage);
+        }
+
         if (!root.Children.TryGetValue(new YamlScalarNode("guide_reachability"), out var declarationNode))
         {
             return Absent;
