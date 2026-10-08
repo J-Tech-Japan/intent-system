@@ -8,11 +8,18 @@ namespace IntentSystem.Cli.Commands;
 /// The single G855 process/API boundary. It accepts only fixed, read-only Git
 /// and REST request forms, and immediately projects claim DTOs into plain data.
 /// </summary>
-internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, IGitRemoteCommandRunner gitRunner)
-    : IUnitStatusSnapshotReader
+internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
 {
     private const int PageSize = 100;
     private const int MaximumPages = 20;
+    private readonly IGitHubCommandRunner githubRunner;
+    private readonly IGitRemoteCommandRunner gitRunner;
+
+    internal UnitStatusReadAdapter(IGitHubCommandRunner? githubRunner = null, IGitRemoteCommandRunner? gitRunner = null)
+    {
+        this.githubRunner = githubRunner ?? new GhCommandRunner();
+        this.gitRunner = gitRunner ?? new GitRemoteCommandRunner();
+    }
 
     public UnitStatusClaimSnapshot ReadClaimSnapshot(CliContext context, string executionUnit)
     {
@@ -44,7 +51,11 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
         var localHeadRef = ReadGitText(context.RepoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], out _);
         if (string.Equals(localHeadRef, "HEAD", StringComparison.Ordinal)) localHeadRef = null;
 
-        var oid = ReadGitText(context.RepoRoot, ["rev-parse", "--verify", $"{metadataRef}^{{commit}}"], out var oidError);
+        var oid = ReadGitText(
+            context.RepoRoot,
+            ["rev-parse", "--verify", $"{metadataRef}^{{commit}}"],
+            out var oidError,
+            metadataRef: metadataRef);
         if (oid is null || !IsObjectId(oid))
         {
             return ClaimFailure(
@@ -56,14 +67,18 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
                 localHeadRef);
         }
 
-        var tree = gitRunner.Run(
+        var tree = ReadGitText(
             context.RepoRoot,
-            ["ls-tree", "-r", "-z", "--name-only", oid, "--", claimPath, historyDirectory]);
-        if (tree.ExitCode != 0 || tree.TimedOut)
+            ["ls-tree", "-r", "-z", "--name-only", oid, "--", claimPath, historyDirectory],
+            out var treeError,
+            snapshotOid: oid,
+            claimPath: claimPath,
+            historyDirectory: historyDirectory);
+        if (tree is null)
         {
             return ClaimFailure(
                 "local-claim-tree-unreadable",
-                "The configured local claim snapshot tree could not be read.",
+                treeError ?? "The configured local claim snapshot tree could not be read.",
                 UnitStatusStates.ReadFailure,
                 metadataRef,
                 localHeadSha,
@@ -71,7 +86,7 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
                 oid);
         }
 
-        var paths = tree.StdOut.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        var paths = tree.Split('\0', StringSplitOptions.RemoveEmptyEntries);
         if (paths.Any(path => !IsAllowedClaimPath(path, claimPath, historyDirectory)))
         {
             return ClaimFailure(
@@ -100,12 +115,19 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
 
         foreach (var path in paths)
         {
-            var show = gitRunner.Run(context.RepoRoot, ["show", $"{oid}:{path}"]);
-            if (show.ExitCode != 0 || show.TimedOut)
+            var show = ReadGitText(
+                context.RepoRoot,
+                ["show", $"{oid}:{path}"],
+                out var showError,
+                snapshotOid: oid,
+                claimPath: claimPath,
+                historyDirectory: historyDirectory,
+                expectedPath: path);
+            if (show is null)
             {
                 return ClaimFailure(
                     "local-claim-record-unreadable",
-                    $"The local claim snapshot record '{path}' could not be read.",
+                    showError ?? $"The local claim snapshot record '{path}' could not be read.",
                     UnitStatusStates.ReadFailure,
                     metadataRef,
                     localHeadSha,
@@ -117,7 +139,7 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
             {
                 if (string.Equals(path, claimPath, StringComparison.Ordinal))
                 {
-                    var record = JsonSerializer.Deserialize<ClaimRecord>(show.StdOut)
+                    var record = JsonSerializer.Deserialize<ClaimRecord>(show)
                         ?? throw new InvalidOperationException("claim record deserialized to null.");
                     if (!string.Equals(record.Scope, $"execution-unit:{executionUnit}", StringComparison.Ordinal)
                         || string.IsNullOrWhiteSpace(record.Actor)
@@ -138,7 +160,7 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
                 }
                 else
                 {
-                    var record = JsonSerializer.Deserialize<ClaimHistoryRecord>(show.StdOut)
+                    var record = JsonSerializer.Deserialize<ClaimHistoryRecord>(show)
                         ?? throw new InvalidOperationException("claim history record deserialized to null.");
                     if (!string.Equals(record.Scope, $"execution-unit:{executionUnit}", StringComparison.Ordinal)
                         || string.IsNullOrWhiteSpace(record.Actor)
@@ -257,7 +279,7 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
         var headBefore = before.HeadSha;
         facts.Add(LabelFact(
             "approved-marker",
-            before.Labels,
+            before.ObservedLabels,
             "intent-pr-approved",
             $"https://github.com/{repo}/pull/{pullRequest}",
             "approval-marker-absent",
@@ -266,7 +288,7 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
             repo,
             pullRequest,
             headBefore));
-        var hasApprovalMarker = before.Labels.Contains("intent-pr-approved", StringComparer.Ordinal);
+        var hasApprovalMarker = before.ObservedLabels.Contains("intent-pr-approved", StringComparer.Ordinal);
         facts.Add(hasApprovalMarker
             ? new UnitStatusFact
             {
@@ -438,7 +460,7 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
                 Reviews = reviewRows,
                 Checks = checks,
                 IssueLabels = observedIssueLabels,
-                PullRequestLabels = before.Labels,
+                PullRequestLabels = before.ObservedLabels,
                 Warnings = warnings,
             };
         }
@@ -508,7 +530,7 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
             MergeCommitSha = after.MergeCommitSha,
             Merged = after.Merged,
             IssueLabels = observedIssueLabels,
-            PullRequestLabels = before.Labels,
+            PullRequestLabels = before.ObservedLabels,
             Reviews = reviewRows,
             Checks = checks,
             Facts = facts,
@@ -547,20 +569,18 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
         }
     }
 
-    private bool TryReadJson(
+    internal bool TryReadJson(
         CliContext context,
         IReadOnlyList<string> arguments,
         out JsonDocument? document,
         out UnitStatusReadFailure failure)
     {
         document = null;
-        if (arguments.Count < 4
-            || arguments[0] != "api"
-            || arguments[1] != "--method"
-            || arguments[2] != "GET"
-            || arguments.Skip(3).Any(argument => argument.StartsWith("-", StringComparison.Ordinal)))
+        if (!IsAllowedReadOnlyRequest(true, arguments))
         {
-            failure = new UnitStatusReadFailure("github-request-invalid", "Only explicit GET REST requests are permitted.");
+            failure = new UnitStatusReadFailure(
+                "github-request-invalid",
+                "The request is outside the fixed read-only GitHub REST endpoint and pagination allowlist.");
             return false;
         }
 
@@ -1034,12 +1054,26 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
         }
     }
 
-    private string? ReadGitText(string repoRoot, IReadOnlyList<string> arguments, out string? error)
+    internal string? ReadGitText(
+        string repoRoot,
+        IReadOnlyList<string> arguments,
+        out string? error,
+        string? metadataRef = null,
+        string? snapshotOid = null,
+        string? claimPath = null,
+        string? historyDirectory = null,
+        string? expectedPath = null)
     {
-        if (arguments.Count == 0
-            || arguments[0] is not ("rev-parse" or "ls-tree" or "show"))
+        if (!IsAllowedReadOnlyRequest(
+                false,
+                arguments,
+                metadataRef,
+                snapshotOid,
+                claimPath,
+                historyDirectory,
+                expectedPath))
         {
-            error = "Git request is not on the fixed read-only allowlist.";
+            error = "Git request is outside the fixed local snapshot forms, object ID, or contained-path allowlist.";
             return null;
         }
 
@@ -1054,8 +1088,208 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
         return result.StdOut.Trim();
     }
 
+    private static bool IsAllowedReadOnlyRequest(
+        bool github,
+        IReadOnlyList<string> arguments,
+        string? metadataRef = null,
+        string? snapshotOid = null,
+        string? claimPath = null,
+        string? historyDirectory = null,
+        string? expectedPath = null) => github
+        ? IsAllowedGitHubRequest(arguments)
+        : IsAllowedGitRequest(arguments, metadataRef, snapshotOid, claimPath, historyDirectory, expectedPath);
+
+    private static bool IsAllowedGitHubRequest(IReadOnlyList<string> arguments)
+    {
+        if (arguments.Count != 4
+            || arguments[0] != "api"
+            || arguments[1] != "--method"
+            || arguments[2] != "GET")
+        {
+            return false;
+        }
+
+        var endpoint = arguments[3];
+        var queryIndex = endpoint.IndexOf('?', StringComparison.Ordinal);
+        var path = queryIndex < 0 ? endpoint : endpoint[..queryIndex];
+        var parts = path.Split('/');
+        if (parts.Length < 5
+            || parts[0] != "repos"
+            || !IsSafeRepositorySegment(parts[1])
+            || !IsSafeRepositorySegment(parts[2]))
+        {
+            return false;
+        }
+
+        if (queryIndex >= 0)
+        {
+            if (endpoint.IndexOf('?', queryIndex + 1) >= 0
+                || !IsAllowedPaginationQuery(endpoint[(queryIndex + 1)..]))
+            {
+                return false;
+            }
+
+            return parts.Length == 6
+                && ((parts[3] == "pulls" && IsPositiveNumber(parts[4]) && parts[5] == "reviews")
+                    || (parts[3] == "commits" && IsObjectId(parts[4]) && parts[5] is ("check-runs" or "statuses")));
+        }
+
+        return (parts.Length == 5
+                && parts[3] is ("pulls" or "issues")
+                && IsPositiveNumber(parts[4]))
+            || (parts.Length == 6
+                && parts[3] == "actions"
+                && parts[4] == "runs"
+                && IsPositiveNumber(parts[5]));
+    }
+
+    private static bool IsAllowedPaginationQuery(string query)
+    {
+        const string prefix = "per_page=100&page=";
+        if (!query.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var pageText = query[prefix.Length..];
+        return int.TryParse(pageText, NumberStyles.None, CultureInfo.InvariantCulture, out var page)
+            && page is >= 1 and <= MaximumPages
+            && string.Equals(page.ToString(CultureInfo.InvariantCulture), pageText, StringComparison.Ordinal);
+    }
+
+    private static bool IsAllowedGitRequest(
+        IReadOnlyList<string> arguments,
+        string? metadataRef,
+        string? snapshotOid,
+        string? claimPath,
+        string? historyDirectory,
+        string? expectedPath)
+    {
+        if (arguments.Count == 3
+            && arguments[0] == "rev-parse"
+            && arguments[1] == "--verify"
+            && arguments[2] == "HEAD")
+        {
+            return metadataRef is null && snapshotOid is null && claimPath is null && historyDirectory is null && expectedPath is null;
+        }
+
+        if (arguments.Count == 3
+            && arguments[0] == "rev-parse"
+            && arguments[1] == "--abbrev-ref"
+            && arguments[2] == "HEAD")
+        {
+            return metadataRef is null && snapshotOid is null && claimPath is null && historyDirectory is null && expectedPath is null;
+        }
+
+        if (arguments.Count == 3
+            && arguments[0] == "rev-parse"
+            && arguments[1] == "--verify"
+            && metadataRef is not null
+            && IsSafeMetadataRef(metadataRef)
+            && string.Equals(arguments[2], $"{metadataRef}^{{commit}}", StringComparison.Ordinal))
+        {
+            return snapshotOid is null && claimPath is null && historyDirectory is null && expectedPath is null;
+        }
+
+        if (arguments.Count == 8
+            && arguments[0] == "ls-tree"
+            && arguments[1] == "-r"
+            && arguments[2] == "-z"
+            && arguments[3] == "--name-only"
+            && IsObjectId(arguments[4])
+            && snapshotOid is not null
+            && string.Equals(arguments[4], snapshotOid, StringComparison.OrdinalIgnoreCase)
+            && arguments[5] == "--"
+            && claimPath is not null
+            && historyDirectory is not null
+            && IsCanonicalClaimPath(claimPath)
+            && IsCanonicalHistoryDirectory(historyDirectory, claimPath)
+            && IsSafeRepoRelativePath(claimPath)
+            && IsSafeRepoRelativePath(historyDirectory)
+            && string.Equals(arguments[6], claimPath, StringComparison.Ordinal)
+            && string.Equals(arguments[7], historyDirectory, StringComparison.Ordinal))
+        {
+            return metadataRef is null && expectedPath is null;
+        }
+
+        if (arguments.Count == 2
+            && arguments[0] == "show"
+            && snapshotOid is not null
+            && IsObjectId(snapshotOid)
+            && claimPath is not null
+            && historyDirectory is not null
+            && expectedPath is not null
+            && IsCanonicalClaimPath(claimPath)
+            && IsCanonicalHistoryDirectory(historyDirectory, claimPath)
+            && IsSafeRepoRelativePath(claimPath)
+            && IsSafeRepoRelativePath(historyDirectory)
+            && IsAllowedClaimPath(expectedPath, claimPath, historyDirectory)
+            && string.Equals(arguments[1], $"{snapshotOid}:{expectedPath}", StringComparison.Ordinal))
+        {
+            return metadataRef is null;
+        }
+
+        return false;
+    }
+
+    private static bool IsSafeRepositorySegment(string value) =>
+        value.Length is > 0 and <= 100
+        && char.IsAsciiLetterOrDigit(value[0])
+        && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+
+    private static bool IsPositiveNumber(string value) =>
+        long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+        && number > 0
+        && string.Equals(number.ToString(CultureInfo.InvariantCulture), value, StringComparison.Ordinal);
+
+    private static bool IsSafeMetadataRef(string value)
+    {
+        const string prefix = "refs/remotes/origin/";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var branch = value[prefix.Length..];
+        if (branch.Length == 0
+            || branch.StartsWith("/", StringComparison.Ordinal)
+            || branch.EndsWith("/", StringComparison.Ordinal)
+            || branch.EndsWith(".", StringComparison.Ordinal)
+            || branch.Contains("..", StringComparison.Ordinal)
+            || branch.Contains("//", StringComparison.Ordinal)
+            || branch.Contains("@{", StringComparison.Ordinal)
+            || branch.Any(character => char.IsControl(character) || char.IsWhiteSpace(character)
+                || character is '~' or '^' or ':' or '?' or '*' or '[' or '\\'))
+        {
+            return false;
+        }
+
+        return branch.Split('/').All(segment => segment is not ("" or "." or ".."));
+    }
+
+    private static bool IsSafeRepoRelativePath(string value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && !Path.IsPathRooted(value)
+        && !value.Contains('\\')
+        && !value.Contains(':')
+        && value.Split('/').All(segment => segment is not ("" or "." or ".."));
+
+    private static bool IsCanonicalClaimPath(string path)
+    {
+        const string prefix = ".intent-cli/claims/";
+        const string suffix = ".json";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal)
+            || !path.EndsWith(suffix, StringComparison.Ordinal)) return false;
+        var digest = path[prefix.Length..^suffix.Length];
+        return digest.Length == 64
+            && digest.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+    }
+
+    private static bool IsCanonicalHistoryDirectory(string path, string claimPath) =>
+        string.Equals(
+            path,
+            $".intent-cli/claims/history/{Path.GetFileNameWithoutExtension(claimPath)}",
+            StringComparison.Ordinal);
+
     private static bool IsAllowedClaimPath(string path, string claimPath, string historyDirectory)
     {
+        if (!IsSafeRepoRelativePath(path)
+            || !IsCanonicalClaimPath(claimPath)
+            || !IsCanonicalHistoryDirectory(historyDirectory, claimPath)
+            || !IsSafeRepoRelativePath(claimPath)
+            || !IsSafeRepoRelativePath(historyDirectory)) return false;
         if (string.Equals(path, claimPath, StringComparison.Ordinal)) return true;
         var prefix = historyDirectory + "/";
         if (!path.StartsWith(prefix, StringComparison.Ordinal)) return false;
@@ -1421,10 +1655,4 @@ internal sealed class UnitStatusReadAdapter(IGitHubCommandRunner githubRunner, I
         IdentityConflict,
     }
 
-}
-
-internal static class UnitStatusReaderFactory
-{
-    public static IUnitStatusSnapshotReader CreateDefault() =>
-        new UnitStatusReadAdapter(new GhCommandRunner(), new GitRemoteCommandRunner());
 }

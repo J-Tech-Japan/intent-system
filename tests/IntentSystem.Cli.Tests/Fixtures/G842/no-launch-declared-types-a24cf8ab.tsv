@@ -542,6 +542,7 @@ TaskingTaskPacketChecklistCommand	src/IntentSystem.Cli/Commands/TaskingTaskPacke
 TaskingTaskPacketCommand	src/IntentSystem.Cli/Commands/TaskingTaskPacketCommand.cs
 TaskingTaskPacketPreviewCommand	src/IntentSystem.Cli/Commands/TaskingTaskPacketPreviewCommand.cs
 TransitionPlan	src/IntentSystem.Cli/Commands/AutomationPrTransitionCommand.cs
+UnitStatusReadAdapter	src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs
 UpdateChannelDetection	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 UpdateChannelDetector	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 UpdateChannelName	src/IntentSystem.Cli/Commands/UpdateCommand.cs

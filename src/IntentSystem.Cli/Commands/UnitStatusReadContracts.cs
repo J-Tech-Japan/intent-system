@@ -66,7 +66,7 @@ internal sealed record UnitStatusPullRequestRead(
     string HeadSha,
     bool Merged,
     string? MergeCommitSha,
-    IReadOnlyList<string> Labels);
+    IReadOnlyList<string> ObservedLabels);
 
 internal sealed record UnitStatusReadFailure(string Cause, string Detail);
 

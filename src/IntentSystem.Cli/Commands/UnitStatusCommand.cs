@@ -19,7 +19,7 @@ internal static class UnitStatusCommand
     ];
 
     public static int Execute(CliContext context, string[] args, TextWriter writer) =>
-        ExecuteCore(context, args, writer, UnitStatusReaderFactory.CreateDefault());
+        ExecuteCore(context, args, writer, new UnitStatusReadAdapter());
 
     internal static int ExecuteCore(CliContext context, string[] args, TextWriter writer, IUnitStatusSnapshotReader reader)
     {

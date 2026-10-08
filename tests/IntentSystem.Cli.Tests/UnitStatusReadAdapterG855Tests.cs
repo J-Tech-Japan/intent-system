@@ -45,6 +45,68 @@ public sealed class UnitStatusReadAdapterG855Tests
     }
 
     [Fact]
+    public void ReadAdapterRejectsUnlistedGithubRequestsBeforeRunner()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+        IReadOnlyList<string>[] invalidRequests =
+        [
+            ["api", "--method", "POST", $"repos/{Repo}/issues/{Issue}"],
+            ["api", "--method", "GET", $"repos/{Repo}/issues/{Issue}", "--paginate"],
+            ["api", "--method", "GET", $"https://api.github.com/repos/{Repo}/issues/{Issue}"],
+            ["api", "--method", "GET", $"repos/../intent-system/issues/{Issue}"],
+            ["api", "--method", "GET", $"repos/{Repo}/issues/{Issue}?per_page=100&page=1"],
+            ["api", "--method", "GET", $"repos/{Repo}/pulls/{PullRequest}/reviews?per_page=100&page=21"],
+            ["api", "--method", "GET", $"repos/{Repo}/pulls/{PullRequest}/reviews?per_page=100&page=1&state=all"],
+            ["api", "--method", "GET", "graphql", "-f", "query=mutation"],
+        ];
+
+        foreach (var arguments in invalidRequests)
+        {
+            Assert.False(adapter.TryReadJson(host.Context, arguments, out var document, out _));
+            Assert.Null(document);
+        }
+
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public void ReadAdapterRejectsUnlistedGitCommandsAndEscapingPathsBeforeRunner()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGit();
+        var adapter = new UnitStatusReadAdapter(new FakeGitHub((arguments, _) => DefaultResponse(arguments)), runner);
+        var claimPath = ClaimCommand.ClaimPath("execution-unit:G855");
+        var historyDirectory = $"{ClaimCommand.ClaimsDirectory}/history/{Path.GetFileNameWithoutExtension(claimPath)}";
+
+        IReadOnlyList<string>[] invalidCommands =
+        [
+            ["fetch", "origin", "main"],
+            ["reset", "--hard", "HEAD"],
+            ["rev-parse", "--verify", "HEAD", "--quiet"],
+            ["rev-parse", "--verify", "refs/remotes/origin/metadata^{commit}"],
+            ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", claimPath, historyDirectory],
+            ["ls-tree", "-r", "-z", "--name-only", Head, "--", claimPath, "../outside"],
+            ["show", $"{Head}:../outside/secret.json"],
+        ];
+
+        foreach (var arguments in invalidCommands)
+        {
+            Assert.Null(adapter.ReadGitText(host.Context.RepoRoot, arguments, out _));
+        }
+
+        Assert.Null(adapter.ReadGitText(
+            host.Context.RepoRoot,
+            ["ls-tree", "-r", "-z", "--name-only", Head, "--", ".intent-cli/claims/" + new string('a', 64) + ".json", ".intent-cli/claims/history/" + new string('a', 64)],
+            out _,
+            snapshotOid: Head,
+            claimPath: ".intent-cli/claims/" + new string('a', 64) + ".json",
+            historyDirectory: ".intent-cli/claims/history/" + new string('b', 64)));
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
     public void CanonicalCrossRuntimeAndGenericIndependentReviewBodiesBindToHeadAndExposeVerdict()
     {
         using var host = new TempHost();
