@@ -36,6 +36,9 @@ internal static class AutomationPrTransitionCommand
     /// </summary>
     public static Func<string, int, string>? PrHeadReader { get; set; }
 
+    /// <summary>G856: deterministic read-only review inventory seam for solo approval.</summary>
+    internal static Func<SoloConductorReviewReadRequest, SoloConductorReviewReadResult>? SoloReviewReader { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -119,40 +122,42 @@ internal static class AutomationPrTransitionCommand
         // unchanged. A refusal returns before the write block: no label changes
         // and the CI wait is kept.
         CrossRuntimeReviewTransitionOutcome? crossRuntimeReview = null;
-        if (string.Equals(transition, TransitionApproved, StringComparison.Ordinal)
-            && context.Config.CrossRuntimeReview.IsGatedRepo(repo))
+        SoloConductorReviewTransitionOutcome? soloConductorReview = null;
+        var approvedGate = string.Equals(transition, TransitionApproved, StringComparison.Ordinal)
+            ? EvaluateApprovedTransition(context, repo!, pr!.Value, headSha, executionUnit)
+            : ApprovedTransitionEvaluation.NotApplicable;
+        crossRuntimeReview = approvedGate.CrossRuntimeReview;
+        soloConductorReview = approvedGate.SoloConductorReview;
+        if (approvedGate.Refused)
         {
-            var gate = EvaluateCrossRuntimeReviewGate(context, repo!, pr!.Value, headSha, executionUnit);
-            if (gate.Refusal is not null)
+            var refusalCause = soloConductorReview?.Cause ?? crossRuntimeReview?.Cause ?? "review-approval-refused";
+            var refusalDetail = soloConductorReview?.Detail ?? crossRuntimeReview?.Detail ?? "The approved transition could not be verified.";
+            var refusedResult = new AutomationPrTransitionResult
             {
-                var refusedResult = new AutomationPrTransitionResult
-                {
-                    Repo = repo!,
-                    Pr = pr!.Value,
-                    Transition = transition!,
-                    Mode = mode,
-                    Applied = false,
-                    AddLabels = Array.Empty<string>(),
-                    RemoveLabels = Array.Empty<string>(),
-                    CurrentLabels = currentLabels,
-                    Summary = BuildRefusalSummary(transition!, pr!.Value, repo!, gate.Refusal.Cause),
-                    Error = $"{gate.Refusal.Cause}: {gate.Refusal.Detail}",
-                    CrossRuntimeReview = gate.Refusal,
-                };
+                Repo = repo!,
+                Pr = pr!.Value,
+                Transition = transition!,
+                Mode = mode,
+                Applied = false,
+                AddLabels = Array.Empty<string>(),
+                RemoveLabels = Array.Empty<string>(),
+                CurrentLabels = currentLabels,
+                Summary = BuildRefusalSummary(transition!, pr!.Value, repo!, refusalCause),
+                Error = $"{refusalCause}: {refusalDetail}",
+                CrossRuntimeReview = crossRuntimeReview,
+                SoloConductorReview = soloConductorReview,
+            };
 
-                if (string.Equals(format, FormatJson, StringComparison.Ordinal))
-                {
-                    writer.WriteLine(JsonSerializer.Serialize(refusedResult, JsonOptions));
-                }
-                else
-                {
-                    WriteText(writer, refusedResult);
-                }
-
-                return 1;
+            if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+            {
+                writer.WriteLine(JsonSerializer.Serialize(refusedResult, JsonOptions));
+            }
+            else
+            {
+                WriteText(writer, refusedResult);
             }
 
-            crossRuntimeReview = gate.Satisfied;
+            return 1;
         }
 
         var applied = false;
@@ -305,6 +310,7 @@ internal static class AutomationPrTransitionCommand
             CiWaitCleared = ciWaitCleared,
             CiWaitWarning = ciWaitWarning,
             CrossRuntimeReview = crossRuntimeReview,
+            SoloConductorReview = soloConductorReview,
         };
 
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
@@ -319,18 +325,34 @@ internal static class AutomationPrTransitionCommand
         return 0;
     }
 
-    /// <summary>
-    /// G834: resolution, head binding, and the shared gate for the approved
-    /// transition of a PR in a gated repository. Returns neither outcome for a
-    /// PR that resolves to an undeclared team, so that output stays unchanged.
-    /// </summary>
-    private static (CrossRuntimeReviewTransitionOutcome? Refusal, CrossRuntimeReviewTransitionOutcome? Satisfied) EvaluateCrossRuntimeReviewGate(
+    private static ApprovedTransitionEvaluation EvaluateApprovedTransition(
         CliContext context,
         string repo,
         int pr,
         string? headSha,
         string? executionUnit)
     {
+        TeamModeState? modeState;
+        try
+        {
+            modeState = TeamModeStore.TryRead(context.RepoRoot);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException or NullReferenceException)
+        {
+            return ApprovedTransitionEvaluation.Failure(
+                solo: SoloRefused(
+                    SoloConductorApprovalGate.CauseApplicabilityUnresolved,
+                    $"recorded team mode could not be read or validated: {exception.Message} Repair `.intent-cli/team-mode.json` through `intent-cli team-mode`; approval applicability is unresolved."),
+                cause: SoloConductorApprovalGate.CauseApplicabilityUnresolved);
+        }
+
+        var hostHasSoloEntries = modeState?.Entries.Any(entry => TeamMode.IsSoloConductor(entry.Mode)) == true;
+        var g834Repo = context.Config.CrossRuntimeReview.IsGatedRepo(repo);
+        if (!hostHasSoloEntries && !g834Repo)
+        {
+            return ApprovedTransitionEvaluation.NotApplicable;
+        }
+
         var resolution = CrossRuntimeReviewTeamResolver.Resolve(
             context.RepoRoot,
             repo,
@@ -339,49 +361,348 @@ internal static class AutomationPrTransitionCommand
             "pass the linked unit to `intent-cli automation pr-transition` with `--execution-unit <unit>`");
         if (!resolution.Resolved)
         {
-            return (Outcome("refused", resolution.Cause!, $"{resolution.Detail} Fix: {resolution.Fix}", resolution, []), null);
+            var crossRuntimeRefusal = g834Repo
+                ? Outcome("refused", resolution.Cause!, $"{resolution.Detail} Fix: {resolution.Fix}", resolution, [])
+                : null;
+            if (!hostHasSoloEntries)
+            {
+                return ApprovedTransitionEvaluation.Failure(crossRuntime: crossRuntimeRefusal, cause: resolution.Cause);
+            }
+
+            var soloRefusal = SoloRefused(
+                SoloConductorApprovalGate.CauseApplicabilityUnresolved,
+                $"The host records solo-conductor teams, but PR #{pr} in {repo} could not be authoritatively resolved to determine whether this transition is solo-conductor: {resolution.Detail} Fix: {resolution.Fix}",
+                resolution,
+                headSha);
+            return ApprovedTransitionEvaluation.Failure(soloRefusal, crossRuntimeRefusal, soloRefusal.Cause);
+        }
+
+        TeamModeResolution? modeResolution = null;
+        if (hostHasSoloEntries)
+        {
+            try
+            {
+                modeResolution = TeamModeStore.Resolve(modeState, resolution.Domain!, resolution.Team);
+            }
+            catch (InvalidOperationException exception)
+            {
+                var soloRefusal = SoloRefused(
+                    SoloConductorApprovalGate.CauseApplicabilityUnresolved,
+                    $"The resolved team mode for '{resolution.Domain}/{resolution.Team}' is ambiguous or invalid: {exception.Message}",
+                    resolution,
+                    headSha);
+                return ApprovedTransitionEvaluation.Failure(soloRefusal, cause: soloRefusal.Cause);
+            }
+        }
+
+        if (modeResolution?.IsSoloConductor == true)
+        {
+            return EvaluateSoloConductorApproval(context, repo, pr, headSha, resolution, g834Repo);
+        }
+
+        if (!g834Repo)
+        {
+            return ApprovedTransitionEvaluation.NotApplicable;
+        }
+
+        // No solo entries use the historical G834 path verbatim. When a
+        // different team is resolved on a solo-configured host, reuse that
+        // authoritative resolution rather than parsing queue/packet/claim twice.
+        var crossRuntime = EvaluateCrossRuntimeReviewGate(
+            context,
+            repo,
+            pr,
+            headSha,
+            executionUnit,
+            resolution);
+        if (crossRuntime.Refusal is not null)
+        {
+            return ApprovedTransitionEvaluation.Failure(crossRuntime: crossRuntime.Refusal, cause: crossRuntime.Refusal.Cause);
+        }
+
+        return ApprovedTransitionEvaluation.Success(crossRuntime: crossRuntime.Satisfied);
+    }
+
+    private static ApprovedTransitionEvaluation EvaluateSoloConductorApproval(
+        CliContext context,
+        string repo,
+        int pr,
+        string? headSha,
+        CrossRuntimeReviewResolution resolution,
+        bool g834Repo)
+    {
+        if (string.IsNullOrWhiteSpace(headSha))
+        {
+            var g834 = g834Repo
+                ? EvaluateCrossRuntimeReviewGate(context, repo, pr, headSha, resolution.ExecutionUnit, resolution)
+                : CrossRuntimeReviewGateEvaluation.Empty;
+            var soloRefusal = SoloRefused(
+                SoloConductorApprovalGate.CauseHeadRequired,
+                $"team '{resolution.Domain}/{resolution.Team}' is recorded as solo-conductor; pass `--head-sha <full-head-sha>` for the exact current PR head before review reads.",
+                resolution,
+                headSha,
+                g834.ObservedHead);
+            return ApprovedTransitionEvaluation.Failure(soloRefusal, g834.Refusal, soloRefusal.Cause);
+        }
+
+        CrossRuntimeReviewGateEvaluation localEvaluation = CrossRuntimeReviewGateEvaluation.Empty;
+        CrossRuntimeReviewReadResult localReviews;
+        CrossRuntimeReviewGateResult? localGate = null;
+        string? observedHead;
+        var hasG834Declaration = g834Repo
+            && context.Config.CrossRuntimeReview.TryGetDeclared(resolution.Domain, resolution.Team, out _);
+        if (hasG834Declaration)
+        {
+            localEvaluation = EvaluateCrossRuntimeReviewGate(context, repo, pr, headSha, resolution.ExecutionUnit, resolution);
+            observedHead = localEvaluation.ObservedHead;
+            if (localEvaluation.Refusal is not null)
+            {
+                var cause = localEvaluation.Refusal.Cause switch
+                {
+                    CrossRuntimeReviewCauses.HeadRequired => SoloConductorApprovalGate.CauseHeadRequired,
+                    CrossRuntimeReviewCauses.HeadStale => observedHead is null
+                        ? "review-head-unavailable"
+                        : SoloConductorApprovalGate.CauseHeadChanged,
+                    _ => localEvaluation.Gate?.Decision == CrossRuntimeReviewGate.DecisionBlocked
+                        ? SoloConductorApprovalGate.CauseLocalGateBlocked
+                        : SoloConductorApprovalGate.CauseLocalGateMissing,
+                };
+                var soloRefusal = SoloRefused(cause, localEvaluation.Refusal.Detail ?? "The existing G834 local gate is not satisfied.", resolution, headSha, observedHead);
+                return ApprovedTransitionEvaluation.Failure(soloRefusal, localEvaluation.Refusal, cause);
+            }
+
+            localReviews = localEvaluation.LocalReviews ?? new CrossRuntimeReviewReadResult([], []);
+            localGate = localEvaluation.Gate;
+        }
+        else
+        {
+            if (!TryReadCurrentHead(repo, pr, out observedHead, out var headError))
+            {
+                var soloRefusal = SoloRefused(
+                    "review-head-unavailable",
+                    $"the current head of PR #{pr} in {repo} could not be read before the posted review inventory: {headError}",
+                    resolution,
+                    headSha);
+                return ApprovedTransitionEvaluation.Failure(soloRefusal, cause: soloRefusal.Cause);
+            }
+            if (!string.Equals(observedHead, headSha, StringComparison.OrdinalIgnoreCase))
+            {
+                var soloRefusal = SoloRefused(
+                    SoloConductorApprovalGate.CauseHeadChanged,
+                    $"--head-sha {headSha} is not the current head of PR #{pr} in {repo} ({observedHead}); review and CI must bind to the current head.",
+                    resolution,
+                    headSha,
+                    observedHead);
+                return ApprovedTransitionEvaluation.Failure(soloRefusal, cause: soloRefusal.Cause);
+            }
+
+            try
+            {
+                localReviews = CrossRuntimeReviewStore.Read(context.RepoRoot, repo, pr);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                var soloRefusal = SoloRefused(
+                    SoloConductorApprovalGate.CauseInvalidEvidence,
+                    $"local canonical review records could not be read for citation validation: {exception.Message}",
+                    resolution,
+                    headSha,
+                    observedHead);
+                return ApprovedTransitionEvaluation.Failure(soloRefusal, cause: soloRefusal.Cause);
+            }
+        }
+
+        var readRequest = new SoloConductorReviewReadRequest
+        {
+            Repo = repo,
+            PullRequest = pr,
+            ExecutionUnit = resolution.ExecutionUnit!,
+            Domain = resolution.Domain!,
+            Team = resolution.Team!,
+            LocalReviews = localReviews,
+        };
+        SoloConductorReviewReadResult reviewRead;
+        try
+        {
+            reviewRead = (SoloReviewReader ?? (request => new SoloConductorReviewReader().Read(request)))(readRequest);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or ArgumentException)
+        {
+            reviewRead = SoloConductorReviewReadResult.Failed(
+                SoloConductorReviewReader.CauseReadUnavailable,
+                $"GitHub PR reviews for {repo}#{pr} could not be read: {exception.Message}");
+        }
+
+        if (!reviewRead.Complete)
+        {
+            var soloRefusal = SoloRefused(
+                reviewRead.Cause ?? SoloConductorReviewReader.CauseReadUnavailable,
+                reviewRead.Detail ?? "The complete GitHub PR review inventory is unavailable.",
+                resolution,
+                headSha,
+                observedHead);
+            return ApprovedTransitionEvaluation.Failure(soloRefusal, localEvaluation.Satisfied, soloRefusal.Cause);
+        }
+
+        var approval = SoloConductorApprovalGate.Evaluate(
+            reviewRead.Rows,
+            resolution.ExecutionUnit!,
+            headSha,
+            localGate);
+        var soloOutcome = SoloOutcome(approval, resolution, headSha, observedHead);
+        if (approval.Decision != SoloConductorApprovalGate.DecisionSatisfied)
+        {
+            return ApprovedTransitionEvaluation.Failure(soloOutcome, localEvaluation.Satisfied, approval.Cause);
+        }
+
+        if (!TryReadCurrentHead(repo, pr, out var finalHead, out var finalHeadError))
+        {
+            var soloRefusal = SoloRefused(
+                "review-head-unavailable",
+                $"the current head of PR #{pr} in {repo} could not be re-read after review evaluation and before label write: {finalHeadError}",
+                resolution,
+                headSha,
+                observedHead,
+                approval);
+            return ApprovedTransitionEvaluation.Failure(soloRefusal, localEvaluation.Satisfied, soloRefusal.Cause);
+        }
+        if (!string.Equals(finalHead, headSha, StringComparison.OrdinalIgnoreCase))
+        {
+            var soloRefusal = SoloRefused(
+                SoloConductorApprovalGate.CauseHeadChanged,
+                $"PR #{pr} in {repo} moved from --head-sha {headSha} to {finalHead} after review evaluation; re-review and rerun before changing labels.",
+                resolution,
+                headSha,
+                finalHead,
+                approval);
+            return ApprovedTransitionEvaluation.Failure(soloRefusal, localEvaluation.Satisfied, soloRefusal.Cause);
+        }
+
+        soloOutcome = soloOutcome with { ObservedHeadSha = finalHead };
+        return ApprovedTransitionEvaluation.Success(localEvaluation.Satisfied, soloOutcome);
+    }
+
+    /// <summary>
+    /// G834: resolve once, bind the local gate to the observed current head,
+    /// and return the exact local records used so G856 can validate citations.
+    /// </summary>
+    private static CrossRuntimeReviewGateEvaluation EvaluateCrossRuntimeReviewGate(
+        CliContext context,
+        string repo,
+        int pr,
+        string? headSha,
+        string? executionUnit,
+        CrossRuntimeReviewResolution? resolved = null)
+    {
+        var resolution = resolved ?? CrossRuntimeReviewTeamResolver.Resolve(
+            context.RepoRoot,
+            repo,
+            pr,
+            executionUnit,
+            "pass the linked unit to `intent-cli automation pr-transition` with `--execution-unit <unit>`");
+        if (!resolution.Resolved)
+        {
+            return CrossRuntimeReviewGateEvaluation.Refused(
+                Outcome("refused", resolution.Cause!, $"{resolution.Detail} Fix: {resolution.Fix}", resolution, []));
         }
 
         if (!context.Config.CrossRuntimeReview.TryGetDeclared(resolution.Domain, resolution.Team, out var declaration))
         {
-            return (null, null);
+            return CrossRuntimeReviewGateEvaluation.Empty;
         }
 
         if (string.IsNullOrWhiteSpace(headSha))
         {
-            return (Outcome("refused", CrossRuntimeReviewCauses.HeadRequired,
+            return CrossRuntimeReviewGateEvaluation.Refused(Outcome("refused", CrossRuntimeReviewCauses.HeadRequired,
                 $"team '{resolution.Domain}/{resolution.Team}' declares cross-runtime review; pass `--head-sha <head-sha>` with the exact head the reviewers approved.",
-                resolution, []), null);
+                resolution, []));
         }
 
-        string currentHead;
-        try
+        if (!TryReadCurrentHead(repo, pr, out var currentHead, out var headError))
         {
-            currentHead = (PrHeadReader ?? GhCliGitHubLabelMutator.ReadPullRequestHeadSha)(repo, pr).Trim();
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException)
-        {
-            return (Outcome("refused", CrossRuntimeReviewCauses.HeadStale,
-                $"the current head of PR #{pr} in {repo} could not be read, so --head-sha {headSha} cannot be confirmed: {exception.Message}",
-                resolution, []), null);
+            return CrossRuntimeReviewGateEvaluation.Refused(Outcome("refused", CrossRuntimeReviewCauses.HeadStale,
+                $"the current head of PR #{pr} in {repo} could not be read, so --head-sha {headSha} cannot be confirmed: {headError}",
+                resolution, []), observedHead: null);
         }
 
         if (!string.Equals(currentHead, headSha, StringComparison.OrdinalIgnoreCase))
         {
-            return (Outcome("refused", CrossRuntimeReviewCauses.HeadStale,
+            return CrossRuntimeReviewGateEvaluation.Refused(Outcome("refused", CrossRuntimeReviewCauses.HeadStale,
                 $"--head-sha {headSha} is not the current head of PR #{pr} in {repo} ({currentHead}); review and CI must bind to the current head.",
-                resolution, []), null);
+                resolution, []), observedHead: currentHead);
         }
 
-        var gate = CrossRuntimeReviewGate.Evaluate(
-            declaration,
-            resolution,
-            headSha,
-            CrossRuntimeReviewStore.Read(context.RepoRoot, repo, pr));
+        var localReviews = CrossRuntimeReviewStore.Read(context.RepoRoot, repo, pr);
+        var gate = CrossRuntimeReviewGate.Evaluate(declaration, resolution, headSha, localReviews);
         return gate.Passes
-            ? (null, Outcome(gate.Decision, null, null, resolution, gate.Reasons))
-            : (Outcome(gate.Decision, gate.PrimaryCause, string.Join(" ", gate.Reasons.Select(reason => $"[{reason.Cause}] {reason.Detail}")), resolution, gate.Reasons), null);
+            ? CrossRuntimeReviewGateEvaluation.SatisfiedEvaluation(
+                Outcome(gate.Decision, null, null, resolution, gate.Reasons), gate, localReviews, currentHead)
+            : CrossRuntimeReviewGateEvaluation.Refused(
+                Outcome(gate.Decision, gate.PrimaryCause, string.Join(" ", gate.Reasons.Select(reason => $"[{reason.Cause}] {reason.Detail}")), resolution, gate.Reasons),
+                gate,
+                localReviews,
+                currentHead);
     }
+
+    private static bool TryReadCurrentHead(string repo, int pr, out string? currentHead, out string? error)
+    {
+        currentHead = null;
+        error = null;
+        try
+        {
+            currentHead = (PrHeadReader ?? GhCliGitHubLabelMutator.ReadPullRequestHeadSha)(repo, pr).Trim();
+            return true;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            error = exception.Message;
+            return false;
+        }
+    }
+
+    private static SoloConductorReviewTransitionOutcome SoloOutcome(
+        SoloConductorApprovalEvaluation evaluation,
+        CrossRuntimeReviewResolution resolution,
+        string expectedHead,
+        string? observedHead) => new()
+        {
+            Decision = evaluation.Decision,
+            Cause = evaluation.Cause,
+            Detail = evaluation.Detail,
+            ExecutionUnit = resolution?.ExecutionUnit,
+            Domain = resolution?.Domain,
+            Team = resolution?.Team,
+            ExpectedHeadSha = expectedHead,
+            ObservedHeadSha = observedHead,
+            QualifyingReviews = evaluation.QualifyingReviews,
+            Obligations = evaluation.Obligations,
+            SupersededInvalidReviewIds = evaluation.SupersededInvalidReviewIds,
+            UnscopableReviewIds = evaluation.UnscopableReviewIds,
+            RepairUnavailableReason = evaluation.RepairUnavailableReason,
+        };
+
+    private static SoloConductorReviewTransitionOutcome SoloRefused(
+        string cause,
+        string detail,
+        CrossRuntimeReviewResolution? resolution = null,
+        string? expectedHead = null,
+        string? observedHead = null,
+        SoloConductorApprovalEvaluation? evaluation = null) => new()
+        {
+            Decision = SoloConductorApprovalGate.DecisionRefused,
+            Cause = cause,
+            Detail = detail,
+            ExecutionUnit = resolution?.ExecutionUnit,
+            Domain = resolution?.Domain,
+            Team = resolution?.Team,
+            ExpectedHeadSha = expectedHead,
+            ObservedHeadSha = observedHead,
+            QualifyingReviews = evaluation?.QualifyingReviews ?? [],
+            Obligations = evaluation?.Obligations ?? [],
+            SupersededInvalidReviewIds = evaluation?.SupersededInvalidReviewIds ?? [],
+            UnscopableReviewIds = evaluation?.UnscopableReviewIds ?? [],
+            RepairUnavailableReason = evaluation?.RepairUnavailableReason,
+        };
 
     private static CrossRuntimeReviewTransitionOutcome Outcome(
         string decision,
@@ -723,6 +1044,12 @@ internal static class AutomationPrTransitionCommand
                 + (result.CrossRuntimeReview.Cause is null ? string.Empty : $" ({result.CrossRuntimeReview.Cause})"));
         }
 
+        if (result.SoloConductorReview is not null)
+        {
+            writer.WriteLine($"solo_conductor_review: {result.SoloConductorReview.Decision}"
+                + (result.SoloConductorReview.Cause is null ? string.Empty : $" ({result.SoloConductorReview.Cause})"));
+        }
+
         // G535 review repair: phase-aware ambiguity reporting — only ever
         // emitted for a failed mutation whose outcome on GitHub is unknown.
         if (result.MayHaveApplied)
@@ -744,6 +1071,70 @@ internal static class AutomationPrTransitionCommand
         writer.WriteLine("- approved");
         writer.WriteLine("- review-release (G292: drop intent-pr-reviewing without adding intent-pr-request-update; use when host-owned metadata blocks closeout)");
         writer.WriteLine("G834: for a PR in a repository listed by [[cross_runtime_review.teams]], approved resolves the team from queue-state, packet, and claim; a declared team requires --head-sha <sha> equal to the PR's current head and a satisfied cross-runtime review gate (`intent-cli review cross-runtime status`). Run it from the host root. --execution-unit <unit> names the unit of a PR the host queue has not linked.");
+    }
+
+    private sealed record ApprovedTransitionEvaluation
+    {
+        public static ApprovedTransitionEvaluation NotApplicable { get; } = new();
+
+        public bool Refused { get; init; }
+        public string? Cause { get; init; }
+        public CrossRuntimeReviewTransitionOutcome? CrossRuntimeReview { get; init; }
+        public SoloConductorReviewTransitionOutcome? SoloConductorReview { get; init; }
+
+        public static ApprovedTransitionEvaluation Failure(
+            SoloConductorReviewTransitionOutcome? solo = null,
+            CrossRuntimeReviewTransitionOutcome? crossRuntime = null,
+            string? cause = null) => new()
+            {
+                Refused = true,
+                Cause = cause,
+                CrossRuntimeReview = crossRuntime,
+                SoloConductorReview = solo,
+            };
+
+        public static ApprovedTransitionEvaluation Success(
+            CrossRuntimeReviewTransitionOutcome? crossRuntime = null,
+            SoloConductorReviewTransitionOutcome? solo = null) => new()
+            {
+                CrossRuntimeReview = crossRuntime,
+                SoloConductorReview = solo,
+            };
+    }
+
+    private sealed record CrossRuntimeReviewGateEvaluation
+    {
+        public static CrossRuntimeReviewGateEvaluation Empty { get; } = new();
+
+        public CrossRuntimeReviewTransitionOutcome? Refusal { get; init; }
+        public CrossRuntimeReviewTransitionOutcome? Satisfied { get; init; }
+        public CrossRuntimeReviewGateResult? Gate { get; init; }
+        public CrossRuntimeReviewReadResult? LocalReviews { get; init; }
+        public string? ObservedHead { get; init; }
+
+        public static CrossRuntimeReviewGateEvaluation Refused(
+            CrossRuntimeReviewTransitionOutcome refusal,
+            CrossRuntimeReviewGateResult? gate = null,
+            CrossRuntimeReviewReadResult? localReviews = null,
+            string? observedHead = null) => new()
+            {
+                Refusal = refusal,
+                Gate = gate,
+                LocalReviews = localReviews,
+                ObservedHead = observedHead,
+            };
+
+        public static CrossRuntimeReviewGateEvaluation SatisfiedEvaluation(
+            CrossRuntimeReviewTransitionOutcome satisfied,
+            CrossRuntimeReviewGateResult gate,
+            CrossRuntimeReviewReadResult localReviews,
+            string? observedHead) => new()
+            {
+                Satisfied = satisfied,
+                Gate = gate,
+                LocalReviews = localReviews,
+                ObservedHead = observedHead,
+            };
     }
 
     private sealed record TransitionPlan(
@@ -845,6 +1236,55 @@ internal sealed record AutomationPrTransitionResult
     [JsonPropertyName("cross_runtime_review")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CrossRuntimeReviewTransitionOutcome? CrossRuntimeReview { get; init; }
+
+    [JsonPropertyName("solo_conductor_review")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SoloConductorReviewTransitionOutcome? SoloConductorReview { get; init; }
+}
+
+internal sealed record SoloConductorReviewTransitionOutcome
+{
+    [JsonPropertyName("decision")]
+    public required string Decision { get; init; }
+
+    [JsonPropertyName("cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Cause { get; init; }
+
+    [JsonPropertyName("detail")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Detail { get; init; }
+
+    [JsonPropertyName("execution_unit")]
+    public string? ExecutionUnit { get; init; }
+
+    [JsonPropertyName("domain")]
+    public string? Domain { get; init; }
+
+    [JsonPropertyName("team")]
+    public string? Team { get; init; }
+
+    [JsonPropertyName("expected_head_sha")]
+    public string? ExpectedHeadSha { get; init; }
+
+    [JsonPropertyName("observed_head_sha")]
+    public string? ObservedHeadSha { get; init; }
+
+    [JsonPropertyName("qualifying_reviews")]
+    public IReadOnlyList<SoloConductorQualifyingReview> QualifyingReviews { get; init; } = [];
+
+    [JsonPropertyName("obligations")]
+    public IReadOnlyList<SoloConductorReviewObligation> Obligations { get; init; } = [];
+
+    [JsonPropertyName("superseded_invalid_review_ids")]
+    public IReadOnlyList<long> SupersededInvalidReviewIds { get; init; } = [];
+
+    [JsonPropertyName("unscopable_review_ids")]
+    public IReadOnlyList<long?> UnscopableReviewIds { get; init; } = [];
+
+    [JsonPropertyName("repair_unavailable_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RepairUnavailableReason { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewTransitionOutcome

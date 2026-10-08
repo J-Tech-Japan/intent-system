@@ -232,6 +232,65 @@ seat のための guard であり security boundary ではありません。
 無視し、gate を適用しません。宣言済み team の PR を transition するすべての
 intent-cli を更新してから gate に依存してください。
 
+## solo-conductor の posted approval（G856 — preview-through-1.x）
+
+既存の `automation pr-transition --transition approved` 境界は、G834 declaration のない team も含め、
+現在記録されている solo-conductor team の posted independent approval を要求します。対象は approved transition だけで、
+topology から solo mode を推定しません。既存の authoritative resolver で queue PR/unit、packet domain、保持中の claim team を解決し、
+その後 team mode を解決します。有効な mode file に solo entry が 1 件でもあれば、PR identity を解決できない場合は
+保守的に拒否します。この command では PR が non-solo と証明できないためです。malformed または unreadable な mode も拒否します。
+解決済み delivery / authoring-only team は既存動作を保ち、solo entry のない host 上の解決済み non-solo team も変わりません。
+
+solo approval では dry-run と write の両方に完全な `--head-sha` が必要です。command は review inventory の前に PR head を読み、
+posted review の REST `commit_id`、構造化 body head、expected head の一致を確認し、評価後かつ label 直前に head を再確認します。
+`repos/{owner}/{repo}/pulls/{pr}/reviews?per_page=100&page={page}` を取得し、上限は 100 page です。short page で読み取りを完了し、
+上限到達や incomplete page は partial inventory を受理せずに拒否します。head/review read failure、approval 欠落、未解決 review evidence は
+名前付きで拒否されます。拒否時に label set と永続 CI wait は変更しません。solo-configured host では既存 claim resolver の network/ref effect は
+引き続き起こり得ます。従来の `git fetch` により remote-tracking ref、`FETCH_HEAD`、取得済み Git object が更新される場合があります。
+これは lookup effect であり、label や CI wait を変更する許可ではありません。
+
+既存の正確な G834 predicate、すなわち `IsGatedRepo(repo)` と
+`TryGetDeclared(resolvedDomain, resolvedTeam, ...)` の両方が成立する場合、従来の local cross-runtime gate を維持し、
+現在 deciding な relation slot 2 つの posted canonical body も要求します。repo 判定は declaration 全体に対する global 判定です。
+どれかの declaration が repo を列挙すれば、解決済み declared team の独自 repo list に含まれない場合も local gate を維持します。
+どの declaration も repo を列挙しない場合、別 repo に宣言された solo team でも generic approval を使います。
+どちらの route でも generic blocker を評価します。
+
+generic route は fresh reviewer の実際の verdict を sanctioned な
+`gh pr review --comment --body-file` writer で投稿します。body は以下のとおりで、placeholder だけを実際の review に基づいて埋めます。
+
+```markdown
+## Independent subagent review: approve
+
+- reviewer: independent subagent review
+- execution unit: <unit>
+- kind: implementation
+- head SHA: <full-head-sha>
+- verdict: approve
+
+### Blocking findings
+
+- none
+
+### Notes
+
+<actual reviewer notes>
+```
+
+blocking verdict では両方の `approve` を `request-changes` にし、実際の finding を残します。COMMENTED または APPROVED state でも
+request-changes body は approval になりません。trusted REST login、正の数値 ID、submitted time を持つ named malformed/conflicting review は
+login-scoped obligation を作ります。同じ login による厳密に後の valid current-head approval だけが修復できます。stale、pending、dismissed、
+他 login、malformed row は修復しません。canonical runtime obligation は別です。trusted login/ID/time のない independent row は unscopable で、
+無関係な再投稿では修復できません。API 利用可能性を直すか、通常の review と canonical worker linkage で replacement PR を作成します。
+同一 PR で保証された修復がない evidence は transition が報告します。
+
+override、approval receipt、completion/release gate はなく、login が reviewer independence を証明するとも主張しません。
+gate は honest seat を前提とし、GitHub label と SHA は atomic に結び付けられません。exact-head CI を維持し、
+`gh pr merge <pr> --repo <owner/repo> --squash --match-head-commit <head-sha>` を用いて、この SHA の PR だけを統合します。
+
+**前方互換性。** G856 を含まない intent-cli は posted solo approval を強制しません。この境界に依存する前に、
+PR transition を承認できるすべての host binary を更新してください。
+
 ## cross-runtime design review と model 選択（G835 — preview-through-1.x）
 
 G835 は宣言済み team の cross-runtime review を次の 2 点で拡張します。

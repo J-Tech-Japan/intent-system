@@ -127,6 +127,8 @@ src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs	NotifyProcessRunner	
 src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs	ProcessRunnerFactory	2
 src/IntentSystem.Cli/Commands/SessionLayerSeatPreflightCommand.cs	CheckoutFreshnessGitCommandRunner	1
 src/IntentSystem.Cli/Commands/SessionLayerSeatPreflightCommand.cs	IGitRemoteCommandRunner	6
+src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	GhCommandRunner	1
+src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	IGitHubCommandRunner	2
 src/IntentSystem.Cli/Commands/SupervisionGuideText.cs	Process	1
 src/IntentSystem.Cli/Commands/TaskCommand.cs	Process	1
 src/IntentSystem.Cli/Commands/TaskingAiThreadSummaryAttachCommand.cs	NestedProviderLauncher	1

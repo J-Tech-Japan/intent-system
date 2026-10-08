@@ -671,6 +671,70 @@ judges completion or merge readiness. Stable provenance limits, including a
 missing historical exact-head approval receipt or worker-completion receipt,
 are not retry or re-approval instructions.
 
+### Posted approval for solo-conductor PRs (G856 — preview-through-1.x)
+
+For `automation pr-transition --transition approved`, a currently recorded
+solo-conductor team must have a full `--head-sha` and a posted independent
+approval for that exact current PR head, including when it has no
+`cross_runtime_review.teams` declaration. The generic route posts the reviewer's
+actual verdict as a PR review:
+
+```bash
+gh pr review <pr> --repo <owner/repo> --comment --body-file <review-body.md>
+intent-cli automation pr-transition --repo <owner/repo> --pr <pr> \
+  --transition approved --head-sha <full-head-sha> --format json
+intent-cli automation pr-transition --repo <owner/repo> --pr <pr> \
+  --transition approved --head-sha <full-head-sha> --write --format json
+gh pr merge <pr> --repo <owner/repo> --squash \
+  --match-head-commit <full-head-sha>
+```
+
+Use a fresh independent reviewer and this exact generic body, replacing the
+placeholders with the actual unit, full head and reviewer notes. Never fabricate
+or rewrite a verdict.
+
+```markdown
+## Independent subagent review: approve
+
+- reviewer: independent subagent review
+- execution unit: <unit>
+- kind: implementation
+- head SHA: <full-head-sha>
+- verdict: approve
+
+### Blocking findings
+
+- none
+
+### Notes
+
+<actual reviewer notes>
+```
+
+For a blocking verdict, replace both `approve` occurrences with
+`request-changes` and retain the actual findings. The posted review's REST
+`commit_id`, body head and expected current head must agree. A COMMENTED or
+APPROVED state with a request-changes body still blocks. A trusted malformed or
+raced review is repairable only by a strictly later valid current-head approval
+from the same GitHub login; unrelated approvals cannot repair it. Explicit
+pending/dismissed reviews do not qualify or clear an obligation. Named evidence
+without a trusted login, positive review ID and submission time is unscopable;
+correct API availability or use a replacement PR through normal review and
+worker linkage. The command reports when reposting cannot repair the evidence.
+
+The existing G834 local gate remains unchanged and applies exactly when the
+repo is globally gated by `IsGatedRepo(repo)` and the resolved domain/team has a
+declaration. That route requires both the local gate and posted comments for the
+two currently deciding canonical relation slots; generic blockers still apply.
+All other solo teams use generic approval, including a team declared only for
+other repositories. An unresolved PR identity on a host with any solo entry
+refuses conservatively. The established claim resolver can perform its existing
+`git fetch`, updating remote-tracking refs, `FETCH_HEAD` and fetched objects;
+refusal still leaves labels and CI wait unchanged. The command reads the head
+before reviews and immediately before labels; GitHub does not offer an atomic
+label/SHA compare, so merge with `--match-head-commit`. There is no override,
+approval receipt, or completion/release gate; the gate assumes an honest seat.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by

@@ -609,6 +609,59 @@ exit 0 は observation が完了したことを示し、evidence の欠落や既
 どちらも完了や merge readiness の判断ではありません。過去の exact-head approval receipt や
 worker-completion receipt が存在しないなどの安定した provenance limit は、retry や再承認を促す指示ではありません。
 
+### solo-conductor PR の posted approval（G856 — preview-through-1.x）
+
+`automation pr-transition --transition approved` では、現在記録されている solo-conductor team に対し、
+完全な `--head-sha` と同じ現在の PR head に対する posted independent approval が必要です。
+`cross_runtime_review.teams` 宣言がない team も対象です。generic route では fresh reviewer の実際の verdict を
+PR review として投稿します:
+
+```bash
+gh pr review <pr> --repo <owner/repo> --comment --body-file <review-body.md>
+intent-cli automation pr-transition --repo <owner/repo> --pr <pr> \
+  --transition approved --head-sha <full-head-sha> --format json
+intent-cli automation pr-transition --repo <owner/repo> --pr <pr> \
+  --transition approved --head-sha <full-head-sha> --write --format json
+gh pr merge <pr> --repo <owner/repo> --squash \
+  --match-head-commit <full-head-sha>
+```
+
+fresh な independent reviewer を使い、以下の generic body をそのまま使います。placeholder は実際の unit、full head、
+reviewer の notes に置き換えます。verdict を捏造または書き換えてはいけません。
+
+```markdown
+## Independent subagent review: approve
+
+- reviewer: independent subagent review
+- execution unit: <unit>
+- kind: implementation
+- head SHA: <full-head-sha>
+- verdict: approve
+
+### Blocking findings
+
+- none
+
+### Notes
+
+<actual reviewer notes>
+```
+
+blocking verdict では両方の `approve` を `request-changes` に置き換え、実際の finding を残します。投稿 review の REST
+`commit_id`、body head、expected current head は一致しなければなりません。COMMENTED または APPROVED state でも
+request-changes body は blocker です。trusted envelope を持つ malformed または race した review は、同じ GitHub login が
+厳密に後から current-head の有効な approval を投稿した場合だけ修復できます。無関係な approval は修復しません。
+PENDING/DISMISSED は obligation を満たさず、消去もしません。trusted login、正の review ID、submitted time のない named evidence は
+unscopable です。API の利用可能性を直すか、通常の review と worker linkage による replacement PR が必要です。再投稿で修復できない場合は command が示します。
+
+既存 G834 local gate は変えず、repo 全体に適用される `IsGatedRepo(repo)` と、解決済み domain/team の declaration の両方が
+成立する場合だけ適用します。この route は local gate と、現在 deciding な canonical relation slot 2 つの posted comment を要求し、
+generic blocker も引き続き評価します。それ以外の solo team は generic approval を使います。他 repository だけに宣言された team も同じです。
+solo entry が 1 件でもある host で PR identity が解決できない場合は保守的に拒否します。既存 claim resolver は従来どおり `git fetch` を
+実行することがあり、remote-tracking ref、`FETCH_HEAD`、取得済み object が変化しますが、refusal は label と CI wait を変更しません。
+command は review 読み取り前と label 直前に head を読みます。GitHub に atomic な label/SHA compare はないため、
+`--match-head-commit` を使って merge します。override、approval receipt、completion/release gate は追加しません。gate は honest seat を前提とします。
+
 ### 貼り付け evidence gate（G785）
 
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`
