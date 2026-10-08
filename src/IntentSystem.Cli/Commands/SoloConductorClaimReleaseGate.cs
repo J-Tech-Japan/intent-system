@@ -182,9 +182,19 @@ internal static class SoloConductorClaimReleaseGate
         var target = targetRef;
         var scopedQueuePath = RuntimeScopedStateResolver.GetScopedQueueStatePath(root, domain, targetRepo);
         var scopedQueueInspection = InspectPath(root, scopedQueuePath, expectDirectory: false);
-        var queueLocation = scopedQueueInspection.Kind == PathKind.Unavailable
-            ? new StateLocation(scopedQueuePath, StateLocationKind.Scoped)
-            : RuntimeScopedStateResolver.ResolveQueueStatePathForRead(root, domain, targetRepo);
+        StateLocation queueLocation;
+        if (scopedQueueInspection.Kind != PathKind.Missing)
+        {
+            queueLocation = new StateLocation(scopedQueuePath, StateLocationKind.Scoped);
+        }
+        else
+        {
+            var legacyQueuePath = RuntimeScopedStateResolver.GetLegacyQueueStatePath(root);
+            var legacyQueueInspection = InspectPath(root, legacyQueuePath, expectDirectory: false);
+            queueLocation = legacyQueueInspection.Kind == PathKind.Missing
+                ? new StateLocation(scopedQueuePath, StateLocationKind.MissingPreferScoped)
+                : new StateLocation(legacyQueuePath, StateLocationKind.Legacy);
+        }
         var queuePath = Path.GetFullPath(queueLocation.Path);
         var runsPath = queueLocation.Kind == StateLocationKind.Legacy
             ? RuntimeScopedStateResolver.GetLegacyRunLogPath(root)
@@ -194,16 +204,22 @@ internal static class SoloConductorClaimReleaseGate
         evidencePaths.Add(Relative(root, queuePath));
 
         int? currentPr = queueResult.PullRequest;
+        var completedIdentityUnrepairable = queueResult.Cause == "linked-pr-missing"
+            && queueResult.Item?.State == QueueItemState.Completed;
+        var canOfferCloseout = queueResult.State == "missing" && !completedIdentityUnrepairable;
         var queueCloseoutPr = currentPr?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "<actual-merged-pr>";
-        var closeoutCommand = queueResult.State == "missing"
+        var closeoutCommand = canOfferCloseout
             ? $"intent-cli closeout pr --pr {queueCloseoutPr} --repo {targetRepo} --domain {domain} --pr-merged true --write --format json"
             : null;
-        var queueDetail = queueResult.State == "missing"
+        var queueDetail = canOfferCloseout
             ? queueResult.Detail + " Run the command only after the normal host workflow independently confirms the actual PR is merged."
             : queueResult.Detail;
         var queueRepairUnavailableReason = queueResult.State == "unavailable"
             ? BuildQueueRepairUnavailableReason(root, queuePath, queueResult.RepairUnavailableReason ?? queueResult.Detail, target)
-            : queueResult.RepairUnavailableReason;
+            : completedIdentityUnrepairable
+                ? BuildCompletedQueueIdentityRepairUnavailableReason(root, queuePath,
+                    queueResult.RepairUnavailableReason ?? queueResult.Detail, target)
+                : queueResult.RepairUnavailableReason;
         duties.Add(BuildDuty(
             "closeout-queue",
             queueResult.State,
@@ -236,7 +252,9 @@ internal static class SoloConductorClaimReleaseGate
             var detail = runsRead.State == "unavailable"
                 ? runsRead.Detail
                 : currentPr is null
-                    ? $"A current linked PR identity is required before matching run receipts can be evaluated; resolve it through the closeout-queue recovery command and publish the canonical queue/runs artifacts to {target}."
+                    ? completedIdentityUnrepairable
+                        ? $"A current linked PR identity cannot be established because the completed canonical queue item lacks linked_pr. {queueRepairUnavailableReason}"
+                        : $"A current linked PR identity is required before matching run receipts can be evaluated; resolve it through the closeout-queue recovery command and publish the canonical queue/runs artifacts to {target}."
                     : found
                         ? $"Canonical {eventName} event matches unit '{unit}', repo '{targetRepo}', and PR #{currentPr}."
                         : $"No canonical {eventName} event matches unit '{unit}', repo '{targetRepo}', and PR #{currentPr}.";
@@ -247,6 +265,8 @@ internal static class SoloConductorClaimReleaseGate
                 ? BuildRunLogRepairUnavailableReason(root, runsPath, target)
                 : queueResult.State == "unavailable"
                     ? BuildQueueRepairUnavailableReason(root, queuePath, queueResult.RepairUnavailableReason ?? queueResult.Detail, target)
+                    : completedIdentityUnrepairable
+                        ? queueRepairUnavailableReason
                     : currentPr is null
                         ? $"Run evidence cannot be matched until the queue owner resolves the actual PR identity. Use the closeout-queue recovery command with the actual merged PR, publish the canonical queue/runs artifacts to {target}, then retry; do not infer a PR from missing evidence."
                         : null;
@@ -516,7 +536,8 @@ internal static class SoloConductorClaimReleaseGate
         if (pr is null)
         {
             return new QueueReadResult("missing", "linked-pr-missing",
-                "The completed queue item does not identify one PR for the packet target repository.", path, item, null, null);
+                "The completed queue item does not identify one PR for the packet target repository.", path, item, null,
+                "Ordinary closeout skips queue-state writes for an already-completed item, and --repair-runs only appends run receipts; neither can establish this missing queue identity. Return the exact artifact to the responsible host/architect queue workflow for an explicitly supported correction. No automatic repair is available at claim release.");
         }
         return new QueueReadResult("satisfied", "completed-queue-item-present",
             $"Exactly one completed queue item identifies '{unit}' and PR #{pr} in '{repo}'.", path, item, pr, null);
@@ -594,7 +615,9 @@ internal static class SoloConductorClaimReleaseGate
             }
             if (linkedPr.TryGetProperty("number", out var numberElement) && numberElement.ValueKind != JsonValueKind.Null)
             {
-                if (!numberElement.TryGetInt32(out var parsedNumber) || parsedNumber <= 0)
+                if (numberElement.ValueKind != JsonValueKind.Number
+                    || !numberElement.TryGetInt32(out var parsedNumber)
+                    || parsedNumber <= 0)
                 {
                     error = "Structured linked_pr.number is not a positive integer.";
                     return false;
@@ -1277,6 +1300,9 @@ internal static class SoloConductorClaimReleaseGate
 
     private static string BuildQueueRepairUnavailableReason(string root, string path, string detail, string targetRef) =>
         $"Canonical queue artifact '{Relative(root, path)}' is unavailable: {detail} Return the exact owned path to the responsible host/queue-owner workflow for correction, publish that change to {targetRef}, then retry claim release.";
+
+    private static string BuildCompletedQueueIdentityRepairUnavailableReason(string root, string path, string detail, string targetRef) =>
+        $"The completed canonical queue item is missing linked_pr: {detail} Exact artifact path: '{Relative(root, path)}'. The responsible host/architect queue workflow must make an explicitly supported correction and publish it to {targetRef} before claim release can be retried.";
 
     private static string BuildRunLogRepairUnavailableReason(string root, string path, string targetRef) =>
         $"Canonical run log '{Relative(root, path)}' is malformed, contradictory, or unreadable. `intent-cli closeout pr --repair-runs` only appends missing receipts and cannot correct this artifact. Return the exact path to the responsible host/architect workflow for correction, publish the owned change to {targetRef}, then retry claim release.";
