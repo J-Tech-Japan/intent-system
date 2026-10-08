@@ -204,34 +204,45 @@ internal static class SoloConductorClaimReleaseGate
         evidencePaths.Add(Relative(root, queuePath));
 
         int? currentPr = queueResult.PullRequest;
-        var completedIdentityUnrepairable = queueResult.Cause == "linked-pr-missing"
+        var completedIdentityMissing = queueResult.Cause == "linked-pr-missing"
             && queueResult.Item?.State == QueueItemState.Completed;
-        var canOfferCloseout = queueResult.State == "missing" && !completedIdentityUnrepairable;
+        var canDoctorRepair = completedIdentityMissing && queueLocation.Kind == StateLocationKind.Legacy;
+        var canOfferCloseout = queueResult.State == "missing" && !completedIdentityMissing;
         var queueCloseoutPr = currentPr?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "<actual-merged-pr>";
         var closeoutCommand = canOfferCloseout
             ? $"intent-cli closeout pr --pr {queueCloseoutPr} --repo {targetRepo} --domain {domain} --pr-merged true --write --format json"
             : null;
-        var queueDetail = canOfferCloseout
-            ? queueResult.Detail + " Run the command only after the normal host workflow independently confirms the actual PR is merged."
-            : queueResult.Detail;
+        var doctorBaseCommand = $"intent-cli automation state-doctor --workdir <canonical-host-checkout> --repo {targetRepo} --domain {domain} --team {team}";
+        IReadOnlyList<string> doctorCommands =
+        [
+            doctorBaseCommand + " --read-only --format json",
+            doctorBaseCommand + " --write --format json",
+        ];
+        var stateDoctorPublicationDetail = $"The state-doctor is host-wide, not unit-scoped, and may propose repairs for other queue rows too. Review the full read-only preview and confirm this item has unique merged-PR closing-issue evidence before --write. If no unique finding appears, resolve ambiguity through the responsible host/architect workflow. After a successful write, stage only the exact owned .intent-cli/queue-state.json and .intent-cli/runs.jsonl changes, publish them to {target}, then retry release.";
+        var queueDetail = canDoctorRepair
+            ? queueResult.Detail + " " + stateDoctorPublicationDetail
+            : canOfferCloseout
+                ? queueResult.Detail + " Run the command only after the normal host workflow independently confirms the actual PR is merged."
+                : queueResult.Detail;
         var queueRepairUnavailableReason = queueResult.State == "unavailable"
             ? BuildQueueRepairUnavailableReason(root, queuePath, queueResult.RepairUnavailableReason ?? queueResult.Detail, target)
-            : completedIdentityUnrepairable
-                ? BuildCompletedQueueIdentityRepairUnavailableReason(root, queuePath,
-                    queueResult.RepairUnavailableReason ?? queueResult.Detail, target)
+            : completedIdentityMissing && !canDoctorRepair
+                ? BuildScopedCompletedQueueIdentityRepairUnavailableReason(root, queuePath, queueResult.Detail, target)
                 : queueResult.RepairUnavailableReason;
+        IReadOnlyList<string> queueRecoveryCommands = canDoctorRepair
+            ? doctorCommands
+            : closeoutCommand is not null ? [closeoutCommand] : [];
+        var queuePublicationStep = canDoctorRepair || closeoutCommand is not null
+            ? PublicationStep(target)
+            : null;
         duties.Add(BuildDuty(
             "closeout-queue",
             queueResult.State,
             queueResult.Cause,
             queueDetail,
             queueResult.Path is null ? [] : [Evidence(root, queueResult.Path, queueResult.Item)],
-            queueResult.State == "missing" && closeoutCommand is not null
-                ? [closeoutCommand]
-                : [],
-            queueResult.State == "missing" && closeoutCommand is not null
-                ? PublicationStep(target)
-                : null,
+            queueRecoveryCommands,
+            queuePublicationStep,
             queueRepairUnavailableReason));
 
         var runsRead = ReadRuns(root, unit, targetRepo, currentPr, runsPath);
@@ -252,9 +263,11 @@ internal static class SoloConductorClaimReleaseGate
             var detail = runsRead.State == "unavailable"
                 ? runsRead.Detail
                 : currentPr is null
-                    ? completedIdentityUnrepairable
-                        ? $"A current linked PR identity cannot be established because the completed canonical queue item lacks linked_pr. {queueRepairUnavailableReason}"
-                        : $"A current linked PR identity is required before matching run receipts can be evaluated; resolve it through the closeout-queue recovery command and publish the canonical queue/runs artifacts to {target}."
+                    ? canDoctorRepair
+                        ? $"A current linked PR identity is required before matching run receipts can be evaluated. {stateDoctorPublicationDetail}"
+                        : completedIdentityMissing
+                            ? $"A current linked PR identity cannot be established because the completed canonical queue item lacks linked_pr. {queueRepairUnavailableReason}"
+                            : $"A current linked PR identity is required before matching run receipts can be evaluated; resolve it through the closeout-queue recovery command and publish the canonical queue/runs artifacts to {target}."
                     : found
                         ? $"Canonical {eventName} event matches unit '{unit}', repo '{targetRepo}', and PR #{currentPr}."
                         : $"No canonical {eventName} event matches unit '{unit}', repo '{targetRepo}', and PR #{currentPr}.";
@@ -265,19 +278,27 @@ internal static class SoloConductorClaimReleaseGate
                 ? BuildRunLogRepairUnavailableReason(root, runsPath, target)
                 : queueResult.State == "unavailable"
                     ? BuildQueueRepairUnavailableReason(root, queuePath, queueResult.RepairUnavailableReason ?? queueResult.Detail, target)
-                    : completedIdentityUnrepairable
-                        ? queueRepairUnavailableReason
-                    : currentPr is null
-                        ? $"Run evidence cannot be matched until the queue owner resolves the actual PR identity. Use the closeout-queue recovery command with the actual merged PR, publish the canonical queue/runs artifacts to {target}, then retry; do not infer a PR from missing evidence."
-                        : null;
+                : completedIdentityMissing && !canDoctorRepair
+                    ? queueRepairUnavailableReason
+                : canDoctorRepair
+                    ? null
+                : currentPr is null
+                    ? $"Run evidence cannot be matched until the queue owner resolves the actual PR identity. Use the closeout-queue recovery command with the actual merged PR, publish the canonical queue/runs artifacts to {target}, then retry; do not infer a PR from missing evidence."
+                    : null;
+            IReadOnlyList<string> runRecoveryCommands = runsRead.State != "unavailable" && currentPr is null && canDoctorRepair
+                ? doctorCommands
+                : command is not null && state == "missing" ? [command] : [];
+            var runPublicationStep = runsRead.State != "unavailable" && currentPr is null && canDoctorRepair
+                ? PublicationStep(target)
+                : command is not null && state == "missing" ? PublicationStep(target) : null;
             duties.Add(BuildDuty(
                 eventName,
                 state,
                 cause,
                 detail,
                 runsRead.Path is null ? [] : [Evidence(root, runsRead.Path)],
-                state == "missing" && command is not null ? [command] : [],
-                state == "missing" && command is not null ? PublicationStep(target) : null,
+                runRecoveryCommands,
+                runPublicationStep,
                 runRepairUnavailableReason));
         }
 
@@ -536,8 +557,7 @@ internal static class SoloConductorClaimReleaseGate
         if (pr is null)
         {
             return new QueueReadResult("missing", "linked-pr-missing",
-                "The completed queue item does not identify one PR for the packet target repository.", path, item, null,
-                "Ordinary closeout skips queue-state writes for an already-completed item, and --repair-runs only appends run receipts; neither can establish this missing queue identity. Return the exact artifact to the responsible host/architect queue workflow for an explicitly supported correction. No automatic repair is available at claim release.");
+                "The completed queue item does not identify one PR for the packet target repository.", path, item, null, null);
         }
         return new QueueReadResult("satisfied", "completed-queue-item-present",
             $"Exactly one completed queue item identifies '{unit}' and PR #{pr} in '{repo}'.", path, item, pr, null);
@@ -1301,8 +1321,8 @@ internal static class SoloConductorClaimReleaseGate
     private static string BuildQueueRepairUnavailableReason(string root, string path, string detail, string targetRef) =>
         $"Canonical queue artifact '{Relative(root, path)}' is unavailable: {detail} Return the exact owned path to the responsible host/queue-owner workflow for correction, publish that change to {targetRef}, then retry claim release.";
 
-    private static string BuildCompletedQueueIdentityRepairUnavailableReason(string root, string path, string detail, string targetRef) =>
-        $"The completed canonical queue item is missing linked_pr: {detail} Exact artifact path: '{Relative(root, path)}'. The responsible host/architect queue workflow must make an explicitly supported correction and publish it to {targetRef} before claim release can be retried.";
+    private static string BuildScopedCompletedQueueIdentityRepairUnavailableReason(string root, string path, string detail, string targetRef) =>
+        $"The selected scoped queue artifact '{Relative(root, path)}' is missing linked_pr: {detail} `intent-cli automation state-doctor` reads and writes only the legacy queue layout and cannot repair this scoped file. Ordinary closeout does not rewrite a completed item, and --repair-runs only appends run receipts. Return the exact artifact to the responsible host/architect workflow for a supported scoped correction, publish it to {targetRef}, then retry claim release.";
 
     private static string BuildRunLogRepairUnavailableReason(string root, string path, string targetRef) =>
         $"Canonical run log '{Relative(root, path)}' is malformed, contradictory, or unreadable. `intent-cli closeout pr --repair-runs` only appends missing receipts and cannot correct this artifact. Return the exact path to the responsible host/architect workflow for correction, publish the owned change to {targetRef}, then retry claim release.";

@@ -1412,7 +1412,7 @@ public sealed class SoloConductorClaimReleaseG857Tests
     }
 
     [Fact]
-    public void CompletedQueueWithoutLinkedPrHasNoUnsupportedAutomaticRecovery_G857()
+    public void ScopedCompletedQueueWithoutLinkedPrUsesLegacyOnlyLimitation_G857()
     {
         using var repos = new ClaimRepositories();
         repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: ["pr-merged", "closeout-recorded"]);
@@ -1450,7 +1450,9 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal("linked-pr-missing", queueDuty.Cause);
         Assert.Empty(queueDuty.RecoveryCommands);
         Assert.Null(queueDuty.PublicationStep);
-        Assert.Contains("already-completed", queueDuty.RepairUnavailableReason!, StringComparison.Ordinal);
+        Assert.Contains("state-doctor", queueDuty.RepairUnavailableReason!, StringComparison.Ordinal);
+        Assert.Contains("legacy queue layout", queueDuty.RepairUnavailableReason!, StringComparison.Ordinal);
+        Assert.Contains("completed item", queueDuty.RepairUnavailableReason!, StringComparison.Ordinal);
         Assert.Contains("--repair-runs", queueDuty.RepairUnavailableReason!, StringComparison.Ordinal);
         Assert.Contains("host/architect", queueDuty.RepairUnavailableReason!, StringComparison.Ordinal);
         var queueRelativePath = Path.GetRelativePath(repos.Writer,
@@ -1474,6 +1476,145 @@ public sealed class SoloConductorClaimReleaseG857Tests
         var canonicalAfter = repos.CloneForInspection();
         Assert.Equal(claimBefore, File.ReadAllBytes(Path.Combine(canonicalAfter, claimRelative)));
         Assert.Equal(historyBefore, ClaimHistory(canonicalAfter));
+    }
+
+    [Fact]
+    public void LegacyCompletedQueueMissingLinkedPrUsesStateDoctorAndCanonicalPublication_G857()
+    {
+        using var repos = new ClaimRepositories();
+        PrepareLegacyStateDoctorFixture(repos);
+
+        var previousListerFactory = AutomationStateDoctorCommand.CandidateListerFactory;
+        var previousProbeRunner = AutomationInstalledCliSurfaceProbe.ProbeRunner;
+        var previousPathReader = AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader;
+        try
+        {
+            ConfigureStateDoctorSurfaceProbe(repos.Writer);
+            AutomationStateDoctorCommand.CandidateListerFactory = () => new G857StateDoctorLister(PullRequest);
+
+            var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+            var claimRelative = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+            var initialInspection = repos.CloneForInspection();
+            var claimBefore = File.ReadAllBytes(Path.Combine(initialInspection, claimRelative));
+            var historyBefore = ClaimHistory(initialInspection).ToArray();
+
+            var initialRelease = Release(repos.Reader);
+            Assert.Equal("completion-blocked", initialRelease.Status);
+            AssertStateDoctorRecoveryRoute(initialRelease);
+            Assert.Equal(canonicalBefore, initialRelease.SoloConductorCompletion?.CanonicalSnapshotOid);
+
+            using var preview = RunStateDoctor(repos.Writer, write: false);
+            Assert.Equal("read-only", preview.RootElement.GetProperty("mode").GetString());
+            var previewFinding = Assert.Single(preview.RootElement.GetProperty("findings").EnumerateArray(), finding =>
+                finding.GetProperty("execution_unit").GetString() == Unit
+                && finding.GetProperty("category").GetString() == "missing-linked-pr");
+            Assert.Equal("high", previewFinding.GetProperty("confidence").GetString());
+            Assert.False(previewFinding.GetProperty("applied").GetBoolean());
+            var legacyQueue = RuntimeScopedStateResolver.GetLegacyQueueStatePath(repos.Writer);
+            var legacyRuns = RuntimeScopedStateResolver.GetLegacyRunLogPath(repos.Writer);
+            var readOnlyQueue = QueueStateSerializer.Deserialize(File.ReadAllText(legacyQueue));
+            Assert.Null(Assert.Single(readOnlyQueue.Items, item => item.ExecutionUnit == Unit).LinkedPr);
+            Assert.Equal(new[] { "pr-merged", "closeout-recorded" },
+                RunLogSerializer.DeserializeAll(File.ReadAllText(legacyRuns)).Select(item => item.Event));
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+
+            using var write = RunStateDoctor(repos.Writer, write: true);
+            Assert.Equal("write", write.RootElement.GetProperty("mode").GetString());
+            var writeFinding = Assert.Single(write.RootElement.GetProperty("findings").EnumerateArray(), finding =>
+                finding.GetProperty("execution_unit").GetString() == Unit
+                && finding.GetProperty("category").GetString() == "missing-linked-pr");
+            Assert.True(writeFinding.GetProperty("applied").GetBoolean());
+            var repairedQueue = QueueStateSerializer.Deserialize(File.ReadAllText(legacyQueue));
+            var repairedItem = Assert.Single(repairedQueue.Items, item => item.ExecutionUnit == Unit);
+            Assert.Equal(QueueItemState.Completed, repairedItem.State);
+            Assert.Equal($"https://github.com/{Repo}/pull/{PullRequest}", repairedItem.LinkedPr);
+            Assert.False(File.Exists(RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo)));
+            var repairedRuns = RunLogSerializer.DeserializeAll(File.ReadAllText(legacyRuns));
+            Assert.Equal(new[] { "pr-merged", "closeout-recorded" },
+                repairedRuns.Where(item => item.Event is "pr-merged" or "closeout-recorded").Select(item => item.Event));
+            Assert.Contains(repairedRuns, item => item.Event == "state-doctor-repair" && item.ExecutionUnit == Unit);
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+
+            var blockedBeforePublication = Release(repos.Reader);
+            Assert.Equal("completion-blocked", blockedBeforePublication.Status);
+            AssertStateDoctorRecoveryRoute(blockedBeforePublication);
+            Assert.Equal(canonicalBefore, blockedBeforePublication.SoloConductorCompletion?.CanonicalSnapshotOid);
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            var beforePublishInspection = repos.CloneForInspection();
+            Assert.Equal(claimBefore, File.ReadAllBytes(Path.Combine(beforePublishInspection, claimRelative)));
+            Assert.Equal(historyBefore, ClaimHistory(beforePublishInspection));
+
+            Git(repos.Writer, "add", "--", ".intent-cli/queue-state.json", ".intent-cli/runs.jsonl");
+            var stagedPaths = Git(repos.Writer, "diff", "--cached", "--name-only")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(new[] { ".intent-cli/queue-state.json", ".intent-cli/runs.jsonl" }, stagedPaths);
+            Git(repos.Writer, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                "commit", "--quiet", "-m", "publish state-doctor queue identity repair");
+            Git(repos.Writer, "push", "origin", "HEAD:refs/heads/main");
+
+            var released = Release(repos.Reader);
+            Assert.Equal("released", released.Status);
+            Assert.True(released.PushSucceeded);
+            Assert.Equal("satisfied", released.SoloConductorCompletion?.Decision);
+            Assert.Equal(PullRequest, released.SoloConductorCompletion?.LinkedPr);
+            Assert.Equal("satisfied", Duty(released, "closeout-queue").State);
+            Assert.Equal("satisfied", Duty(released, "pr-merged").State);
+            Assert.Equal("satisfied", Duty(released, "closeout-recorded").State);
+            var finalInspection = repos.CloneForInspection();
+            Assert.False(File.Exists(Path.Combine(finalInspection, claimRelative)));
+            Assert.Single(ClaimHistory(finalInspection));
+            using var releaseHistory = JsonDocument.Parse(File.ReadAllText(Path.Combine(finalInspection, released.HistoryPath!)));
+            Assert.Equal("release", releaseHistory.RootElement.GetProperty("operation").GetString());
+        }
+        finally
+        {
+            AutomationStateDoctorCommand.CandidateListerFactory = previousListerFactory;
+            AutomationInstalledCliSurfaceProbe.ProbeRunner = previousProbeRunner;
+            AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = previousPathReader;
+        }
+    }
+
+    [Fact]
+    public void LegacyCompletedQueueAmbiguousStateDoctorDoesNotGuessPr_G857()
+    {
+        using var repos = new ClaimRepositories();
+        PrepareLegacyStateDoctorFixture(repos);
+
+        var previousListerFactory = AutomationStateDoctorCommand.CandidateListerFactory;
+        var previousProbeRunner = AutomationInstalledCliSurfaceProbe.ProbeRunner;
+        var previousPathReader = AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader;
+        try
+        {
+            ConfigureStateDoctorSurfaceProbe(repos.Writer);
+            AutomationStateDoctorCommand.CandidateListerFactory = () => new G857StateDoctorLister(PullRequest, PullRequest + 1);
+
+            var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+            using var preview = RunStateDoctor(repos.Writer, write: false);
+            Assert.NotEmpty(preview.RootElement.GetProperty("unsafe_findings").EnumerateArray());
+            using var write = RunStateDoctor(repos.Writer, write: true);
+            Assert.NotEmpty(write.RootElement.GetProperty("unsafe_findings").EnumerateArray());
+
+            var legacyQueue = RuntimeScopedStateResolver.GetLegacyQueueStatePath(repos.Writer);
+            var queue = QueueStateSerializer.Deserialize(File.ReadAllText(legacyQueue));
+            Assert.Null(Assert.Single(queue.Items, item => item.ExecutionUnit == Unit).LinkedPr);
+            var runEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(RuntimeScopedStateResolver.GetLegacyRunLogPath(repos.Writer)));
+            Assert.Equal(new[] { "pr-merged", "closeout-recorded" }, runEvents.Select(item => item.Event));
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+
+            var blocked = Release(repos.Reader);
+            Assert.Equal("completion-blocked", blocked.Status);
+            AssertStateDoctorRecoveryRoute(blocked);
+            Assert.Contains("unique merged-PR closing-issue evidence", Duty(blocked, "closeout-queue").Detail, StringComparison.Ordinal);
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        }
+        finally
+        {
+            AutomationStateDoctorCommand.CandidateListerFactory = previousListerFactory;
+            AutomationInstalledCliSurfaceProbe.ProbeRunner = previousProbeRunner;
+            AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = previousPathReader;
+        }
     }
 
     [Theory]
@@ -2266,6 +2407,88 @@ public sealed class SoloConductorClaimReleaseG857Tests
         repos.PublishIntentChanges(repos.Writer, "main");
     }
 
+    private static void PrepareLegacyStateDoctorFixture(ClaimRepositories repos)
+    {
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: ["pr-merged", "closeout-recorded"]);
+        MoveScopedQueueAndRunsToLegacy(repos);
+        var queuePath = RuntimeScopedStateResolver.GetLegacyQueueStatePath(repos.Writer);
+        var queue = JsonNode.Parse(File.ReadAllText(queuePath))!.AsObject();
+        queue["items"]!.AsArray()[0]!["linked_pr"] = null;
+        File.WriteAllText(queuePath, queue.ToJsonString());
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Acquire(repos.Writer);
+        PullCanonicalHead(repos.Writer);
+        var hostCommit = Git(repos.Writer, "rev-parse", "HEAD").Trim();
+        RecordKnowledge(repos.Writer, "architect", hostCommit);
+        RecordKnowledge(repos.Writer, "orchestrator", hostCommit);
+        RecordGuide(repos.Writer, "architect", hostCommit);
+        PublishExactReceipts(repos.Writer, "main");
+    }
+
+    private static void ConfigureStateDoctorSurfaceProbe(string root)
+    {
+        var installedPath = Path.Combine(root, ".intent-cli", "installed-cli-stub");
+        File.WriteAllText(installedPath, "state-doctor test fixture\n");
+        AutomationInstalledCliSurfaceProbe.ExplicitInstalledCliPathReader = () => installedPath;
+        AutomationInstalledCliSurfaceProbe.ProbeRunner = (_, _) => new InstalledCliProbeResult(
+            0,
+            "automation summary host-review-preflight issue-publish pr-transition review-start request-update approved",
+            string.Empty);
+    }
+
+    private static JsonDocument RunStateDoctor(string root, bool write)
+    {
+        using var output = new StringWriter();
+        var mode = write ? "--write" : "--read-only";
+        var exitCode = AutomationStateDoctorCommand.Execute(Context(root),
+        [
+            "--workdir", root,
+            "--repo", Repo,
+            "--domain", Domain,
+            "--team", Team,
+            mode,
+            "--format", "json",
+        ], output);
+        Assert.Equal(0, exitCode);
+        return JsonDocument.Parse(output.ToString());
+    }
+
+    private static void AssertStateDoctorRecoveryRoute(ClaimTransactionResult result)
+    {
+        var queueDuty = Duty(result, "closeout-queue");
+        Assert.Equal("missing", queueDuty.State);
+        Assert.Equal("linked-pr-missing", queueDuty.Cause);
+        Assert.Null(queueDuty.RepairUnavailableReason);
+        Assert.NotNull(queueDuty.PublicationStep);
+        Assert.Contains("refs/heads/main", queueDuty.PublicationStep!, StringComparison.Ordinal);
+        Assert.Contains("host-wide, not unit-scoped", queueDuty.Detail, StringComparison.Ordinal);
+        Assert.Contains("unique merged-PR closing-issue evidence", queueDuty.Detail, StringComparison.Ordinal);
+        Assert.Contains("stage only the exact owned", queueDuty.Detail, StringComparison.Ordinal);
+        Assert.Equal(2, queueDuty.RecoveryCommands.Count);
+        Assert.Contains("--read-only --format json", queueDuty.RecoveryCommands[0], StringComparison.Ordinal);
+        Assert.Contains("--write --format json", queueDuty.RecoveryCommands[1], StringComparison.Ordinal);
+        foreach (var command in queueDuty.RecoveryCommands)
+        {
+            Assert.Contains("intent-cli automation state-doctor", command, StringComparison.Ordinal);
+            Assert.Contains("--workdir <canonical-host-checkout>", command, StringComparison.Ordinal);
+            Assert.Contains($"--repo {Repo}", command, StringComparison.Ordinal);
+            Assert.Contains($"--domain {Domain}", command, StringComparison.Ordinal);
+            Assert.Contains($"--team {Team}", command, StringComparison.Ordinal);
+        }
+
+        foreach (var id in new[] { "pr-merged", "closeout-recorded" })
+        {
+            var duty = Duty(result, id);
+            Assert.Equal("unavailable", duty.State);
+            Assert.Equal("current-pr-unavailable", duty.Cause);
+            Assert.Equal(queueDuty.RecoveryCommands, duty.RecoveryCommands);
+            Assert.NotNull(duty.PublicationStep);
+            Assert.Contains("refs/heads/main", duty.PublicationStep!, StringComparison.Ordinal);
+            Assert.Null(duty.RepairUnavailableReason);
+            Assert.Contains("host-wide, not unit-scoped", duty.Detail, StringComparison.Ordinal);
+        }
+    }
+
     private static string PacketWithExecutionUnitAssertion(
         string location,
         string assertion,
@@ -2669,6 +2892,34 @@ public sealed class SoloConductorClaimReleaseG857Tests
         }
 
         public void Dispose() => temp.Dispose();
+    }
+
+    private sealed class G857StateDoctorLister : IGitHubAutomationCandidateLister
+    {
+        private readonly IReadOnlyList<GitHubAutomationPrCandidate> mergedCandidates;
+
+        public G857StateDoctorLister(params int[] pullRequestNumbers)
+        {
+            mergedCandidates = pullRequestNumbers.Select(number => new GitHubAutomationPrCandidate
+            {
+                Number = number,
+                Url = $"https://github.com/{Repo}/pull/{number}",
+                State = "MERGED",
+                ClosingIssuesReferences = [new GitHubPrClosingIssueReference { Number = 1872 }],
+            }).ToArray();
+        }
+
+        public IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) => Array.Empty<GitHubAutomationPrCandidate>();
+
+        public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) => Array.Empty<GitHubAutomationIssueCandidate>();
+
+        public IReadOnlyList<GitHubAutomationPrCandidate> ListMergedPullRequests(
+            string repo,
+            IReadOnlyCollection<string> requiredLabels) => mergedCandidates;
     }
 
     private const string PacketYaml = """
