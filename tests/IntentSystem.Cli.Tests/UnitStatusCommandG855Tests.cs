@@ -9,6 +9,26 @@ namespace IntentSystem.Cli.Tests;
 public sealed class UnitStatusCommandG855Tests
 {
     private const string HeadSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    private static string SnapshotFiles(string root) => string.Join("\n", Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+        .OrderBy(path => path, StringComparer.Ordinal)
+        .Select(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/') + "=" + Convert.ToHexString(File.ReadAllBytes(path))));
+
+    [Fact]
+    public void RoleRecordEnumerationMoveNextFailureIsStructuredAndKeepsRowsReadBeforeFailure()
+    {
+        static IEnumerable<string> EnumeratePaths()
+        {
+            yield return "first-record.json";
+            throw new IOException("role directory enumeration failed");
+        }
+
+        var result = UnitStatusCommand.ReadRoleRecordRows(EnumeratePaths, path => path);
+
+        Assert.Equal(["first-record.json"], result.Rows);
+        Assert.Contains(result.Errors, error => error.Contains("role directory enumeration failed", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void HostlessStatusReturnsStructuredUnavailableAndHelpRemainsMetadataFree()
     {
@@ -64,6 +84,26 @@ public sealed class UnitStatusCommandG855Tests
     }
 
     [Fact]
+    public void ExplicitDotSegmentScopesAreInvalidRequestsBeforeHostReads()
+    {
+        foreach (var scope in new[] { ".", ".." })
+        {
+            using var host = new TempHost();
+            var reader = new FixedReader();
+            using var writer = new StringWriter();
+
+            var exit = UnitStatusCommand.ExecuteCore(host.Context,
+                ["--execution-unit", "G855", "--domain", scope, "--team", "intent-cli-dev", "--format", "json"], writer, reader);
+
+            Assert.Equal(1, exit);
+            Assert.Equal(0, reader.ClaimReads);
+            Assert.Equal(0, reader.GitHubReads);
+            using var report = JsonDocument.Parse(writer.ToString());
+            Assert.Equal("invalid-request", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+        }
+    }
+
+    [Fact]
     public void ExactRecordedNonSoloModeReturnsNotApplicableWithoutGithubCalls()
     {
         using var host = new TempHost();
@@ -85,6 +125,96 @@ public sealed class UnitStatusCommandG855Tests
         Assert.Equal("current-recorded-entry", root.GetProperty("mode_basis").GetString());
         Assert.All(root.GetProperty("steps").EnumerateArray(), step => Assert.Equal("not-applicable", step.GetProperty("state").GetString()));
         Assert.Equal(26, root.GetProperty("summary").GetProperty("state_counts").GetProperty("not-applicable").GetInt32());
+    }
+
+    [Fact]
+    public void LocallyEstablishedUnitWithoutPublishedIssueIsMissingEvidenceAndSkipsGithub()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact();
+        var publishPath = Path.Combine(host.Root, ".intent-cli", "issues", "G855", "publish.yaml");
+        var publish = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(publishPath));
+        File.WriteAllText(publishPath, IssuePublishArtifactYaml.Serialize(publish with
+        {
+            PublishStatus = "drafted",
+            CreatedIssueNumber = null,
+            CreatedIssueUrl = null,
+            PublishedLabelName = null,
+            LifecycleState = "drafted",
+            LinkedPrNumber = null,
+            LinkedPrUrl = null,
+        }));
+        var before = SnapshotFiles(host.Root);
+        var reader = new FixedReader();
+        using var writer = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"], writer, reader);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(0, reader.GitHubReads);
+        Assert.Equal(before, SnapshotFiles(host.Root));
+        using var report = JsonDocument.Parse(writer.ToString());
+        foreach (var id in new[]
+        {
+            "issue-completion-marker", "posted-review", "delta-review", "observed-ci", "approved-marker",
+            "approval-head-receipt", "pr-merged", "recorded-review",
+        })
+        {
+            var fact = TempHost.FindSubcheck(report.RootElement, id);
+            Assert.Equal("missing", fact.GetProperty("state").GetString());
+            Assert.Equal("issue-not-published", fact.GetProperty("cause").GetString());
+        }
+    }
+
+    [Fact]
+    public void PacketDerivedTraversalDomainIsRejectedBeforeScopedPathResolution()
+    {
+        using var host = new TempHost();
+        host.WritePacketAndPublishArtifact(packetDomain: "../../escape");
+        var sentinelPath = Path.Combine(host.Root, "escape", "J-Tech-Japan__intent-system", "queue-state.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(sentinelPath)!);
+        File.WriteAllText(sentinelPath, "not valid queue JSON");
+        var before = SnapshotFiles(host.Root);
+        var reader = new FixedReader();
+        using var writer = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--team", "intent-cli-dev", "--format", "json"], writer, reader);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, reader.GitHubReads);
+        Assert.Equal(before, SnapshotFiles(host.Root));
+        using var report = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("packet-domain-invalid", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+        Assert.Equal("identity-conflict", report.RootElement.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+    }
+
+    [Fact]
+    public void ClaimDerivedTraversalTeamIsRejectedBeforeScopedPathResolution()
+    {
+        using var host = new TempHost();
+        host.WritePacketAndPublishArtifact();
+        var claim = new UnitStatusClaimRecordFact
+        {
+            Path = ".intent-cli/claims/active.json",
+            Scope = "execution-unit:G855",
+            Actor = "builder",
+            Team = "../../escape",
+            ClaimedAt = DateTimeOffset.Parse("2026-10-07T00:00:00Z"),
+        };
+        var reader = new FixedReader(claims: new UnitStatusClaimSnapshot { State = "completed", ActiveClaim = claim });
+        using var writer = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--format", "json"], writer, reader);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, reader.GitHubReads);
+        using var report = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("team-scope-invalid", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+        Assert.Equal("identity-conflict", report.RootElement.GetProperty("applicability").GetProperty("unavailable_class").GetString());
     }
 
     [Fact]
@@ -581,11 +711,71 @@ public sealed class UnitStatusCommandG855Tests
             Assert.Equal(0, UnitStatusCommand.ExecuteCore(host.Context,
                 ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"], writer, reader));
             using var report = JsonDocument.Parse(writer.ToString());
-            Assert.Equal(role == "design" ? "done" : "missing",
-                TempHost.FindSubcheck(report.RootElement, "architect-knowledge-writeback").GetProperty("state").GetString());
+            var architect = TempHost.FindSubcheck(report.RootElement, "architect-knowledge-writeback");
+            Assert.Equal(role == "design" ? "done" : "missing", architect.GetProperty("state").GetString());
+            var architectEvidence = Assert.Single(architect.GetProperty("evidence").EnumerateArray());
+            Assert.Equal(role == "design" ? "architect" : role, architectEvidence.GetProperty("role").GetString());
+            Assert.Contains("required-role=architect; qualifies=" + (role == "design" ? "true" : "false"),
+                architectEvidence.GetProperty("provenance").GetString(), StringComparison.Ordinal);
+            var orchestrator = TempHost.FindSubcheck(report.RootElement, "orchestrator-knowledge-writeback");
             Assert.Equal(role == "orchestrator" ? "done" : "missing",
-                TempHost.FindSubcheck(report.RootElement, "orchestrator-knowledge-writeback").GetProperty("state").GetString());
+                orchestrator.GetProperty("state").GetString());
+            Assert.Single(orchestrator.GetProperty("evidence").EnumerateArray());
         }
+    }
+
+    [Fact]
+    public void GuideRecordsPreserveAllRoleEvidenceWhileOnlyArchitectQualifies()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact(guideDeclared: true);
+        host.WriteGuideRecord("architect", ["architect"], roleSlot: true, fileName: "architect.json");
+        host.WriteGuideRecord("orchestrator", ["architect"], roleSlot: true, fileName: "orchestrator.json");
+        Assert.Equal(2, RoleScopedCloseoutRecordStore.EnumerateExistingPaths(
+            host.Context.RepoRoot, GuideReachabilityRecord.RecordRootRelativePath, "G855").Count);
+        var reader = new FixedReader(new UnitStatusRemoteSnapshot
+        {
+            State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha, Facts = [],
+        });
+        using var writer = new StringWriter();
+
+        Assert.Equal(0, UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"], writer, reader));
+        using var report = JsonDocument.Parse(writer.ToString());
+        var guide = TempHost.FindSubcheck(report.RootElement, "guide-reachability");
+        Assert.Equal("guide-reachability-recorded", guide.GetProperty("cause").GetString());
+        Assert.Equal("done", guide.GetProperty("state").GetString());
+        var evidence = guide.GetProperty("evidence").EnumerateArray().ToArray();
+        Assert.Equal(2, evidence.Length);
+        Assert.Contains(evidence, pointer => pointer.GetProperty("role").GetString() == "architect"
+            && pointer.GetProperty("provenance").GetString()!.Contains("required-role=architect; qualifies=true", StringComparison.Ordinal));
+        Assert.Contains(evidence, pointer => pointer.GetProperty("role").GetString() == "orchestrator"
+            && pointer.GetProperty("provenance").GetString()!.Contains("required-role=architect; qualifies=false", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DuplicateGuideArchitectRecordsRetainEveryObservedRolePointer()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact(guideDeclared: true);
+        host.WriteGuideRecord("architect", ["architect"], roleSlot: true, fileName: "architect-a.json");
+        host.WriteGuideRecord("design", ["architect"], roleSlot: true, fileName: "architect-b.json");
+        host.WriteGuideRecord("orchestrator", ["architect"], roleSlot: true, fileName: "orchestrator.json");
+        var reader = new FixedReader(new UnitStatusRemoteSnapshot
+        {
+            State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha, Facts = [],
+        });
+        using var writer = new StringWriter();
+
+        Assert.Equal(1, UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"], writer, reader));
+        using var report = JsonDocument.Parse(writer.ToString());
+        var guide = TempHost.FindSubcheck(report.RootElement, "guide-reachability");
+        Assert.Equal("unavailable", guide.GetProperty("state").GetString());
+        Assert.Equal("identity-conflict", guide.GetProperty("unavailable_class").GetString());
+        Assert.Equal(3, guide.GetProperty("evidence").GetArrayLength());
     }
 
     [Fact]
@@ -596,6 +786,7 @@ public sealed class UnitStatusCommandG855Tests
         host.WritePacketAndPublishArtifact(knowledgeRequired: true);
         host.WriteWritebackRecord("architect", "architect.json");
         host.WriteWritebackRecord("design", "design.json");
+        host.WriteWritebackRecord("orchestrator", "orchestrator.json");
         var reader = new FixedReader(new UnitStatusRemoteSnapshot
         {
             State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha, Facts = [],
@@ -610,7 +801,44 @@ public sealed class UnitStatusCommandG855Tests
         var architect = TempHost.FindSubcheck(report.RootElement, "architect-knowledge-writeback");
         Assert.Equal("unavailable", architect.GetProperty("state").GetString());
         Assert.Equal("identity-conflict", architect.GetProperty("unavailable_class").GetString());
-        Assert.Equal(2, architect.GetProperty("evidence").GetArrayLength());
+        Assert.Equal(3, architect.GetProperty("evidence").GetArrayLength());
+        Assert.Contains(architect.GetProperty("evidence").EnumerateArray(), pointer =>
+            pointer.GetProperty("role").GetString() == "orchestrator"
+            && pointer.GetProperty("provenance").GetString()!.Contains("required-role=architect; qualifies=false", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WritebackFactsRetainBothRolePointersAndQualifyEachDutySeparately()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact(knowledgeRequired: true);
+        host.WriteWritebackRecord("architect", "architect.json");
+        host.WriteWritebackRecord("orchestrator", "orchestrator.json");
+        var reader = new FixedReader(new UnitStatusRemoteSnapshot
+        {
+            State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha, Facts = [],
+        });
+        using var writer = new StringWriter();
+
+        Assert.Equal(0, UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"], writer, reader));
+        using var report = JsonDocument.Parse(writer.ToString());
+        foreach (var (id, expectedRole) in new[]
+        {
+            ("architect-knowledge-writeback", "architect"),
+            ("orchestrator-knowledge-writeback", "orchestrator"),
+        })
+        {
+            var fact = TempHost.FindSubcheck(report.RootElement, id);
+            Assert.Equal("done", fact.GetProperty("state").GetString());
+            var evidence = fact.GetProperty("evidence").EnumerateArray().ToArray();
+            Assert.Equal(2, evidence.Length);
+            Assert.Contains(evidence, pointer => pointer.GetProperty("role").GetString() == expectedRole
+                && pointer.GetProperty("provenance").GetString()!.Contains("qualifies=true", StringComparison.Ordinal));
+            Assert.Contains(evidence, pointer => pointer.GetProperty("role").GetString() != expectedRole
+                && pointer.GetProperty("provenance").GetString()!.Contains("qualifies=false", StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -632,6 +860,9 @@ public sealed class UnitStatusCommandG855Tests
         var guide = TempHost.FindSubcheck(report.RootElement, "guide-reachability");
         Assert.Equal("missing", guide.GetProperty("state").GetString());
         Assert.Equal("guide-record-absent", guide.GetProperty("cause").GetString());
+        var evidence = Assert.Single(guide.GetProperty("evidence").EnumerateArray());
+        Assert.Equal("orchestrator", evidence.GetProperty("role").GetString());
+        Assert.Contains("required-role=architect; qualifies=false", evidence.GetProperty("provenance").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -704,6 +935,7 @@ public sealed class UnitStatusCommandG855Tests
     private sealed class TempHost : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "g855-status-" + Guid.NewGuid().ToString("N"));
+        public string Root => _root;
 
         public TempHost()
         {
@@ -749,11 +981,12 @@ public sealed class UnitStatusCommandG855Tests
         }
 
     public void WritePacketAndPublishArtifact(string? sourceArtifact = null, bool? knowledgeRequired = null,
-        string? packetUnit = null, string? publishUnit = null, string? rulingArtifact = null, bool guideDeclared = false)
+        string? packetUnit = null, string? publishUnit = null, string? rulingArtifact = null, bool guideDeclared = false,
+        string packetDomain = "intent-cli")
     {
         var directory = Path.Combine(_root, ".intent-cli", "issues", "G855");
         Directory.CreateDirectory(directory);
-        var packetYaml = "schema_version: 1\ndomain: intent-cli\nexecution_unit: " + (packetUnit ?? "G855") + "\nimplementation_issue_packet:\n  target_repo: J-Tech-Japan/intent-system\n";
+        var packetYaml = "schema_version: 1\ndomain: " + packetDomain + "\nexecution_unit: " + (packetUnit ?? "G855") + "\nimplementation_issue_packet:\n  target_repo: J-Tech-Japan/intent-system\n";
         if (sourceArtifact is not null) packetYaml += "  source_artifact: \"" + sourceArtifact + "\"\n";
         if (rulingArtifact is not null) packetYaml += "  ruling_artifact: \"" + rulingArtifact + "\"\n";
         if (knowledgeRequired is { } required)
@@ -794,9 +1027,10 @@ public sealed class UnitStatusCommandG855Tests
             File.WriteAllText(Path.Combine(directory, fileName), KnowledgeWriteBackRecord.Serialize(record));
         }
 
-        public void WriteGuideRecord(string recorderRole, IReadOnlyList<string> audiences)
+        public void WriteGuideRecord(string recorderRole, IReadOnlyList<string> audiences, bool roleSlot = false, string? fileName = null)
         {
             var directory = Path.Combine(_root, GuideReachabilityRecord.RecordRootRelativePath, "G855");
+            if (roleSlot) directory = Path.Combine(directory, RoleScopedCloseoutRecordStore.RoleRecordsDirectoryName);
             Directory.CreateDirectory(directory);
             var record = new GuideReachabilityRecord
             {
@@ -808,7 +1042,7 @@ public sealed class UnitStatusCommandG855Tests
                 GuideSurfaces = ["guide solo-conductor"],
                 Roles = audiences,
             };
-            File.WriteAllText(Path.Combine(directory, "record.json"), GuideReachabilityRecord.Serialize(record));
+            File.WriteAllText(Path.Combine(directory, fileName ?? "record.json"), GuideReachabilityRecord.Serialize(record));
         }
 
         public void WriteBugSourceChain(string bugId, string sourceIssueUrl, bool duplicate = false, bool corruptPlan = false,

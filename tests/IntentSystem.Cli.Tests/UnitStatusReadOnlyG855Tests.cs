@@ -674,6 +674,8 @@ public sealed class UnitStatusReadOnlyG855Tests
             Assert.Equal("unavailable", fact.GetProperty("state").GetString());
             Assert.Equal(cause, fact.GetProperty("cause").GetString());
             Assert.Equal(unavailableClass, fact.GetProperty("unavailable_class").GetString());
+            if (fact.GetProperty("repair_commands").GetArrayLength() == 0)
+                Assert.False(string.IsNullOrWhiteSpace(fact.GetProperty("repair_unavailable_reason").GetString()));
         });
         Assert.Equal(26, root.GetProperty("summary").GetProperty("state_counts").GetProperty("unavailable").GetInt32());
         Assert.Equal(1, root.GetProperty("summary").GetProperty("observation_exit_code").GetInt32());

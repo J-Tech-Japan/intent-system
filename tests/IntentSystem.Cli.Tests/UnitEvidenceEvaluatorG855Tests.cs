@@ -75,6 +75,43 @@ public sealed class UnitEvidenceEvaluatorG855Tests
     }
 
     [Fact]
+    public void UnavailableFactsWithoutRepairCommandsReceiveReasonAndProvenanceCommandsAreRemoved()
+    {
+        var report = UnitEvidenceEvaluator.Evaluate(Snapshot(
+        [
+            Fact("worker-completion-receipt", UnitStatusStates.Unavailable,
+                cause: "worker-completion-receipt-not-recorded", unavailableClass: UnitStatusStates.ProvenanceLimit),
+            Fact("posted-review", UnitStatusStates.Unavailable,
+                cause: "github-read-failed", unavailableClass: UnitStatusStates.ReadFailure) with
+                { RepairUnavailableReason = "source read failed" },
+            Fact("delta-review", UnitStatusStates.Unavailable,
+                cause: "delta-review-not-supported", unavailableClass: UnitStatusStates.ProvenanceLimit,
+                repairCommands: ["intent-cli review cross-runtime record --write"]) with
+                { RepairUnavailableReason = "review provenance is not writable here" },
+            Fact("queue-seed", UnitStatusStates.Unavailable,
+                cause: "queue-read-failed", unavailableClass: UnitStatusStates.ReadFailure) with
+                { RepairUnavailableReason = "   " },
+            Fact("publication-artifact", UnitStatusStates.Done,
+                repairCommands: ["intent-cli issue publish"]) with { RepairUnavailableReason = "done-reason" },
+            Fact("issue-published-run", UnitStatusStates.Missing,
+                repairCommands: ["intent-cli issue publish"]) with { RepairUnavailableReason = "missing-reason" },
+        ]));
+        var facts = report.Steps.SelectMany(step => step.Subchecks).ToDictionary(fact => fact.Id, StringComparer.Ordinal);
+
+        Assert.Equal("no-supported-repair-command-in-this-slice", facts["worker-completion-receipt"].RepairUnavailableReason);
+        Assert.Equal("source read failed", facts["posted-review"].RepairUnavailableReason);
+        Assert.Equal("review provenance is not writable here", facts["delta-review"].RepairUnavailableReason);
+        Assert.Equal("no-supported-repair-command-in-this-slice", facts["queue-seed"].RepairUnavailableReason);
+        Assert.Empty(facts["worker-completion-receipt"].RepairCommands);
+        Assert.Empty(facts["delta-review"].RepairCommands);
+        Assert.Equal("done-reason", facts["publication-artifact"].RepairUnavailableReason);
+        Assert.Equal("missing-reason", facts["issue-published-run"].RepairUnavailableReason);
+        Assert.Equal("done", facts["publication-artifact"].State);
+        Assert.Equal("missing", facts["issue-published-run"].State);
+        Assert.Equal(1, report.Summary.ObservationExitCode);
+    }
+
+    [Fact]
     public void MixedProvenanceAndReadFailureKeepsBothClassesAndExitsNonzero()
     {
         var report = UnitEvidenceEvaluator.Evaluate(Snapshot(
@@ -99,10 +136,16 @@ public sealed class UnitEvidenceEvaluatorG855Tests
         Assert.Equal(1, modeFailure.Summary.ObservationExitCode);
         Assert.Equal(26, modeFailure.Summary.StateCounts[UnitStatusStates.Unavailable]);
         Assert.Equal(26, modeFailure.Summary.UnavailableClassCounts[UnitStatusStates.ApplicabilityUnresolved]);
+        var modeFacts = modeFailure.Steps.SelectMany(step => step.Subchecks).ToArray();
+        Assert.Equal(26, modeFacts.Length);
+        Assert.All(modeFacts.Where(fact => fact.RepairCommands.Count == 0), fact =>
+            Assert.False(string.IsNullOrWhiteSpace(fact.RepairUnavailableReason)));
 
         var requestFailure = UnitEvidenceEvaluator.Evaluate(Snapshot([], UnitStatusStates.Unavailable,
             cause: "invalid-request", unavailableClass: UnitStatusStates.InvalidRequest));
         Assert.Equal(1, requestFailure.Summary.ObservationExitCode);
+        Assert.All(requestFailure.Steps.SelectMany(step => step.Subchecks).Where(fact => fact.RepairCommands.Count == 0), fact =>
+            Assert.False(string.IsNullOrWhiteSpace(fact.RepairUnavailableReason)));
     }
 
     [Fact]
@@ -223,6 +266,47 @@ public sealed class UnitEvidenceEvaluatorG855Tests
         Assert.Contains("review_state=`COMMENTED`", markdown.ToString(), StringComparison.Ordinal);
         Assert.Contains("review_disposition=`implementation-review`", markdown.ToString(), StringComparison.Ordinal);
         Assert.Contains("record_id=`check-901`", markdown.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReviewOrderingRetainsRowsAndRejectsOnlySameIdentityTies()
+    {
+        var at = DateTimeOffset.Parse("2026-10-07T00:00:00Z");
+        UnitStatusObservedReview Review(string runtime, string verdict, DateTimeOffset time, string id) => new()
+        {
+            Source = "local-cross-runtime-record",
+            HeadSha = new string('a', 40),
+            Verdict = verdict,
+            Runtime = runtime,
+            Relation = "cross-runtime",
+            At = time,
+            RecordId = id,
+        };
+
+        var tied = new[]
+        {
+            Review("claude", "request-changes", at, "same-local-record-id"),
+            Review("claude", "approve", at, "same-local-record-id"),
+        };
+        Assert.False(UnitEvidenceEvaluator.TryOrderReviewRows(tied, out var tiedRows, out var conflict));
+        Assert.Equal(2, tiedRows.Count);
+        Assert.Contains("conflicting dispositions", conflict, StringComparison.Ordinal);
+
+        var ordered = new[]
+        {
+            Review("claude", "request-changes", at, "record-a"),
+            Review("claude", "approve", at.AddMinutes(1), "record-b"),
+        };
+        Assert.True(UnitEvidenceEvaluator.TryOrderReviewRows(ordered, out var orderedRows, out _));
+        Assert.Equal(["request-changes", "approve"], orderedRows.Select(review => review.Verdict));
+
+        var distinctRuntime = new[]
+        {
+            Review("claude", "request-changes", at, "same-id"),
+            Review("codex", "approve", at, "same-id"),
+        };
+        Assert.True(UnitEvidenceEvaluator.TryOrderReviewRows(distinctRuntime, out var distinctRows, out _));
+        Assert.Equal(2, distinctRows.Count);
     }
 
     private static UnitStatusEvidenceSnapshot Snapshot(

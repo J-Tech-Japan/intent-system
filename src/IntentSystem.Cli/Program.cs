@@ -37,8 +37,8 @@ internal static class Program
             // expiry passes, fail closed BEFORE any workflow command or
             // host-state lookup so operators see a single, clear
             // "download a newer artifact" message regardless of the
-            // current working directory. `--version` and `update` are
-            // intentionally exempt (handled above) so the operator can inspect
+            // current working directory. `--version` is intentionally
+            // exempt (handled above) so the operator can still inspect
             // the embedded build/expiry trailer. Source builds
             // (no PrivatePreview AssemblyMetadata) pass through.
             if (PrivatePreviewExpiryGate.Check(Console.Out) == PrivatePreviewExpiryDecision.Expired)
@@ -81,7 +81,8 @@ internal static class Program
                     };
                 }
                 catch (Exception exception) when (exception is DirectoryNotFoundException or FileNotFoundException
-                    or InvalidOperationException or IOException or System.Text.Json.JsonException or Tomlyn.TomlException)
+                    or InvalidOperationException or IOException or UnauthorizedAccessException
+                    or System.Text.Json.JsonException or Tomlyn.TomlException)
                 {
                     return UnitStatusCommand.ExecuteHostRefusal(args, exception.Message, Console.Out);
                 }

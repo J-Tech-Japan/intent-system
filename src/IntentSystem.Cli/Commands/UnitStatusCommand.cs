@@ -146,6 +146,9 @@ internal static class UnitStatusCommand
         var claimedTeam = claims.ActiveClaim?.Team
             ?? (claimedTeams.Length == 1 ? claimedTeams[0] : null);
         var team = string.IsNullOrWhiteSpace(askedTeam) ? claimedTeam : askedTeam.Trim();
+        var packetDomainInvalid = !string.IsNullOrWhiteSpace(declaredDomain) && !SafeScope(declaredDomain.Trim());
+        var domainScopeInvalid = domain is not null && !SafeScope(domain) || scopedDomains.Any(candidate => !SafeScope(candidate));
+        var teamScopeInvalid = team is not null && !SafeScope(team);
         var packetUnitInvalid = packet?.Fields.GetValueOrDefault("execution_unit") is { } packetUnitValue
             && !string.Equals(packetUnitValue, unit, StringComparison.Ordinal);
         var conflict = repoValues.Length > 1 || issueValues.Length > 1 || prValues.Length > 1 || scopedDomains.Length > 1
@@ -154,6 +157,7 @@ internal static class UnitStatusCommand
             || runIdentity.Any(candidate => candidate.InvalidIdentity)
             || publishIdentityInvalid || packetUnitInvalid || queueIdentityInvalid
             || packetRepo is not null && !SafeRepo(packetRepo)
+            || domainScopeInvalid || teamScopeInvalid
             || claims.ActiveClaim is null && claimedTeams.Length > 1
             || queueScanError is not null || runScanError is not null
             || domain is not null && scopedDomains.Any(candidate => candidate != domain)
@@ -171,8 +175,16 @@ internal static class UnitStatusCommand
         if (claims.State == UnitStatusStates.Unavailable) AddClaimFacts(facts, claims, team, unit);
         if (conflict)
             return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
-                UnitStatusStates.Unavailable, queueScanError is not null || runScanError is not null ? "identity-candidates-unreadable" : "identity-conflict",
-                queueScanError ?? runScanError ?? "Packet, publish, queue, runs, claim, or explicit identity assertions disagree.",
+                UnitStatusStates.Unavailable,
+                queueScanError is not null || runScanError is not null ? "identity-candidates-unreadable"
+                    : packetDomainInvalid ? "packet-domain-invalid"
+                    : domainScopeInvalid ? "domain-scope-invalid"
+                    : teamScopeInvalid ? "team-scope-invalid"
+                    : "identity-conflict",
+                queueScanError ?? runScanError ?? (packetDomainInvalid ? "Packet domain is not a safe path scope."
+                    : domainScopeInvalid ? "A packet, queue, or run domain is not a safe path scope."
+                    : teamScopeInvalid ? "Resolved team is not a safe path scope."
+                    : "Packet, publish, queue, runs, claim, or explicit identity assertions disagree."),
                 queueScanError is not null || runScanError is not null ? UnitStatusStates.ReadFailure : UnitStatusStates.IdentityConflict);
         if (claims.State != UnitStatusStates.Unavailable && team is not null) AddClaimFacts(facts, claims, team, unit);
         if (packetError is not null)
@@ -294,6 +306,13 @@ internal static class UnitStatusCommand
             facts.Add(Unavailable("issue-completion-marker", "github-read-failed", "The issue labels could not be observed.", UnitStatusStates.ReadFailure));
             foreach (var id in new[] { "posted-review", "delta-review", "observed-ci", "approved-marker", "approval-head-receipt", "pr-merged" })
                 facts.Add(Missing(id, "pr-not-linked", "No pull request is linked to this successfully resolved issue identity yet."));
+        }
+        else if (repo is not null && issue is null && pr is null)
+        {
+            foreach (var id in new[] { "issue-completion-marker", "posted-review", "delta-review", "observed-ci", "approved-marker", "approval-head-receipt", "pr-merged", "recorded-review" })
+                facts.RemoveAll(fact => fact.Id == id);
+            foreach (var id in new[] { "issue-completion-marker", "posted-review", "delta-review", "observed-ci", "approved-marker", "approval-head-receipt", "pr-merged", "recorded-review" })
+                facts.Add(Missing(id, "issue-not-published", "No issue has been published for this locally resolved unit identity."));
         }
         else
         {
@@ -1041,6 +1060,8 @@ internal static class UnitStatusCommand
             Runtime = item.Record.Runtime, Relation = item.Record.Relation, At = item.Record.RecordedAt,
             RecordId = item.RelativePath, CitedRecordPath = item.Record.RawVerdictFile,
         }).ToArray();
+        var localReviewOrderingValid = UnitEvidenceEvaluator.TryOrderReviewRows(
+            localReviews, out var orderedLocalReviews, out var localReviewOrderingError);
         var reviewEvidence = matching.Select(item => new UnitStatusEvidencePointer
         {
             Kind = "cross-runtime-review-record",
@@ -1058,6 +1079,7 @@ internal static class UnitStatusCommand
         }).ToArray();
         facts.Add((pr is null ? Missing("recorded-review", "pr-not-linked", "A local PR review record cannot be selected until the unit has a linked pull request.")
             : review?.Unreadable.Count > 0 ? Unavailable("recorded-review", "recorded-review-unreadable", string.Join("; ", review.Unreadable.Select(item => item.Error)), UnitStatusStates.ReadFailure)
+            : !localReviewOrderingValid ? Unavailable("recorded-review", "recorded-review-identity-conflict", localReviewOrderingError, UnitStatusStates.IdentityConflict)
             : currentHead is null ? Unavailable("recorded-review", "current-pr-head-unavailable", "Digest-validated records cannot be compared with a current PR head.", UnitStatusStates.ReadFailure)
             : matching.Any(item => string.Equals(item.Record.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase))
                 ? Done("recorded-review", "recorded-review-current-head", "Digest-validated local implementation review evidence matches the observed PR head.")
@@ -1078,7 +1100,7 @@ internal static class UnitStatusCommand
         {
             foreach (var id in new[] { "architect-knowledge-writeback", "orchestrator-knowledge-writeback", "guide-reachability" })
                 facts.Add(Unavailable(id, "packet-unavailable", "Packet declaration is unavailable.", UnitStatusStates.ReadFailure));
-            return localReviews;
+            return orderedLocalReviews;
         }
         KnowledgeWriteBackDeclaration declaration;
         try { declaration = KnowledgeWriteBackDeclaration.Read(yaml); }
@@ -1086,7 +1108,7 @@ internal static class UnitStatusCommand
         {
             foreach (var id in new[] { "architect-knowledge-writeback", "orchestrator-knowledge-writeback", "guide-reachability" })
                 facts.Add(Unavailable(id, "packet-declaration-unreadable", exception.Message, UnitStatusStates.ReadFailure));
-            return localReviews;
+            return orderedLocalReviews;
         }
         if (!declaration.IsRequired && !HasExplicitKnowledgeWriteBackDeclaration(yaml))
         {
@@ -1104,7 +1126,7 @@ internal static class UnitStatusCommand
             AddWritebackFact(facts, root, unit, LogicalRoleNormalizer.Orchestrator, "orchestrator-knowledge-writeback");
         }
         AddGuideFact(facts, root, unit, yaml);
-        return localReviews;
+        return orderedLocalReviews;
     }
 
     private static void AddRunFact(ICollection<UnitStatusFact> facts, string id, string eventName, IReadOnlyList<RunEvent> runs,
@@ -1135,31 +1157,62 @@ internal static class UnitStatusCommand
         facts.Add(fact with { Evidence = pointers.Length > 0 ? pointers : evidence is null ? [] : [evidence] });
     }
 
+    internal static (IReadOnlyList<T> Rows, IReadOnlyList<string> Errors) ReadRoleRecordRows<T>(
+        Func<IEnumerable<string>> enumeratePaths,
+        Func<string, T> readRecord)
+    {
+        var rows = new List<T>();
+        var errors = new List<string>();
+        try
+        {
+            foreach (var path in enumeratePaths())
+            {
+                try { rows.Add(readRecord(path)); }
+                catch (Exception exception) when (IsReadException(exception)) { errors.Add(exception.Message); }
+            }
+        }
+        catch (Exception exception) when (IsReadException(exception))
+        {
+            errors.Add(exception.Message);
+        }
+
+        return (rows, errors);
+    }
+
     private static void AddWritebackFact(ICollection<UnitStatusFact> facts, string root, string unit, string role, string id)
     {
-        var rows = new List<(KnowledgeWriteBackRecord Record, string Path)>();
-        var errors = new List<string>();
-        foreach (var path in RoleScopedCloseoutRecordStore.EnumerateExistingPaths(root, KnowledgeWriteBackRecord.RecordRootRelativePath, unit))
+        var read = ReadRoleRecordRows(
+            () => RoleScopedCloseoutRecordStore.EnumerateExistingPaths(root, KnowledgeWriteBackRecord.RecordRootRelativePath, unit),
+            path => (Record: KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(path), unit), Path: path));
+        var rows = read.Rows;
+        var errors = read.Errors;
+        UnitStatusEvidencePointer Pointer((KnowledgeWriteBackRecord Record, string Path) row)
         {
-            try { rows.Add((KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(path), unit), path)); }
-            catch (Exception exception) when (IsReadException(exception)) { errors.Add(exception.Message); }
-        }
-        UnitStatusEvidencePointer Pointer((KnowledgeWriteBackRecord Record, string Path) row) =>
-            LocalFileEvidence(root, row.Path, "knowledge-writeback-record", unit, "role-attributed-local-closeout-record",
+            var qualifies = row.Record.Role is not null
+                && CloseoutRecordRole.TryNormalize(row.Record.Role, out var normalizedRole, out _)
+                && normalizedRole == role;
+            var provenance = row.Record.Role is null
+                ? "legacy-role-unattributed; required-role=" + role + "; qualifies=false"
+                : "observed-role-record; required-role=" + role + "; qualifies=" + (qualifies ? "true" : "false");
+            return LocalFileEvidence(root, row.Path, "knowledge-writeback-record", unit, provenance,
                 row.Record.RecordedAt.ToString("O", CultureInfo.InvariantCulture), recordedAt: row.Record.RecordedAt)!
                 with { Role = row.Record.Role };
+        }
         var matching = rows.Where(row => row.Record.Role is not null
             && CloseoutRecordRole.TryNormalize(row.Record.Role, out var normalizedRole, out _)
             && normalizedRole == role).ToArray();
         var legacy = rows.Where(row => row.Record.Role is null).ToArray();
-        if (errors.Count > 0) facts.Add(Unavailable(id, "writeback-unreadable", string.Join("; ", errors), UnitStatusStates.ReadFailure));
+        var evidence = rows.Select(Pointer).ToArray();
+        if (errors.Count > 0) facts.Add(Unavailable(id, "writeback-unreadable", string.Join("; ", errors), UnitStatusStates.ReadFailure)
+            with { Evidence = evidence });
         else if (matching.Length > 1) facts.Add(Unavailable(id, "duplicate-closeout-role-record", "Duplicate records exist for this role duty.", UnitStatusStates.IdentityConflict)
-            with { Evidence = matching.Select(Pointer).ToArray() });
+            with { Evidence = evidence });
         else if (matching.Length == 1) facts.Add(Done(id, "role-attributed-writeback-recorded", "A write-back record names recorder role " + role + ".")
-            with { Evidence = matching.Select(Pointer).ToArray() });
+            with { Evidence = evidence });
         else if (legacy.Length > 0) facts.Add(Unavailable(id, "legacy-closeout-role-unattributed", "An unattributed legacy record cannot satisfy a role-specific duty.", UnitStatusStates.ProvenanceLimit)
-            with { Evidence = legacy.Select(Pointer).ToArray() });
-        else facts.Add(Missing(id, "role-writeback-absent", "No record attributed to " + role + " was found."));
+            with { Evidence = evidence });
+        else facts.Add(Missing(id, "role-writeback-absent", "No record attributed to " + role + " was found.")
+            with { Evidence = evidence });
     }
 
     private static void AddGuideFact(ICollection<UnitStatusFact> facts, string root, string unit, string yaml)
@@ -1170,30 +1223,34 @@ internal static class UnitStatusCommand
         { facts.Add(Unavailable("guide-reachability", "guide-declaration-unreadable", exception.Message, UnitStatusStates.ReadFailure)); return; }
         if (!declaration.IsDeclared) { facts.Add(Missing("guide-reachability", "guide-declaration-absent", "Legacy packet has no guide declaration.")); return; }
         if (declaration.NoRoleFacingSurface) { facts.Add(NotApplicable("guide-reachability", "explicit-no-role-facing-surface", "Packet explicitly declares no role-facing surface.")); return; }
-        var rows = new List<(GuideReachabilityRecord Record, string Path)>();
-        var errors = new List<string>();
-        foreach (var path in RoleScopedCloseoutRecordStore.EnumerateExistingPaths(root, GuideReachabilityRecord.RecordRootRelativePath, unit))
+        var read = ReadRoleRecordRows(
+            () => RoleScopedCloseoutRecordStore.EnumerateExistingPaths(root, GuideReachabilityRecord.RecordRootRelativePath, unit),
+            path => (Record: GuideReachabilityRecord.Deserialize(File.ReadAllText(path), unit), Path: path));
+        var rows = read.Rows;
+        var errors = read.Errors;
+        UnitStatusEvidencePointer Pointer((GuideReachabilityRecord Record, string Path) row)
         {
-            try { rows.Add((GuideReachabilityRecord.Deserialize(File.ReadAllText(path), unit), path)); }
-            catch (Exception exception) when (IsReadException(exception)) { errors.Add(exception.Message); }
+            var qualifies = row.Record.Role == LogicalRoleNormalizer.Architect;
+            var provenance = row.Record.Role is null
+                ? "legacy-role-unattributed; required-role=architect; qualifies=false"
+                : "observed-role-record; required-role=architect; qualifies=" + (qualifies ? "true" : "false");
+            return LocalFileEvidence(root, row.Path, "guide-reachability-record", unit, provenance,
+                recordedAt: row.Record.RecordedAt)!
+                with { Role = row.Record.Role };
         }
-        if (errors.Count > 0) facts.Add(Unavailable("guide-reachability", "guide-record-unreadable", string.Join("; ", errors), UnitStatusStates.ReadFailure));
-        else
-        {
-            UnitStatusEvidencePointer Pointer((GuideReachabilityRecord Record, string Path) row) =>
-                LocalFileEvidence(root, row.Path, "guide-reachability-record", unit, "architect-attributed-local-guide-record",
-                    recordedAt: row.Record.RecordedAt)!
-                    with { Role = row.Record.Role };
-            var matching = rows.Where(row => row.Record.Role == LogicalRoleNormalizer.Architect).ToArray();
-            var legacy = rows.Where(row => row.Record.Role is null).ToArray();
-            if (matching.Length > 1) facts.Add(Unavailable("guide-reachability", "duplicate-closeout-role-record", "Duplicate architect records exist.", UnitStatusStates.IdentityConflict)
-                with { Evidence = matching.Select(Pointer).ToArray() });
-            else if (matching.Length == 1) facts.Add(Done("guide-reachability", "guide-reachability-recorded", "An architect-attributed guide record exists.")
-                with { Evidence = matching.Select(Pointer).ToArray() });
-            else if (legacy.Length > 0) facts.Add(Unavailable("guide-reachability", "legacy-closeout-role-unattributed", "An unattributed legacy record cannot satisfy the architect duty.", UnitStatusStates.ProvenanceLimit)
-                with { Evidence = legacy.Select(Pointer).ToArray() });
-            else facts.Add(Missing("guide-reachability", "guide-record-absent", "No architect-attributed guide record exists."));
-        }
+        var matching = rows.Where(row => row.Record.Role == LogicalRoleNormalizer.Architect).ToArray();
+        var legacy = rows.Where(row => row.Record.Role is null).ToArray();
+        var evidence = rows.Select(Pointer).ToArray();
+        if (errors.Count > 0) facts.Add(Unavailable("guide-reachability", "guide-record-unreadable", string.Join("; ", errors), UnitStatusStates.ReadFailure)
+            with { Evidence = evidence });
+        else if (matching.Length > 1) facts.Add(Unavailable("guide-reachability", "duplicate-closeout-role-record", "Duplicate architect records exist.", UnitStatusStates.IdentityConflict)
+            with { Evidence = evidence });
+        else if (matching.Length == 1) facts.Add(Done("guide-reachability", "guide-reachability-recorded", "An architect-attributed guide record exists.")
+            with { Evidence = evidence });
+        else if (legacy.Length > 0) facts.Add(Unavailable("guide-reachability", "legacy-closeout-role-unattributed", "An unattributed legacy record cannot satisfy the architect duty.", UnitStatusStates.ProvenanceLimit)
+            with { Evidence = evidence });
+        else facts.Add(Missing("guide-reachability", "guide-record-absent", "No architect-attributed guide record exists.")
+            with { Evidence = evidence });
     }
 
     private static UnitStatusEvidenceSnapshot Build(string unit, string? domain, string? team, string? repo, int? issue, int? pr,
@@ -1323,7 +1380,9 @@ internal static class UnitStatusCommand
         return true;
     }
 
-    private static bool SafeScope(string value) => value.Length <= 128 && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
+    private static bool SafeScope(string value) => value.Length is > 0 and <= 128
+        && value is not "." and not ".."
+        && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
     private static bool IsHelp(IReadOnlyList<string> args) => args.Count == 1 && args[0] is "--help" or "help";
     private static UnitStatusEvidencePointer EvidenceFile(string kind, string path, string unit, string provenance) => new()
     {

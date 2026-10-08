@@ -465,7 +465,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             }
         }
 
-        if (!TryOrderReviewRows(reviewRows, out var orderedReviewRows, out var reviewOrderingError))
+        if (!UnitEvidenceEvaluator.TryOrderReviewRows(reviewRows, out var orderedReviewRows, out var reviewOrderingError))
         {
             reviewIdentityFailure = true;
             reviewFailureDetail = reviewOrderingError;
@@ -611,7 +611,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 CitedRecordPath = item.Record.RawVerdictFile,
             });
         var deltaReviewRows = reviewRows.Concat(recordedReviewRows).ToArray();
-        var deltaOrderingValid = TryOrderReviewRows(deltaReviewRows, out var orderedDeltaReviewRows, out var deltaOrderingError);
+        var deltaOrderingValid = UnitEvidenceEvaluator.TryOrderReviewRows(deltaReviewRows, out var orderedDeltaReviewRows, out var deltaOrderingError);
         var deltaIdentityConflict = reviewIdentityFailure || !deltaOrderingValid;
         var deltaLocalReadFailure = localReviews.Unreadable.Count > 0;
         var deltaReviewFailure = deltaIdentityConflict
@@ -977,37 +977,6 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         return true;
     }
 
-    private static bool TryOrderReviewRows(
-        IEnumerable<UnitStatusObservedReview> reviews,
-        out IReadOnlyList<UnitStatusObservedReview> ordered,
-        out string detail)
-    {
-        var rows = reviews.ToArray();
-        var ambiguous = rows
-            .GroupBy(review => (
-                review.Source,
-                Head: review.HeadSha.ToUpperInvariant(),
-                Reviewer: review.Reviewer?.ToUpperInvariant() ?? "",
-                Runtime: review.Runtime?.ToUpperInvariant() ?? "",
-                Relation: review.Relation?.ToUpperInvariant() ?? ""))
-            .SelectMany(group => group.GroupBy(review => (review.At, review.RecordId)))
-            .Any(tied => tied.Select(review => (review.Verdict, review.ReviewState, review.Dismissed)).Distinct().Skip(1).Any());
-
-        ordered = rows
-            .OrderBy(review => review.Source, StringComparer.Ordinal)
-            .ThenBy(review => review.HeadSha, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(review => review.Reviewer, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(review => review.Runtime, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(review => review.Relation, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(review => review.At)
-            .ThenBy(review => review.RecordId, StringComparer.Ordinal)
-            .ToArray();
-        detail = ambiguous
-            ? "Review rows with the same source, head, reviewer/runtime relation, submission time, and record ID contain conflicting dispositions."
-            : "";
-        return !ambiguous;
-    }
-
     private static bool TryValidateCitedReviewRecord(
         CrossRuntimeReviewReadResult localReviews,
         string citedRecord,
@@ -1045,20 +1014,35 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
     private static UnitStatusReviewBodyParse ParseReviewBody(string body)
     {
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var leadingLine = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')
+            .Select(line => line.Trim()).FirstOrDefault(line => line.Length > 0);
         string? heading = null;
         string? citedRecord = null;
         var conflicting = false;
+        var inMetadataHeader = true;
         foreach (var rawLine in body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
         {
             var line = rawLine.Trim();
-            if (line.StartsWith("## ", StringComparison.Ordinal)) heading = line[3..].Trim();
+            if (heading is null && line.StartsWith("## ", StringComparison.Ordinal)) heading = line[3..].Trim();
             if (line.StartsWith("Recorded as `", StringComparison.Ordinal)
-                && line.Contains("` by `intent-cli review cross-runtime record`", StringComparison.Ordinal))
+                && line.EndsWith("` by `intent-cli review cross-runtime record`.", StringComparison.Ordinal))
             {
                 var close = line.IndexOf('`', "Recorded as `".Length);
-                if (close > "Recorded as `".Length) citedRecord = line["Recorded as `".Length..close];
+                if (close > "Recorded as `".Length)
+                {
+                    var citation = line["Recorded as `".Length..close];
+                    if (citedRecord is not null && !string.Equals(citedRecord, citation, StringComparison.Ordinal)) conflicting = true;
+                    else citedRecord = citation;
+                }
             }
 
+            if (line.StartsWith("### ", StringComparison.Ordinal))
+            {
+                inMetadataHeader = false;
+                continue;
+            }
+
+            if (!inMetadataHeader) continue;
             if (line.StartsWith("- ", StringComparison.Ordinal)) line = line[2..].Trim();
             var colon = line.IndexOf(':');
             if (colon <= 0) continue;
@@ -1070,6 +1054,8 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 "runtime version" => "runtime_version",
                 var other => other,
             };
+            if (key is not ("reviewer" or "runtime" or "runtime_version" or "model" or "effort"
+                or "conductor_runtime" or "head_sha" or "kind" or "execution_unit" or "verdict")) continue;
             var value = line[(colon + 1)..].Trim().Trim('`');
             if (fields.TryGetValue(key, out var previous) && !string.Equals(previous, value, StringComparison.Ordinal))
             {
@@ -1088,7 +1074,17 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 : null;
         var headingVerdict = relation is null || heading is null ? null : heading[(heading.IndexOf(':') + 1)..].Trim();
         var reviewer = fields.GetValueOrDefault("reviewer");
+        var namedIndependentHeading = heading is not null
+            && (heading.StartsWith("Independent subagent review:", StringComparison.OrdinalIgnoreCase)
+                || heading.StartsWith("Independent same-runtime subagent review:", StringComparison.OrdinalIgnoreCase)
+                || heading.StartsWith("Cross-runtime review:", StringComparison.OrdinalIgnoreCase));
+        var namedIndependentLead = leadingLine is not null
+            && (leadingLine.StartsWith("Independent subagent review:", StringComparison.OrdinalIgnoreCase)
+                || leadingLine.StartsWith("Independent same-runtime subagent review:", StringComparison.OrdinalIgnoreCase)
+                || leadingLine.StartsWith("Cross-runtime review:", StringComparison.OrdinalIgnoreCase));
         var namedIndependent = relation is not null
+            || namedIndependentHeading
+            || namedIndependentLead
             || string.Equals(reviewer, "independent same-runtime subagent review", StringComparison.OrdinalIgnoreCase)
             || string.Equals(reviewer, "independent subagent review", StringComparison.OrdinalIgnoreCase)
             || string.Equals(reviewer, "cross-runtime review", StringComparison.OrdinalIgnoreCase);

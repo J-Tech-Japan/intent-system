@@ -97,6 +97,37 @@ internal static class UnitEvidenceEvaluator
         };
     }
 
+    internal static bool TryOrderReviewRows(
+        IEnumerable<UnitStatusObservedReview> reviews,
+        out IReadOnlyList<UnitStatusObservedReview> ordered,
+        out string detail)
+    {
+        var rows = reviews.ToArray();
+        var ambiguous = rows
+            .GroupBy(review => (
+                review.Source,
+                Head: review.HeadSha.ToUpperInvariant(),
+                Reviewer: review.Reviewer?.ToUpperInvariant() ?? "",
+                Runtime: review.Runtime?.ToUpperInvariant() ?? "",
+                Relation: review.Relation?.ToUpperInvariant() ?? ""))
+            .SelectMany(group => group.GroupBy(review => (review.At, review.RecordId)))
+            .Any(tied => tied.Select(review => (review.Verdict, review.ReviewState, review.Dismissed)).Distinct().Skip(1).Any());
+
+        ordered = rows
+            .OrderBy(review => review.Source, StringComparer.Ordinal)
+            .ThenBy(review => review.HeadSha, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(review => review.Reviewer, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(review => review.Runtime, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(review => review.Relation, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(review => review.At)
+            .ThenBy(review => review.RecordId, StringComparer.Ordinal)
+            .ToArray();
+        detail = ambiguous
+            ? "Review rows with the same source, head, reviewer/runtime relation, submission time, and record ID contain conflicting dispositions."
+            : "";
+        return !ambiguous;
+    }
+
     private static UnitStatusStep BuildStep(
         string id,
         IReadOnlyList<string> factIds,
@@ -110,23 +141,23 @@ internal static class UnitEvidenceEvaluator
             ? applicabilityState == UnitStatusStates.Unavailable
                 ? IsClaimSnapshotProvenanceLimit(fact)
                     ? NormalizeFact(fact)
-                    : fact with
-                {
-                    State = UnitStatusStates.Unavailable,
-                    Cause = applicabilityCause ?? "applicability-unresolved",
-                    Detail = applicabilityDetail ?? "Observation stopped before this evidence was read.",
-                    UnavailableClass = unavailableClass ?? UnitStatusStates.ApplicabilityUnresolved,
-                }
+                    : NormalizeFact(fact with
+                    {
+                        State = UnitStatusStates.Unavailable,
+                        Cause = applicabilityCause ?? "applicability-unresolved",
+                        Detail = applicabilityDetail ?? "Observation stopped before this evidence was read.",
+                        UnavailableClass = unavailableClass ?? UnitStatusStates.ApplicabilityUnresolved,
+                    })
                 : NormalizeFact(fact)
             : applicabilityState == UnitStatusStates.Unavailable
-                ? new UnitStatusFact
+                ? NormalizeFact(new UnitStatusFact
                 {
                     Id = factId,
                     State = UnitStatusStates.Unavailable,
                     Cause = applicabilityCause ?? "applicability-unresolved",
                     Detail = applicabilityDetail ?? "Observation stopped before this evidence was read.",
                     UnavailableClass = unavailableClass ?? UnitStatusStates.ApplicabilityUnresolved,
-                }
+                })
                 : new UnitStatusFact
             {
                 Id = factId,
@@ -153,17 +184,18 @@ internal static class UnitEvidenceEvaluator
 
     private static UnitStatusFact NormalizeFact(UnitStatusFact fact)
     {
-        if (fact.State != UnitStatusStates.Unavailable
-            || fact.UnavailableClass != UnitStatusStates.ProvenanceLimit
-            || fact.RepairCommands.Count == 0)
-        {
-            return fact;
-        }
+        if (fact.State != UnitStatusStates.Unavailable) return fact;
+
+        var provenanceLimit = fact.UnavailableClass == UnitStatusStates.ProvenanceLimit;
+        if (!provenanceLimit && fact.RepairCommands.Count > 0) return fact;
+        if (!provenanceLimit && !string.IsNullOrWhiteSpace(fact.RepairUnavailableReason)) return fact;
 
         return fact with
         {
-            RepairCommands = [],
-            RepairUnavailableReason = fact.RepairUnavailableReason ?? "no-supported-repair-command-in-this-slice",
+            RepairCommands = provenanceLimit ? [] : fact.RepairCommands,
+            RepairUnavailableReason = string.IsNullOrWhiteSpace(fact.RepairUnavailableReason)
+                ? "no-supported-repair-command-in-this-slice"
+                : fact.RepairUnavailableReason,
         };
     }
 

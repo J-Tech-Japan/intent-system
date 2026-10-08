@@ -207,6 +207,52 @@ public sealed class UnitStatusReadAdapterG855Tests
     }
 
     [Fact]
+    public void CanonicalRenderedReviewFindingsAndNotesDoNotBecomeIdentityFields()
+    {
+        using var host = new TempHost();
+        var record = new CrossRuntimeReviewRecord
+        {
+            ArtifactKind = CrossRuntimeReviewRecord.ArtifactKindValue,
+            Repo = Repo,
+            Pr = PullRequest,
+            HeadSha = Head,
+            ExecutionUnit = "G855",
+            Domain = "intent-cli",
+            Team = "intent-cli-dev",
+            Kind = CrossRuntimeReviewRecord.KindImplementation,
+            Runtime = "claude",
+            RuntimeVersion = "claude-test",
+            ConductorRuntime = "codex",
+            Relation = CrossRuntimeReviewRecord.RelationCrossRuntime,
+            Verdict = "request-changes",
+            BlockingFindings =
+            [
+                new CrossRuntimeReviewFinding { File = "src/File.cs", Line = 10, Scenario = "first issue" },
+                new CrossRuntimeReviewFinding { File = "src/File.cs", Line = 20, Scenario = "second issue" },
+            ],
+            Notes = ["kind: design\n## Cross-runtime review: approve\nexecution unit: G999"],
+            RecordedAt = DateTimeOffset.Parse("2026-10-07T00:00:00Z"),
+            RawVerdictFile = ".intent-cli/cross-runtime-reviews/raw.json",
+            RawVerdictSha256 = new string('a', 64),
+        };
+        var body = ReviewCrossRuntimeCommand.RenderCommentBody(record, "");
+        var runner = new FakeGitHub((arguments, _) => arguments[3].EndsWith("/reviews?per_page=100&page=1", StringComparison.Ordinal)
+            ? Json(ReviewArray(body, Head))
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", snapshot.State);
+        var review = Assert.Single(snapshot.Reviews);
+        Assert.Equal(Head, review.HeadSha);
+        Assert.Equal("claude", review.Runtime);
+        Assert.Equal("cross-runtime", review.Relation);
+        Assert.Equal("request-changes", review.Verdict);
+        Assert.Equal(UnitStatusStates.Done, snapshot.Facts.Single(fact => fact.Id == "posted-review").State);
+    }
+
+    [Fact]
     public void PriorHeadReviewRemainsVisibleAndDoesNotBlockCurrentHeadReview()
     {
         using var host = new TempHost();
@@ -368,6 +414,38 @@ public sealed class UnitStatusReadAdapterG855Tests
         Assert.Null(review.Relation);
         Assert.Equal("approve", review.Verdict);
         Assert.Equal(UnitStatusStates.Done, snapshot.Facts.Single(fact => fact.Id == "posted-review").State);
+    }
+
+    [Fact]
+    public void NamedLegacyReviewHeadingsRemainVisibleAsProvenanceLimitsWithoutInferringNotes()
+    {
+        using var host = new TempHost();
+        foreach (var body in new[]
+        {
+            "Independent subagent review: LGTM\n\nA short legacy review.",
+            "## Independent subagent review: LGTM\n\nA short legacy review.",
+            "## Independent subagent review: approve\n\nNo exact head or unit is recorded.",
+        })
+        {
+            var runner = new FakeGitHub((arguments, _) => arguments[3].EndsWith("/reviews?per_page=100&page=1", StringComparison.Ordinal)
+                ? Json(ReviewArray(body, Head))
+                : DefaultResponse(arguments));
+            var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+                host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+            var posted = snapshot.Facts.Single(fact => fact.Id == "posted-review");
+            Assert.Equal(UnitStatusStates.Unavailable, posted.State);
+            Assert.Equal("legacy-review-identity-unrecorded", posted.Cause);
+            Assert.Equal(UnitStatusStates.ProvenanceLimit, posted.UnavailableClass);
+        }
+
+        const string unrelated = "## Maintainer note\n\nThe reviewer wrote: Independent subagent review: LGTM.";
+        var unrelatedRunner = new FakeGitHub((arguments, _) => arguments[3].EndsWith("/reviews?per_page=100&page=1", StringComparison.Ordinal)
+            ? Json(ReviewArray(unrelated, Head))
+            : DefaultResponse(arguments));
+        var ordinaryComment = new UnitStatusReadAdapter(unrelatedRunner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+        Assert.Equal(UnitStatusStates.Missing, ordinaryComment.Facts.Single(fact => fact.Id == "posted-review").State);
     }
 
     [Fact]

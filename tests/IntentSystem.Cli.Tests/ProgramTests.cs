@@ -257,6 +257,48 @@ public sealed class ProgramTests
             Assert.Equal("host-config-unreadable", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
             Assert.Equal("read-failure", report.RootElement.GetProperty("applicability").GetProperty("unavailable_class").GetString());
             Assert.Equal("not-observed", report.RootElement.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+            var facts = report.RootElement.GetProperty("steps").EnumerateArray()
+                .SelectMany(step => step.GetProperty("subchecks").EnumerateArray()).ToArray();
+            Assert.Equal(26, facts.Length);
+            Assert.All(facts.Where(fact => fact.GetProperty("repair_commands").GetArrayLength() == 0), fact =>
+                Assert.False(string.IsNullOrWhiteSpace(fact.GetProperty("repair_unavailable_reason").GetString())));
+        }
+    }
+
+    [Fact]
+    public void Main_UnitStatusUnreadableHostConfigPermissionReturnsStructuredRefusal()
+    {
+        lock (ProcessStateLock)
+        {
+            if (OperatingSystem.IsWindows() || string.Equals(Environment.UserName, "root", StringComparison.OrdinalIgnoreCase))
+                throw Xunit.Sdk.SkipException.ForSkip("Unix permission enforcement is unavailable under this test identity.");
+
+            using var tempDirectory = new TemporaryDirectory();
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+            var configPath = tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "config.toml"), "default_domain = \"intent-cli\"\n");
+            var originalMode = File.GetUnixFileMode(configPath);
+            File.SetUnixFileMode(configPath, UnixFileMode.None);
+            try
+            {
+                if (Record.Exception(() => File.ReadAllText(configPath)) is not UnauthorizedAccessException)
+                    throw Xunit.Sdk.SkipException.ForSkip("The operating system did not reject a direct read of the mode-000 config fixture.");
+
+                var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+                using var consoleScope = new ConsoleScope();
+                using var currentDirectoryScope = new CurrentDirectoryScope(workingDirectory);
+
+                var exitCode = Program.Main(["unit", "status", "--execution-unit", "G855", "--format", "json"]);
+
+                Assert.Equal(1, exitCode);
+                using var report = JsonDocument.Parse(consoleScope.Out.ToString());
+                Assert.Equal("host-config-unreadable", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+                Assert.Equal("read-failure", report.RootElement.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+                Assert.Equal("not-observed", report.RootElement.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+            }
+            finally
+            {
+                File.SetUnixFileMode(configPath, originalMode);
+            }
         }
     }
 

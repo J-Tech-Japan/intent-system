@@ -427,6 +427,10 @@ public sealed class G833SoloConductorTests : IDisposable
         Assert.Contains("## Builder invocations (guidance)", text, StringComparison.Ordinal);
         Assert.Contains("The model is required.", text, StringComparison.Ordinal);
         Assert.Contains(G842PinnedContractTexts.OpencodeBuilderConfigJson.Trim(), text, StringComparison.Ordinal);
+        Assert.Contains("four evidence states: `done`, `missing`, `not-applicable`, and `unavailable`", text, StringComparison.Ordinal);
+        var guide = GuideSoloConductorCommand.BuildGuide();
+        Assert.Contains("four evidence states", guide.Loop.Single(step => step.Number == 7).Instruction, StringComparison.Ordinal);
+        Assert.Contains("four evidence states", guide.Loop.Single(step => step.Number == 10).Instruction, StringComparison.Ordinal);
     }
 
     [Fact]
