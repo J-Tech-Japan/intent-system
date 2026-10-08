@@ -441,6 +441,34 @@ public sealed class UnitStatusCommandG855Tests
         Assert.Contains("0000-release.json", oldEvidence.GetProperty("path").GetString()!, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("architect", "design-claim-acquired", "design-claim-release")]
+    [InlineData("builder", "implementation-claim-acquired", "implementation-claim-release")]
+    public void ActiveClaimWithoutAnyReleaseHistoryReportsReleaseNotObserved(string actor, string acquiredFactId, string releaseFactId)
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact();
+        var active = TempHost.Claim(actor, DateTimeOffset.Parse("2026-10-03T00:00:00Z"));
+        var reader = TempHost.CreateRealAdapter(host, active, []);
+        using var writer = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"], writer, reader);
+
+        Assert.Equal(0, exit);
+        using var report = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("done", TempHost.FindSubcheck(report.RootElement, acquiredFactId).GetProperty("state").GetString());
+        var release = TempHost.FindSubcheck(report.RootElement, releaseFactId);
+        Assert.Equal("missing", release.GetProperty("state").GetString());
+        Assert.Equal("claim-release-not-observed", release.GetProperty("cause").GetString());
+        Assert.Contains("no release record", release.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+        var evidence = Assert.Single(release.GetProperty("evidence").EnumerateArray());
+        Assert.Contains("configured-local-claim-snapshot:scope=execution-unit:G855", evidence.GetProperty("provenance").GetString());
+        Assert.Contains("ref=refs/remotes/origin/metadata", evidence.GetProperty("provenance").GetString());
+        Assert.Contains("oid=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", evidence.GetProperty("provenance").GetString());
+    }
+
     [Fact]
     public void ActualTakeoverTimestampMayMatchItsIncomingActiveClaimEpoch()
     {
@@ -461,7 +489,8 @@ public sealed class UnitStatusCommandG855Tests
         Assert.Equal("done", TempHost.FindSubcheck(report.RootElement, "implementation-claim-acquired").GetProperty("state").GetString());
         var release = TempHost.FindSubcheck(report.RootElement, "implementation-claim-release");
         Assert.Equal("missing", release.GetProperty("state").GetString());
-        Assert.Equal("claim-release-superseded-by-new-epoch", release.GetProperty("cause").GetString());
+        Assert.Equal("claim-release-not-observed", release.GetProperty("cause").GetString());
+        Assert.Contains("no release record", release.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -1071,10 +1071,14 @@ internal static class UnitStatusCommand
 
             var oldReleaseEvidence = releaseEpochs.Select(item => item.Evidence).ToArray();
             facts.Add(Missing(releaseId,
-                activeAtLatest || releaseEpochs.Count > 0 ? "claim-release-superseded-by-new-epoch" : "claim-release-not-observed",
-                activeAtLatest
-                    ? "A later matching claim acquisition is active; earlier release evidence cannot satisfy this epoch."
-                    : "No release evidence matches the latest observed claim epoch.")
+                releaseEpochs.Count > 0 ? "claim-release-superseded-by-new-epoch" : "claim-release-not-observed",
+                releaseEpochs.Count > 0
+                    ? activeAtLatest
+                        ? "A later matching claim acquisition is active; earlier release evidence cannot satisfy this epoch."
+                        : "Release evidence exists only for an earlier matching claim epoch."
+                    : activeAtLatest
+                        ? "The active matching claim epoch has no release record."
+                        : "No matching release evidence exists for the observed claim epoch.")
                 with { Evidence = oldReleaseEvidence.Length == 0 ? [SnapshotEvidence()] : oldReleaseEvidence });
         }
 

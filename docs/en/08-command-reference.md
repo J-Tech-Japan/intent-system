@@ -634,12 +634,22 @@ visible as evidence but do not satisfy posted-review or delta-review. Read the
 state, cause, and unavailable-class counts together when assessing the
 observation.
 
-Publication is `done` only when the publish record says `published` and its
-created issue identity matches the resolved repository and issue. Host PR
-linkage requires a matching `queue-state.json` `linked_pr`; a PR URL in the
-publish record alone is not enough. When the issue is known but no PR is linked,
-the command reads only that issue's labels and reports PR-bound facts as
-`missing` with `pr-not-linked`.
+Publication is `done` for a consistent publish record with an exact
+unit/repository/issue match in either
+`publish_status: issue-created` or `publish_status: published`. For
+`issue-created`, an absent legacy `lifecycle_state` or
+`lifecycle_state: issue-created` yields cause `issue-created-observed`;
+`published` yields cause
+`publication-issue-published`. The separate `issue-published-run` fact is
+`done` only for a matching unit/repository/issue lifecycle event: a canonical
+`issue-created` event yields `issue-created-run-recorded`, and `issue-published` yields
+`issue-published-run-recorded`. A matching issue artifact alone does not
+establish a run event. These observations do not prove that the automation
+`issue-publish` command ran or that `intent-target` was applied. Host PR linkage
+requires a matching `queue-state.json` `linked_pr`; a PR URL in the publish
+record alone is not enough. When the issue is known but no PR is linked, the
+command reads only that issue's labels and reports PR-bound facts as `missing`
+with `pr-not-linked`.
 
 Claim evidence comes from the configured metadata snapshot that is already
 available locally. An unset metadata branch is reported as a known provenance

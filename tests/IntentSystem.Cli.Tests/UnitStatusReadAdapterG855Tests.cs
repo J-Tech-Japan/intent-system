@@ -193,6 +193,252 @@ public sealed class UnitStatusReadAdapterG855Tests
     }
 
     [Theory]
+    [InlineData("missing", "before")]
+    [InlineData("null", "before")]
+    [InlineData("number", "before")]
+    [InlineData("boolean", "before")]
+    [InlineData("object", "before")]
+    [InlineData("array", "before")]
+    [InlineData("empty", "before")]
+    [InlineData("invalid", "before")]
+    [InlineData("missing", "after")]
+    [InlineData("null", "after")]
+    [InlineData("number", "after")]
+    [InlineData("boolean", "after")]
+    [InlineData("object", "after")]
+    [InlineData("array", "after")]
+    [InlineData("empty", "after")]
+    [InlineData("invalid", "after")]
+    public void MergedPullRequestRequiresValidMergeShaBeforeAndAfterHeadReads(string mergeField, string failurePoint)
+    {
+        using var host = new TempHost();
+        var body = StructuredReviewBody("G855", "implementation", "approve");
+        var runner = new FakeGitHub((arguments, pullReads) =>
+        {
+            var endpoint = arguments[3];
+            if (endpoint == $"repos/{Repo}/pulls/{PullRequest}")
+            {
+                if (failurePoint == "before" && pullReads == 1 || failurePoint == "after" && pullReads == 2)
+                    return Json(MergedPullJson(mergeField));
+                return Json($"{{\"number\":{PullRequest},\"head\":{{\"sha\":\"{Head}\"}},\"merged\":true,\"merge_commit_sha\":\"{Head2}\",\"labels\":[{{\"name\":\"intent-pr-approved\"}}]}}");
+            }
+
+            if (endpoint == $"repos/{Repo}/issues/{Issue}")
+                return Json($"{{\"number\":{Issue},\"labels\":[{{\"name\":\"intent-pr-created\"}}]}}");
+            if (endpoint.StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal))
+                return Json(ReviewArray(body, Head));
+            if (endpoint.StartsWith($"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal))
+                return Json($"{{\"total_count\":1,\"check_runs\":[{{\"id\":7,\"name\":\"lint\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"{Head}\",\"app\":{{\"slug\":\"external-ci\"}},\"details_url\":null}}]}}");
+            return DefaultResponse(arguments);
+        });
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(UnitStatusStates.Unavailable, snapshot.State);
+        Assert.Equal("github-api-error", snapshot.Cause);
+        var merged = Assert.Single(snapshot.Facts, fact => fact.Id == "pr-merged");
+        Assert.Equal(UnitStatusStates.Unavailable, merged.State);
+        Assert.Equal(UnitStatusStates.ReadFailure, merged.UnavailableClass);
+        Assert.NotEqual(UnitStatusStates.Done, merged.State);
+        Assert.Equal(failurePoint == "before" ? 1 : 2,
+            runner.Calls.Count(call => call[3] == $"repos/{Repo}/pulls/{PullRequest}"));
+        if (failurePoint == "after")
+        {
+            Assert.Equal(Head, snapshot.HeadBefore);
+            Assert.Null(snapshot.HeadAfter);
+            Assert.Contains("intent-pr-created", snapshot.IssueLabels);
+            Assert.Contains("intent-pr-approved", snapshot.PullRequestLabels);
+            Assert.Single(snapshot.Reviews);
+            Assert.Single(snapshot.Checks);
+        }
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("number")]
+    [InlineData("boolean")]
+    [InlineData("object")]
+    [InlineData("array")]
+    [InlineData("empty")]
+    [InlineData("invalid")]
+    public void UnmergedPullRequestRejectsMalformedNonNullMergeCommitSha(string mergeField)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] == $"repos/{Repo}/pulls/{PullRequest}"
+            ? Json(UnmergedPullJson(mergeField))
+            : DefaultResponse(arguments));
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(UnitStatusStates.Unavailable, snapshot.State);
+        var merged = Assert.Single(snapshot.Facts, fact => fact.Id == "pr-merged");
+        Assert.Equal(UnitStatusStates.Unavailable, merged.State);
+        Assert.Equal("github-api-error", merged.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, merged.UnavailableClass);
+    }
+
+    [Fact]
+    public void UnmergedPullRequestAllowsNullMergeCommitSha()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] == $"repos/{Repo}/pulls/{PullRequest}"
+            ? Json(UnmergedPullJson("null"))
+            : DefaultResponse(arguments));
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", snapshot.State);
+        Assert.False(snapshot.Merged);
+        Assert.Null(snapshot.MergeCommitSha);
+        Assert.Equal(UnitStatusStates.Missing, Assert.Single(snapshot.Facts, fact => fact.Id == "pr-merged").State);
+    }
+
+    [Theory]
+    [InlineData("number")]
+    [InlineData("boolean")]
+    [InlineData("object")]
+    [InlineData("array")]
+    public void ReviewHtmlUrlWithWrongJsonKindMakesReviewReadUnavailable(string fieldKind)
+    {
+        using var host = new TempHost();
+        var body = StructuredReviewBody("G855", "implementation", "approve");
+        var reviewJson = ReviewArrayWithUrlField(body, "html_url", fieldKind);
+        var runner = new FakeGitHub((arguments, _) =>
+        {
+            var endpoint = arguments[3];
+            if (endpoint.StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)) return Json(reviewJson);
+            if (endpoint == $"repos/{Repo}/issues/{Issue}")
+                return Json($"{{\"number\":{Issue},\"labels\":[{{\"name\":\"intent-pr-created\"}}]}}");
+            return DefaultResponse(arguments);
+        });
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(UnitStatusStates.Unavailable, snapshot.State);
+        Assert.Equal(UnitStatusStates.ReadFailure, Assert.Single(snapshot.Facts, fact => fact.Id == "posted-review").UnavailableClass);
+        Assert.Equal("github-review-invalid", Assert.Single(snapshot.Facts, fact => fact.Id == "posted-review").Cause);
+        Assert.Equal(UnitStatusStates.Done, Assert.Single(snapshot.Facts, fact => fact.Id == "issue-completion-marker").State);
+        Assert.Equal(UnitStatusStates.Missing, Assert.Single(snapshot.Facts, fact => fact.Id == "pr-merged").State);
+        Assert.Empty(snapshot.Reviews);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("null")]
+    public void ReviewHtmlUrlMissingOrNullRemainsValid(string fieldKind)
+    {
+        using var host = new TempHost();
+        var body = StructuredReviewBody("G855", "implementation", "approve");
+        var reviewJson = ReviewArrayWithUrlField(body, "html_url", fieldKind);
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith(
+                $"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+            ? Json(reviewJson)
+            : DefaultResponse(arguments));
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", snapshot.State);
+        Assert.Equal(UnitStatusStates.Done, Assert.Single(snapshot.Facts, fact => fact.Id == "posted-review").State);
+        Assert.Null(Assert.Single(snapshot.Reviews).Url);
+    }
+
+    [Theory]
+    [InlineData("number")]
+    [InlineData("boolean")]
+    [InlineData("object")]
+    [InlineData("array")]
+    public void CheckRunDetailsUrlWithWrongJsonKindMakesCiReadUnavailable(string fieldKind)
+    {
+        using var host = new TempHost();
+        var checkJson = CheckRunArrayWithUrlField("details_url", fieldKind);
+        var runner = new FakeGitHub((arguments, _) =>
+        {
+            var endpoint = arguments[3];
+            if (endpoint.StartsWith($"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal)) return Json(checkJson);
+            if (endpoint == $"repos/{Repo}/issues/{Issue}")
+                return Json($"{{\"number\":{Issue},\"labels\":[{{\"name\":\"intent-pr-created\"}}]}}");
+            return DefaultResponse(arguments);
+        });
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(UnitStatusStates.Unavailable, snapshot.State);
+        var ci = Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.ReadFailure, ci.UnavailableClass);
+        Assert.Equal("github-api-error", ci.Cause);
+        Assert.Equal(UnitStatusStates.Done, Assert.Single(snapshot.Facts, fact => fact.Id == "issue-completion-marker").State);
+        Assert.Equal(UnitStatusStates.Missing, Assert.Single(snapshot.Facts, fact => fact.Id == "pr-merged").State);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("null")]
+    public void CheckRunDetailsUrlMissingOrNullRemainsValid(string fieldKind)
+    {
+        using var host = new TempHost();
+        var checkJson = CheckRunArrayWithUrlField("details_url", fieldKind);
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith(
+                $"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal)
+            ? Json(checkJson)
+            : DefaultResponse(arguments));
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", snapshot.State);
+        Assert.Equal(UnitStatusStates.Done, Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci").State);
+        Assert.Null(Assert.Single(snapshot.Checks).Url);
+    }
+
+    [Theory]
+    [InlineData("number")]
+    [InlineData("boolean")]
+    [InlineData("object")]
+    [InlineData("array")]
+    public void CommitStatusTargetUrlWithWrongJsonKindMakesCiReadUnavailable(string fieldKind)
+    {
+        using var host = new TempHost();
+        var statusJson = CommitStatusArrayWithUrlField("target_url", fieldKind);
+        var runner = new FakeGitHub((arguments, _) =>
+        {
+            var endpoint = arguments[3];
+            if (endpoint.StartsWith($"repos/{Repo}/commits/{Head}/statuses?", StringComparison.Ordinal)) return Json(statusJson);
+            if (endpoint == $"repos/{Repo}/issues/{Issue}")
+                return Json($"{{\"number\":{Issue},\"labels\":[{{\"name\":\"intent-pr-created\"}}]}}");
+            return DefaultResponse(arguments);
+        });
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(UnitStatusStates.Unavailable, snapshot.State);
+        var ci = Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.ReadFailure, ci.UnavailableClass);
+        Assert.Equal("github-api-error", ci.Cause);
+        Assert.Equal(UnitStatusStates.Done, Assert.Single(snapshot.Facts, fact => fact.Id == "issue-completion-marker").State);
+        Assert.Equal(UnitStatusStates.Missing, Assert.Single(snapshot.Facts, fact => fact.Id == "pr-merged").State);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("null")]
+    public void CommitStatusTargetUrlMissingOrNullRemainsValid(string fieldKind)
+    {
+        using var host = new TempHost();
+        var statusJson = CommitStatusArrayWithUrlField("target_url", fieldKind);
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith(
+                $"repos/{Repo}/commits/{Head}/statuses?", StringComparison.Ordinal)
+            ? Json(statusJson)
+            : DefaultResponse(arguments));
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", snapshot.State);
+        Assert.Equal(UnitStatusStates.Done, Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci").State);
+        Assert.Null(Assert.Single(snapshot.Checks).Url);
+    }
+
+    [Theory]
     [InlineData("\"1862\"")]
     [InlineData("null")]
     [InlineData("true")]
@@ -984,6 +1230,27 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
     }
 
     [Fact]
+    public void PendingReviewMayOmitSubmittedAtAndRemainsUnsubmitted()
+    {
+        using var host = new TempHost();
+        var body = StructuredReviewBody("G855", "implementation", "approve");
+        var pending = ReviewRowWithOptionalFields(305, body, "PENDING", null, JsonSerializer.Serialize(new { login = "reviewer" }));
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith(
+                $"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+            ? Json($"[{pending}]")
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var pendingReview = Assert.Single(snapshot.Reviews);
+        Assert.Equal("PENDING", pendingReview.ReviewState);
+        Assert.Null(pendingReview.At);
+        Assert.Equal(UnitStatusStates.Missing, Assert.Single(snapshot.Facts, fact => fact.Id == "posted-review").State);
+        Assert.Equal(UnitStatusStates.Missing, Assert.Single(snapshot.Facts, fact => fact.Id == "delta-review").State);
+    }
+
+    [Fact]
     public void PendingReviewAndSubmittedReviewAreBothRetainedButOnlySubmittedSatisfies()
     {
         using var host = new TempHost();
@@ -1522,6 +1789,69 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
 
     private static string PullJson(string head = Head) =>
         $"{{\"number\":{PullRequest},\"head\":{{\"sha\":\"{head}\"}},\"merged\":false,\"merge_commit_sha\":null,\"labels\":[]}}";
+
+    private static string MergedPullJson(string mergeField)
+    {
+        var property = mergeField switch
+        {
+            "missing" => "",
+            "null" => ",\"merge_commit_sha\":null",
+            "number" => ",\"merge_commit_sha\":123",
+            "boolean" => ",\"merge_commit_sha\":true",
+            "object" => ",\"merge_commit_sha\":{}",
+            "array" => ",\"merge_commit_sha\":[]",
+            "empty" => ",\"merge_commit_sha\":\"\"",
+            "invalid" => ",\"merge_commit_sha\":\"not-a-sha\"",
+            _ => throw new ArgumentOutOfRangeException(nameof(mergeField)),
+        };
+        return $"{{\"number\":{PullRequest},\"head\":{{\"sha\":\"{Head}\"}},\"merged\":true{property},\"labels\":[{{\"name\":\"intent-pr-approved\"}}]}}";
+    }
+
+    private static string UnmergedPullJson(string mergeField)
+    {
+        var property = mergeField switch
+        {
+            "missing" => "",
+            "null" => ",\"merge_commit_sha\":null",
+            "number" => ",\"merge_commit_sha\":123",
+            "boolean" => ",\"merge_commit_sha\":true",
+            "object" => ",\"merge_commit_sha\":{}",
+            "array" => ",\"merge_commit_sha\":[]",
+            "empty" => ",\"merge_commit_sha\":\"\"",
+            "invalid" => ",\"merge_commit_sha\":\"not-a-sha\"",
+            _ => throw new ArgumentOutOfRangeException(nameof(mergeField)),
+        };
+        return $"{{\"number\":{PullRequest},\"head\":{{\"sha\":\"{Head}\"}},\"merged\":false{property},\"labels\":[]}}";
+    }
+
+    private static string ReviewArrayWithUrlField(string body, string propertyName, string fieldKind)
+    {
+        var property = NullableUrlProperty(propertyName, fieldKind);
+        return $"[{{\"id\":405,\"state\":\"COMMENTED\",\"commit_id\":\"{Head}\",\"body\":{JsonSerializer.Serialize(body)}{property},\"submitted_at\":\"2026-10-07T00:00:00Z\",\"user\":{{\"login\":\"reviewer\"}}}}]";
+    }
+
+    private static string CheckRunArrayWithUrlField(string propertyName, string fieldKind)
+    {
+        var property = NullableUrlProperty(propertyName, fieldKind);
+        return $"{{\"total_count\":1,\"check_runs\":[{{\"id\":7,\"name\":\"lint\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"{Head}\",\"app\":{{\"slug\":\"external-ci\"}}{property}}}]}}";
+    }
+
+    private static string CommitStatusArrayWithUrlField(string propertyName, string fieldKind)
+    {
+        var property = NullableUrlProperty(propertyName, fieldKind);
+        return $"[{{\"id\":7,\"context\":\"ci/unit\",\"state\":\"success\"{property}}}]";
+    }
+
+    private static string NullableUrlProperty(string name, string fieldKind) => fieldKind switch
+    {
+        "missing" => "",
+        "null" => $",\"{name}\":null",
+        "number" => $",\"{name}\":123",
+        "boolean" => $",\"{name}\":true",
+        "object" => $",\"{name}\":{{}}",
+        "array" => $",\"{name}\":[]",
+        _ => throw new ArgumentOutOfRangeException(nameof(fieldKind)),
+    };
 
     private static string ReviewArray(string body, string? commitId, string state = "COMMENTED") => ReviewRows((body, commitId, state));
 

@@ -585,10 +585,17 @@ check は `missing` として扱います。別 job の失敗後に条件付き�
 GitHub の pending review は evidence として保持しますが、posted-review または delta-review を満たしません。観測を読むときは
 state、cause、unavailable class の count を合わせて確認してください。
 
-publication が `done` になるのは、publish record の status が `published` で、created issue identity が解決済みの repository と
-issue に一致する場合だけです。host PR linkage には `queue-state.json` の一致する `linked_pr` が必要です。publish record に
-PR URL があるだけでは足りません。issue が解決済みで PR が link されていない場合、command はその issue の label だけを読み、
-PR に結び付く fact は `pr-not-linked` を cause とする `missing` にします。
+publication が `done` になるのは、status と lifecycle に矛盾がなく、`publish_status: issue-created` または
+`publish_status: published`、unit、created issue の URL/number が解決済みの unit/repository/issue に正確に一致する場合です。
+`issue-created` では legacy record の未記録
+`lifecycle_state` または `lifecycle_state: issue-created` が cause `issue-created-observed` になり、`published` は cause
+`publication-issue-published` になります。別 fact の `issue-published-run` は一致する lifecycle event がある場合だけ `done` となり、
+unit/repository/issue が一致する `issue-created` event は `issue-created-run-recorded`、`issue-published` event は
+`issue-published-run-recorded` が cause です。
+issue artifact の identity だけでは run event を満たしません。これらの observation は automation の `issue-publish` command が
+実行されたことや `intent-target` が付与されたことを証明しません。host PR linkage には `queue-state.json` の一致する
+`linked_pr` が必要です。publish record に PR URL があるだけでは足りません。issue が解決済みで PR が link されていない場合、
+command はその issue の label だけを読み、PR に結び付く fact は `pr-not-linked` を cause とする `missing` にします。
 
 claim evidence は、設定済みでローカルに存在する metadata snapshot を使います。metadata branch が未設定なら claim fact は
 既知の provenance limit として示し、canonical/default branch の推測、fetch、ownership 解決は行いません。選択した local ref と

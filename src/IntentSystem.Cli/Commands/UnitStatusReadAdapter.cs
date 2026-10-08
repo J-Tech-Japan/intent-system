@@ -726,13 +726,14 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 || !TryReadString(head, "sha", out var sha)
                 || !IsSha(sha)
                 || !TryReadBool(root, "merged", out var merged)
+                || !TryReadNullableString(root, "merge_commit_sha", out var mergeCommit)
+                || (merged ? !IsSha(mergeCommit ?? string.Empty) : mergeCommit is not null && !IsSha(mergeCommit))
                 || !TryReadLabels(root, out var labels))
             {
-                failure = new UnitStatusReadFailure("github-api-error", "Pull-request response is missing its expected identity, head, merge state, or labels.");
+                failure = new UnitStatusReadFailure("github-api-error", "Pull-request response is missing its expected identity, head, merge state, valid merge commit SHA, or labels.");
                 return false;
             }
 
-            _ = TryReadNullableString(root, "merge_commit_sha", out var mergeCommit);
             pull = new UnitStatusPullRequestRead(sha, merged, mergeCommit, labels);
             failure = default!;
             return true;
@@ -923,10 +924,11 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         if (!TryReadLong(item, "id", out var id)
             || !TryReadString(item, "state", out var state)
             || !TryReadNullableString(item, "commit_id", out var commitId)
-            || !TryReadNullableString(item, "body", out var body))
+            || !TryReadNullableString(item, "body", out var body)
+            || !TryReadOptionalNullableString(item, "html_url", out var reviewUrl))
         {
             failureKind = ReviewParseFailure.Malformed;
-            failureDetail = "Pull-request review response is missing id, state, commit_id, or body fields.";
+            failureDetail = "Pull-request review response is missing id, state, commit_id, or body, or has a non-null, non-string html_url.";
             return false;
         }
 
@@ -937,9 +939,11 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             return false;
         }
 
-        var reviewUrl = TryReadNullableString(item, "html_url", out var htmlUrl) ? htmlUrl : null;
         var reviewer = item.TryGetProperty("user", out var user) && TryReadString(user, "login", out var login) ? login : null;
-        if (!TryReadNullableDateTime(item, "submitted_at", out var submittedAt))
+        DateTimeOffset? submittedAt = null;
+        var submittedAtPresent = item.TryGetProperty("submitted_at", out _);
+        if (submittedAtPresent && !TryReadNullableDateTime(item, "submitted_at", out submittedAt)
+            || !submittedAtPresent && state != "PENDING")
         {
             failureKind = ReviewParseFailure.Malformed;
             failureDetail = "Pull-request review response has an invalid submitted_at field.";
@@ -1239,7 +1243,12 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             return false;
         }
 
-        string? detailsUrl = TryReadNullableString(item, "details_url", out var readDetails) ? readDetails : null;
+        if (!TryReadOptionalNullableString(item, "details_url", out var detailsUrl))
+        {
+            error = "Check-run response has an invalid nullable details_url field.";
+            return false;
+        }
+
         if (string.Equals(appSlug, "github-actions", StringComparison.OrdinalIgnoreCase))
         {
             if (!TryGetActionsRunId(detailsUrl, expectedRepo, out var actionsRunId))
@@ -1300,7 +1309,12 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             return false;
         }
 
-        _ = TryReadNullableString(item, "target_url", out var url);
+        if (!TryReadOptionalNullableString(item, "target_url", out var url))
+        {
+            error = "Commit-status response has an invalid nullable target_url field.";
+            return false;
+        }
+
         check = new UnitStatusObservedCheck
         {
             Source = "commit-status",
@@ -1973,6 +1987,14 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         if (raw.ValueKind != JsonValueKind.String) return false;
         value = raw.GetString();
         return true;
+    }
+
+    private static bool TryReadOptionalNullableString(JsonElement root, string name, out string? value)
+    {
+        value = null;
+        if (root.ValueKind != JsonValueKind.Object) return false;
+        if (!root.TryGetProperty(name, out _)) return true;
+        return TryReadNullableString(root, name, out value);
     }
 
     private static bool TryReadBool(JsonElement root, string name, out bool value)
