@@ -140,7 +140,7 @@ internal static class GitHubApiReadInventory
         Observed("GET /repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100&page={n}",
             ["total_count", "check_runs[].id", "check_runs[].name", "check_runs[].status", "check_runs[].conclusion", "check_runs[].head_sha", "check_runs[].app.slug", "check_runs[].details_url"], "complete pagination, at most 20 pages"),
         Observed("GET /repos/{owner}/{repo}/commits/{sha}/statuses?per_page=100&page={n}",
-            ["id", "context", "state", "sha", "target_url"], "complete pagination, at most 20 pages"),
+            ["request path {sha}", "id", "context", "state", "target_url"], "complete pagination, at most 20 pages"),
         Observed("GET /repos/{owner}/{repo}/actions/runs/{run_id}",
             ["id", "head_sha", "run_attempt"], "one read per distinct Actions run id per attempt"),
     ];

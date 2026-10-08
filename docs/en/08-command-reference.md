@@ -623,7 +623,10 @@ solo-conductor, API reads are bound to the locally corroborated issue/PR and
 the observed PR head, with complete pagination within a 20-page bound and at
 most one retry if the head changes. The report inventories observed
 check-runs and commit statuses; it does not evaluate branch protection or
-required-check rules.
+required-check rules. A skipped or neutral check is `missing`, including a
+check conditionally skipped after another job failed; successful reading does
+not establish success. Read the state, cause, and unavailable-class counts
+together when assessing the observation.
 
 Exit 0 means observation completed, including when evidence is missing or the
 only unavailable facts are known `provenance-limit` cases. Exit 1 means an

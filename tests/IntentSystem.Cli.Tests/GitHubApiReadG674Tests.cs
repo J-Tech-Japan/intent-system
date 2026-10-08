@@ -58,7 +58,7 @@ public sealed class GitHubApiReadG674Tests : IDisposable
             && read.ConsumedFields.Contains("check_runs[].head_sha")
             && read.ConsumedFields.Contains("check_runs[].app.slug"));
         Assert.Contains(reads, read => read.Endpoint.Contains("/commits/{sha}/statuses?per_page=100&page={n}", StringComparison.Ordinal)
-            && read.ConsumedFields.SequenceEqual(["id", "context", "state", "sha", "target_url"]));
+            && read.ConsumedFields.SequenceEqual(["request path {sha}", "id", "context", "state", "target_url"]));
         Assert.Contains(reads, read => read.Endpoint.EndsWith("/actions/runs/{run_id}", StringComparison.Ordinal)
             && read.ConsumedFields.SequenceEqual(["id", "head_sha", "run_attempt"]));
         Assert.All(reads, read => Assert.False(string.IsNullOrWhiteSpace(read.Bound)));

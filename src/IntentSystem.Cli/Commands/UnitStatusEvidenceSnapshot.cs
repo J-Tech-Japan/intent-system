@@ -68,6 +68,9 @@ internal sealed record UnitStatusEvidencePointer
     public int? Pr { get; init; }
     public string? HeadSha { get; init; }
     public DateTimeOffset? RecordedAt { get; init; }
+    public DateTimeOffset? ClaimEpochClaimedAt { get; init; }
+    public string? ClaimOperation { get; init; }
+    public string? ClaimDisposition { get; init; }
     public required string Provenance { get; init; }
 }
 

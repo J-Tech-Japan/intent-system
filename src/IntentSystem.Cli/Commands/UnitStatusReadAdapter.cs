@@ -165,8 +165,11 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                     if (!string.Equals(record.Scope, $"execution-unit:{executionUnit}", StringComparison.Ordinal)
                         || string.IsNullOrWhiteSpace(record.Actor)
                         || string.IsNullOrWhiteSpace(record.Team)
-                        || string.IsNullOrWhiteSpace(record.Operation)
-                        || record.RecordedAt == default)
+                        || record.Operation is not ("release" or "takeover")
+                        || record.RecordedAt == default
+                        || string.IsNullOrWhiteSpace(record.DisplacedHolder)
+                        || string.IsNullOrWhiteSpace(record.DisplacedTeam)
+                        || record.DisplacedClaimedAt == default)
                     {
                         throw new InvalidOperationException("claim history record has missing or mismatched identity fields.");
                     }
@@ -303,9 +306,9 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             : new UnitStatusFact
             {
                 Id = "approval-head-receipt",
-                State = UnitStatusStates.NotApplicable,
+                State = UnitStatusStates.Missing,
                 Cause = "approval-marker-absent",
-                Detail = "No current approved marker was observed, so there is no receipt claim to bind.",
+                Detail = "The approved marker is absent and no exact-head receipt was observed.",
             });
 
         var issueUrl = $"https://github.com/{repo}/issues/{issue}";
@@ -353,7 +356,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         {
             foreach (var item in reviewItems)
             {
-                if (!TryReadReview(item, headBefore, executionUnit, domain, team, repo, pullRequest, localReviews,
+                if (!TryReadReview(item, executionUnit, domain, team, repo, pullRequest, localReviews,
                     out var review, out var failureKind, out var parseDetail))
                 {
                     reviewIdentityFailure |= failureKind == ReviewParseFailure.IdentityConflict;
@@ -370,6 +373,13 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 }
             }
         }
+
+        if (!TryOrderReviewRows(reviewRows, out var orderedReviewRows, out var reviewOrderingError))
+        {
+            reviewIdentityFailure = true;
+            reviewFailureDetail = reviewOrderingError;
+        }
+        reviewRows = orderedReviewRows.ToList();
 
         var reviewInventoryReadable = reviewReadOk && !reviewReadFailure;
         facts.Add(reviewInventoryReadable && reviewIdentityFailure
@@ -501,16 +511,28 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 RecordId = item.RelativePath,
                 CitedRecordPath = item.Record.RawVerdictFile,
             });
-        facts.Add(BuildDeltaFact(reviewRows.Concat(recordedReviewRows).ToArray(), headBefore, executionUnit, repo, pullRequest,
-            reviewInventoryReadable && !reviewIdentityFailure && !reviewNamedUnstructured && localReviews.Unreadable.Count == 0,
-            reviewIdentityFailure || localReviews.Unreadable.Count > 0
-                ? new UnitStatusReadFailure("review-history-unavailable", "Review history contains invalid identity or unreadable local records.")
-                : reviewNamedUnstructured
-                    ? new UnitStatusReadFailure("legacy-review-identity-unrecorded", "A named independent review lacks exact unit/head identity.")
-                    : deltaFailure,
-            reviewIdentityFailure ? UnitStatusStates.IdentityConflict
-                : reviewNamedUnstructured ? UnitStatusStates.ProvenanceLimit
-                : UnitStatusStates.ReadFailure));
+        var deltaReviewRows = reviewRows.Concat(recordedReviewRows).ToArray();
+        var deltaOrderingValid = TryOrderReviewRows(deltaReviewRows, out var orderedDeltaReviewRows, out var deltaOrderingError);
+        var deltaIdentityConflict = reviewIdentityFailure || !deltaOrderingValid;
+        var deltaLocalReadFailure = localReviews.Unreadable.Count > 0;
+        var deltaReviewFailure = deltaIdentityConflict
+            ? new UnitStatusReadFailure(
+                "review-identity-conflict",
+                !deltaOrderingValid ? deltaOrderingError : "Review history contains invalid identity.")
+            : deltaLocalReadFailure
+                ? new UnitStatusReadFailure("review-history-unavailable", "One or more local review records could not be read or validated.")
+            : reviewNamedUnstructured
+                ? new UnitStatusReadFailure("legacy-review-identity-unrecorded", "A named independent review lacks exact unit/head identity.")
+                : deltaFailure;
+        var deltaUnavailableClass = deltaIdentityConflict
+            ? UnitStatusStates.IdentityConflict
+            : deltaLocalReadFailure || !reviewInventoryReadable
+                ? UnitStatusStates.ReadFailure
+            : reviewNamedUnstructured ? UnitStatusStates.ProvenanceLimit : UnitStatusStates.ReadFailure;
+        facts.Add(BuildDeltaFact(orderedDeltaReviewRows, headBefore, executionUnit, repo, pullRequest,
+            reviewInventoryReadable && !reviewIdentityFailure && !reviewNamedUnstructured && !deltaLocalReadFailure && deltaOrderingValid,
+            deltaReviewFailure,
+            deltaUnavailableClass));
         var stableHead = string.Equals(headBefore, headAfter, StringComparison.OrdinalIgnoreCase);
         var blockingReadFailure = facts.FirstOrDefault(fact => fact.State == UnitStatusStates.Unavailable
             && fact.UnavailableClass != UnitStatusStates.ProvenanceLimit);
@@ -737,7 +759,6 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
 
     private bool TryReadReview(
         JsonElement item,
-        string currentHead,
         string unit,
         string domain,
         string team,
@@ -793,8 +814,9 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         var dismissed = string.Equals(state, "DISMISSED", StringComparison.OrdinalIgnoreCase);
         var valid = string.Equals(parsed.ExecutionUnit, unit, StringComparison.Ordinal)
             && string.Equals(parsed.Kind, CrossRuntimeReviewRecord.KindImplementation, StringComparison.Ordinal)
+            && parsed.HeadSha is not null
+            && IsObjectId(parsed.HeadSha)
             && string.Equals(parsed.HeadSha, commitId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(parsed.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase)
             && parsed.Verdict is CrossRuntimeReviewVerdict.Approve or CrossRuntimeReviewVerdict.RequestChanges
             && (parsed.Relation is null
                 || CrossRuntimeReviewRuntimes.IsSupported(parsed.Runtime)
@@ -831,6 +853,37 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             Dismissed = dismissed,
         };
         return true;
+    }
+
+    private static bool TryOrderReviewRows(
+        IEnumerable<UnitStatusObservedReview> reviews,
+        out IReadOnlyList<UnitStatusObservedReview> ordered,
+        out string detail)
+    {
+        var rows = reviews.ToArray();
+        var ambiguous = rows
+            .GroupBy(review => (
+                review.Source,
+                Head: review.HeadSha.ToUpperInvariant(),
+                Reviewer: review.Reviewer?.ToUpperInvariant() ?? "",
+                Runtime: review.Runtime?.ToUpperInvariant() ?? "",
+                Relation: review.Relation?.ToUpperInvariant() ?? ""))
+            .SelectMany(group => group.GroupBy(review => (review.At, review.RecordId)))
+            .Any(tied => tied.Select(review => (review.Verdict, review.ReviewState, review.Dismissed)).Distinct().Skip(1).Any());
+
+        ordered = rows
+            .OrderBy(review => review.Source, StringComparer.Ordinal)
+            .ThenBy(review => review.HeadSha, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(review => review.Reviewer, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(review => review.Runtime, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(review => review.Relation, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(review => review.At)
+            .ThenBy(review => review.RecordId, StringComparer.Ordinal)
+            .ToArray();
+        detail = ambiguous
+            ? "Review rows with the same source, head, reviewer/runtime relation, submission time, and record ID contain conflicting dispositions."
+            : "";
+        return !ambiguous;
     }
 
     private static bool TryValidateCitedReviewRecord(
@@ -1017,16 +1070,17 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         check = null;
         if (!TryReadLong(item, "id", out var id)
             || !TryReadString(item, "context", out var context)
-            || !TryReadString(item, "state", out var state)
-            || !TryReadString(item, "sha", out var sha))
+            || !TryReadString(item, "state", out var state))
         {
-            error = "Commit-status response is missing id, context, state, or sha.";
+            error = "Commit-status response is missing id, context, or state.";
             return false;
         }
 
-        if (!string.Equals(sha, expectedHead, StringComparison.OrdinalIgnoreCase))
+        if (item.TryGetProperty("sha", out var shaValue)
+            && (shaValue.ValueKind != JsonValueKind.String
+                || !string.Equals(shaValue.GetString(), expectedHead, StringComparison.OrdinalIgnoreCase)))
         {
-            error = "Commit-status sha differs from the observed pull-request head.";
+            error = "Optional commit-status sha differs from the exact commit referenced by the successful request.";
             return false;
         }
 
@@ -1036,22 +1090,15 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             Source = "commit-status",
             Identity = context,
             RecordId = id.ToString(CultureInfo.InvariantCulture),
-            Sha = sha,
+            // The list-statuses endpoint has no per-row sha field; the exact commit
+            // object in the validated request path supplies this identity.
+            Sha = expectedHead,
             Status = state,
             AttemptBasis = "not-actions",
             Url = url,
         };
         error = string.Empty;
         return true;
-    }
-
-    private IReadOnlyList<string> ReadIssueLabelsForReport(CliContext context, string repo, int issue)
-    {
-        if (!TryReadJson(context, ["api", "--method", "GET", $"repos/{repo}/issues/{issue}"], out var document, out _)) return [];
-        using (document)
-        {
-            return TryReadLabels(document!.RootElement, out var labels) ? labels : [];
-        }
     }
 
     internal string? ReadGitText(
@@ -1444,6 +1491,11 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         UnitStatusReadFailure reviewFailure,
         string unavailableClass)
     {
+        if (!readSucceeded)
+        {
+            return UnavailableFact("delta-review", reviewFailure.Cause, reviewFailure.Detail, unavailableClass);
+        }
+
         var currentHeadReviews = reviews
             .Where(review => !review.Dismissed && string.Equals(review.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -1473,11 +1525,6 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             };
         }
 
-        if (!readSucceeded)
-        {
-            return UnavailableFact("delta-review", reviewFailure.Cause, reviewFailure.Detail, unavailableClass);
-        }
-
         return new UnitStatusFact
         {
             Id = "delta-review",
@@ -1487,7 +1534,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         };
     }
 
-    private static UnitStatusFact CiFact(IReadOnlyList<UnitStatusObservedCheck> checks, string currentHead, string repo, int pullRequest)
+    internal static UnitStatusFact CiFact(IReadOnlyList<UnitStatusObservedCheck> checks, string currentHead, string repo, int pullRequest)
     {
         if (checks.Count == 0)
         {
@@ -1510,12 +1557,61 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 UnitStatusStates.IdentityConflict);
         }
 
-        var groups = checks.GroupBy(check => $"{check.Source}\0{check.Identity}", StringComparer.Ordinal);
-        var authoritative = groups.Select(group => group
-                .OrderByDescending(check => check.Attempt ?? 0)
-                .ThenByDescending(check => long.TryParse(check.RecordId, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0)
-                .First())
-            .ToArray();
+        var actionsByContext = checks.Where(check => check.Source == "check-run" && check.RunId is not null)
+            .GroupBy(check => check.Identity, StringComparer.Ordinal);
+        var ambiguousActionContext = actionsByContext.FirstOrDefault(group => group.Select(check => check.RunId).Distinct().Count() > 1);
+        if (ambiguousActionContext is not null)
+        {
+            return UnavailableFact("observed-ci", "github-check-run-identity-conflict",
+                "Multiple GitHub Actions run ids report the same exact-head check context, and the snapshot cannot establish which run supersedes the other.",
+                UnitStatusStates.IdentityConflict) with
+            {
+                Evidence = ambiguousActionContext.Select(check => new UnitStatusEvidencePointer
+                {
+                    Kind = check.Source,
+                    Url = check.Url ?? $"https://github.com/{repo}/pull/{pullRequest}",
+                    RecordId = check.RecordId,
+                    HeadSha = check.Sha,
+                    Provenance = "github-rest-observed-check",
+                }).ToArray(),
+            };
+        }
+
+        var groups = checks.GroupBy(check => check.Source == "check-run" && check.RunId is { } runId
+            ? $"{check.Source}\0{check.Identity}\0{runId.ToString(CultureInfo.InvariantCulture)}"
+            : $"{check.Source}\0{check.Identity}", StringComparer.Ordinal);
+        var authoritative = new List<UnitStatusObservedCheck>();
+        foreach (var group in groups)
+        {
+            if (group.Key.StartsWith("check-run\0", StringComparison.Ordinal) && group.Any(check => check.RunId is not null))
+            {
+                var maxAttempt = group.Max(check => check.Attempt ?? 0);
+                var latestAttempt = group.Where(check => (check.Attempt ?? 0) == maxAttempt).ToArray();
+                if (latestAttempt.Select(Disposition).Distinct(StringComparer.Ordinal).Count() > 1)
+                {
+                    return UnavailableFact("observed-ci", "github-check-attempt-identity-conflict",
+                        "One Actions run has conflicting dispositions for the same check context and attempt.", UnitStatusStates.IdentityConflict)
+                        with { Evidence = latestAttempt.Select(ToCheckEvidence).ToArray() };
+                }
+                authoritative.Add(latestAttempt[0]);
+            }
+            else if (group.Key.StartsWith("check-run\0", StringComparison.Ordinal)
+                && group.Select(Disposition).Distinct(StringComparer.Ordinal).Count() > 1)
+            {
+                return UnavailableFact("observed-ci", "github-check-identity-conflict",
+                    "An external check context has conflicting dispositions without Actions attempt identity.", UnitStatusStates.IdentityConflict)
+                    with { Evidence = group.Select(ToCheckEvidence).ToArray() };
+            }
+            else if (group.Key.StartsWith("commit-status\0", StringComparison.Ordinal))
+            {
+                authoritative.Add(group.OrderByDescending(check =>
+                    long.TryParse(check.RecordId, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0).First());
+            }
+            else
+            {
+                authoritative.Add(group.First());
+            }
+        }
         var successful = authoritative.All(check =>
             string.Equals(check.Source, "commit-status", StringComparison.Ordinal)
                 ? string.Equals(check.Status, "success", StringComparison.OrdinalIgnoreCase)
@@ -1527,17 +1623,20 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             State = successful ? UnitStatusStates.Done : UnitStatusStates.Missing,
             Cause = successful ? "observed-ci-success" : "observed-ci-not-successful",
             Detail = successful
-                ? $"All {authoritative.Length} authoritative entries in the observed exact-head check inventory succeeded; branch protection and required checks were not evaluated."
+                ? $"All {authoritative.Count} authoritative entries in the observed exact-head check inventory succeeded; branch protection and required checks were not evaluated."
                 : "The observed exact-head inventory contains pending, failed, skipped, neutral, or otherwise non-success entries.",
-            Evidence = authoritative.Select(check => new UnitStatusEvidencePointer
+            Evidence = authoritative.Select(ToCheckEvidence).ToArray(),
+        };
+
+        string Disposition(UnitStatusObservedCheck check) => string.Join("\0", check.Status, check.Conclusion ?? string.Empty);
+        UnitStatusEvidencePointer ToCheckEvidence(UnitStatusObservedCheck check) => new()
             {
                 Kind = check.Source,
                 Url = check.Url ?? $"https://github.com/{repo}/pull/{pullRequest}",
                 RecordId = check.RecordId,
                 HeadSha = check.Sha,
                 Provenance = "github-rest-observed-check",
-            }).ToArray(),
-        };
+            };
     }
 
     private static UnitStatusEvidencePointer GitHubEvidence(

@@ -41,7 +41,44 @@ public sealed class UnitStatusReadAdapterG855Tests
         Assert.Contains(runner.Calls, call => call[3].StartsWith($"repos/{Repo}/commits/{Head}/statuses?per_page=100&page=1", StringComparison.Ordinal));
         Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "issue-completion-marker").State);
         Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "observed-ci").State);
-        Assert.Equal(UnitStatusStates.NotApplicable, snapshot.Facts.Single(fact => fact.Id == "approval-head-receipt").State);
+        Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "approval-head-receipt").State);
+    }
+
+    [Fact]
+    public void CommitStatusesUseTheExactShaRequestWhenDocumentedRowsOmitSha()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) =>
+        {
+            if (arguments[3].StartsWith($"repos/{Repo}/commits/{Head}/statuses?", StringComparison.Ordinal))
+            {
+                return Json("""
+                    [{"id":91,"context":"ci/unit","state":"success","description":"all good","target_url":"https://ci.example.test/run/91","created_at":"2026-10-07T00:00:00Z","updated_at":"2026-10-07T00:00:01Z","creator":{"login":"ci-bot"}}]
+                    """);
+            }
+
+            return DefaultResponse(arguments);
+        });
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", snapshot.State);
+        var status = Assert.Single(snapshot.Checks);
+        Assert.Equal("commit-status", status.Source);
+        Assert.Equal("ci/unit", status.Identity);
+        Assert.Equal("91", status.RecordId);
+        Assert.Equal(Head, status.Sha);
+        Assert.Equal(UnitStatusStates.Done, snapshot.Facts.Single(fact => fact.Id == "observed-ci").State);
+
+        var wrongShaRunner = new FakeGitHub((arguments, _) =>
+            arguments[3].StartsWith($"repos/{Repo}/commits/{Head}/statuses?", StringComparison.Ordinal)
+                ? Json($"[{{\"id\":92,\"context\":\"ci/unit\",\"state\":\"success\",\"sha\":\"{Head2}\"}}]")
+                : DefaultResponse(arguments));
+        var wrongSha = new UnitStatusReadAdapter(wrongShaRunner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+        Assert.Equal(UnitStatusStates.Unavailable, wrongSha.Facts.Single(fact => fact.Id == "observed-ci").State);
+        Assert.Equal(UnitStatusStates.ReadFailure, wrongSha.Facts.Single(fact => fact.Id == "observed-ci").UnavailableClass);
     }
 
     [Fact]
@@ -165,6 +202,144 @@ public sealed class UnitStatusReadAdapterG855Tests
     }
 
     [Fact]
+    public void PriorHeadReviewRemainsVisibleAndDoesNotBlockCurrentHeadReview()
+    {
+        using var host = new TempHost();
+        string Body(string head, string verdict) => $$"""
+## Independent same-runtime subagent review: {{verdict}}
+- reviewer: independent same-runtime subagent review
+- runtime: codex
+- runtime version: codex-test
+- conductor runtime: codex
+- head SHA: {{head}}
+- kind: implementation
+- execution unit: G855
+- verdict: {{verdict}}
+""";
+
+        var staleOnlyRunner = new FakeGitHub((arguments, _) =>
+        {
+            if (arguments[3] == $"repos/{Repo}/pulls/{PullRequest}") return Json(PullJson(Head2));
+            if (arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal))
+                return Json(ReviewArray(Body(Head, "request-changes"), Head));
+            if (arguments[3].StartsWith($"repos/{Repo}/commits/{Head2}/check-runs?", StringComparison.Ordinal))
+                return Json("{\"total_count\":0,\"check_runs\":[]}");
+            if (arguments[3].StartsWith($"repos/{Repo}/commits/{Head2}/statuses?", StringComparison.Ordinal)) return Json("[]");
+            return DefaultResponse(arguments);
+        });
+        var staleOnly = new UnitStatusReadAdapter(staleOnlyRunner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", staleOnly.State);
+        Assert.Equal(Head, Assert.Single(staleOnly.Reviews).HeadSha);
+        var stalePosted = staleOnly.Facts.Single(fact => fact.Id == "posted-review");
+        Assert.Equal(UnitStatusStates.Missing, stalePosted.State);
+        Assert.Equal("posted-review-not-recorded-current-head", stalePosted.Cause);
+        var staleDelta = staleOnly.Facts.Single(fact => fact.Id == "delta-review");
+        Assert.Equal(UnitStatusStates.Missing, staleDelta.State);
+        Assert.Equal("delta-review-missing", staleDelta.Cause);
+
+        var bothHeadsRunner = new FakeGitHub((arguments, _) =>
+        {
+            if (arguments[3] == $"repos/{Repo}/pulls/{PullRequest}") return Json(PullJson(Head2));
+            if (arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal))
+                return Json(ReviewRows(
+                    (Body(Head, "request-changes"), Head, "CHANGES_REQUESTED"),
+                    (Body(Head2, "approve"), Head2, "APPROVED")));
+            if (arguments[3].StartsWith($"repos/{Repo}/commits/{Head2}/check-runs?", StringComparison.Ordinal))
+                return Json("{\"total_count\":0,\"check_runs\":[]}");
+            if (arguments[3].StartsWith($"repos/{Repo}/commits/{Head2}/statuses?", StringComparison.Ordinal)) return Json("[]");
+            return DefaultResponse(arguments);
+        });
+        var bothHeads = new UnitStatusReadAdapter(bothHeadsRunner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", bothHeads.State);
+        Assert.Equal(2, bothHeads.Reviews.Count);
+        Assert.Contains(bothHeads.Reviews, review => review.HeadSha == Head && review.Verdict == "request-changes");
+        Assert.Contains(bothHeads.Reviews, review => review.HeadSha == Head2 && review.Verdict == "approve");
+        Assert.Equal(UnitStatusStates.Done, bothHeads.Facts.Single(fact => fact.Id == "posted-review").State);
+        Assert.Equal("delta-review-current-head", bothHeads.Facts.Single(fact => fact.Id == "delta-review").Cause);
+    }
+
+    [Fact]
+    public void SquashMergeCommitDoesNotReplacePrHeadForCurrentReviewIdentity()
+    {
+        using var host = new TempHost();
+        var body = $$"""
+## Independent same-runtime subagent review: request-changes
+- reviewer: independent same-runtime subagent review
+- runtime: codex
+- runtime version: codex-test
+- conductor runtime: codex
+- head SHA: {{Head}}
+- kind: implementation
+- execution unit: G855
+- verdict: request-changes
+""";
+        var runner = new FakeGitHub((arguments, _) =>
+        {
+            if (arguments[3] == $"repos/{Repo}/pulls/{PullRequest}")
+                return Json($"{{\"number\":{PullRequest},\"head\":{{\"sha\":\"{Head}\"}},\"merged\":true,\"merge_commit_sha\":\"{Head2}\",\"labels\":[]}}");
+            if (arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal))
+                return Json(ReviewArray(body, Head));
+            return DefaultResponse(arguments);
+        });
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", snapshot.State);
+        Assert.Equal(Head, snapshot.HeadSha);
+        Assert.Equal(Head2, snapshot.MergeCommitSha);
+        Assert.True(snapshot.Merged);
+        Assert.Equal(UnitStatusStates.Done, snapshot.Facts.Single(fact => fact.Id == "posted-review").State);
+        Assert.Equal("delta-review-current-head", snapshot.Facts.Single(fact => fact.Id == "delta-review").Cause);
+        Assert.Equal(Head, Assert.Single(snapshot.Reviews).HeadSha);
+    }
+
+    [Fact]
+    public void ReviewRowsRetainOrderedVerdictsAndRejectTiedConflictingIdentity()
+    {
+        using var host = new TempHost();
+        string Body(string verdict) => $$"""
+## Independent same-runtime subagent review: {{verdict}}
+- reviewer: independent same-runtime subagent review
+- runtime: codex
+- runtime version: codex-test
+- conductor runtime: codex
+- head SHA: {{Head}}
+- kind: implementation
+- execution unit: G855
+- verdict: {{verdict}}
+""";
+        var orderedRunner = new FakeGitHub((arguments, _) =>
+            arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+                ? Json(ReviewRows(
+                    (Body("request-changes"), Head, "CHANGES_REQUESTED"),
+                    (Body("approve"), Head, "APPROVED")))
+                : DefaultResponse(arguments));
+        var ordered = new UnitStatusReadAdapter(orderedRunner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+        Assert.Equal(new[] { "request-changes", "approve" }, ordered.Reviews.Select(review => review.Verdict));
+        Assert.Equal(UnitStatusStates.Done, ordered.Facts.Single(fact => fact.Id == "posted-review").State);
+
+        var sameSubmissionTime = "2026-10-07T00:00:00Z";
+        var tiedRunner = new FakeGitHub((arguments, _) =>
+            arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+                ? Json(ReviewRowsWithIds(
+                    (7, Body("request-changes"), Head, "CHANGES_REQUESTED", sameSubmissionTime),
+                    (7, Body("approve"), Head, "APPROVED", sameSubmissionTime)))
+                : DefaultResponse(arguments));
+        var tied = new UnitStatusReadAdapter(tiedRunner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+        var posted = tied.Facts.Single(fact => fact.Id == "posted-review");
+        Assert.Equal(UnitStatusStates.Unavailable, posted.State);
+        Assert.Equal("review-identity-conflict", posted.Cause);
+        Assert.Equal(UnitStatusStates.IdentityConflict, posted.UnavailableClass);
+    }
+
+    [Fact]
     public void GenericStructuredIndependentReviewIsAcceptedWithoutADeclaredTeamRelation()
     {
         using var host = new TempHost();
@@ -226,7 +401,14 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
         var localOnly = new UnitStatusReadAdapter(unavailableRunner, new FakeGit()).ObserveGitHub(
             host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
         Assert.Equal(UnitStatusStates.Unavailable, localOnly.State);
-        Assert.Equal(UnitStatusStates.Done, localOnly.Facts.Single(fact => fact.Id == "delta-review").State);
+        var unreadableHistory = localOnly.Facts.Single(fact => fact.Id == "delta-review");
+        Assert.Equal(UnitStatusStates.Unavailable, unreadableHistory.State);
+        Assert.Equal(UnitStatusStates.ReadFailure, unreadableHistory.UnavailableClass);
+
+        var localWithReadableRemote = new UnitStatusReadAdapter(
+            new FakeGitHub((arguments, _) => DefaultResponse(arguments)), new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+        Assert.Equal(UnitStatusStates.Done, localWithReadableRemote.Facts.Single(fact => fact.Id == "delta-review").State);
 
         var invalidRunner = new FakeGitHub((arguments, _) => arguments[3].EndsWith("/reviews?per_page=100&page=1", StringComparison.Ordinal)
             ? Json(ReviewArray(Body(".intent-cli/reviews/not-recorded.json"), Head))
@@ -330,6 +512,62 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
         Assert.Null(external.Attempt);
         Assert.Equal("not-actions", external.AttemptBasis);
         Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "observed-ci").State);
+    }
+
+    [Fact]
+    public void ActionsDifferentRunIdsForSameContextCannotUseOldGreenAsCurrent()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] switch
+        {
+            var endpoint when endpoint.StartsWith($"repos/{Repo}/commits/{Head}/check-runs", StringComparison.Ordinal) => Json($$"""
+                {"total_count":2,"check_runs":[
+                  {"id":101,"name":"build","status":"completed","conclusion":"success","head_sha":"{{Head}}","app":{"slug":"github-actions"},"details_url":"https://github.com/{{Repo}}/actions/runs/70"},
+                  {"id":102,"name":"build","status":"completed","conclusion":"failure","head_sha":"{{Head}}","app":{"slug":"github-actions"},"details_url":"https://github.com/{{Repo}}/actions/runs/71"}
+                ]}
+                """),
+            $"repos/{Repo}/actions/runs/70" => Json($$"""{"id":70,"head_sha":"{{Head}}","run_attempt":3}"""),
+            $"repos/{Repo}/actions/runs/71" => Json($$"""{"id":71,"head_sha":"{{Head}}","run_attempt":1}"""),
+            _ => DefaultResponse(arguments),
+        });
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var ci = snapshot.Facts.Single(fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.Unavailable, ci.State);
+        Assert.Equal(UnitStatusStates.IdentityConflict, ci.UnavailableClass);
+        Assert.Equal("github-check-run-identity-conflict", ci.Cause);
+        Assert.Equal(new long?[] { 70, 71 }, snapshot.Checks.Select(check => check.RunId).OrderBy(id => id).ToArray());
+        Assert.Equal(new int?[] { 1, 3 }, snapshot.Checks.Select(check => check.Attempt).OrderBy(attempt => attempt).ToArray());
+        Assert.Equal(2, ci.Evidence.Count);
+    }
+
+    [Fact]
+    public void ActionsAttemptsAreOrderedOnlyWithinTheSameRunId()
+    {
+        UnitStatusObservedCheck Check(int attempt, string conclusion, string recordId) => new()
+        {
+            Source = "check-run",
+            Identity = "github-actions/build",
+            RecordId = recordId,
+            Sha = Head,
+            Status = "completed",
+            Conclusion = conclusion,
+            RunId = 70,
+            Attempt = attempt,
+            AttemptBasis = "actions-run",
+        };
+
+        var oldGreen = Check(1, "success", "101");
+        var latestFailure = Check(2, "failure", "102");
+        var first = UnitStatusReadAdapter.CiFact([oldGreen, latestFailure], Head, Repo, PullRequest);
+        var reversed = UnitStatusReadAdapter.CiFact([latestFailure, oldGreen], Head, Repo, PullRequest);
+
+        Assert.Equal(UnitStatusStates.Missing, first.State);
+        Assert.Equal("observed-ci-not-successful", first.Cause);
+        Assert.Equal(UnitStatusStates.Missing, reversed.State);
+        Assert.Equal(first.Cause, reversed.Cause);
     }
 
     [Fact]
@@ -439,7 +677,8 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
             {
                 ExitCode = 0,
                 StdOut = JsonSerializer.Serialize(new ClaimHistoryRecord("1", "release", "execution-unit:G855", "builder", "intent-cli-dev",
-                    DateTimeOffset.Parse("2026-10-02T00:00:00Z"), "done", "", "", default, Head)),
+                    DateTimeOffset.Parse("2026-10-02T00:00:00Z"), "done", "builder", "intent-cli-dev",
+                    DateTimeOffset.Parse("2026-10-01T00:00:00Z"), Head)),
                 StdErr = "",
             },
             _ => throw new InvalidOperationException("unexpected git request"),
@@ -473,19 +712,27 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
     private static string PullJson(string head = Head) =>
         $"{{\"number\":{PullRequest},\"head\":{{\"sha\":\"{head}\"}},\"merged\":false,\"merge_commit_sha\":null,\"labels\":[]}}";
 
-    private static string ReviewArray(string body, string? commitId, string state = "COMMENTED") => JsonSerializer.Serialize(new[]
-    {
-        new
+    private static string ReviewArray(string body, string? commitId, string state = "COMMENTED") => ReviewRows((body, commitId, state));
+
+    private static string ReviewRows(params (string Body, string? CommitId, string State)[] rows) => ReviewRowsWithIds(
+        rows.Select((row, index) => (
+            index + 1,
+            row.Body,
+            row.CommitId,
+            row.State,
+            $"2026-10-07T00:00:{index:D2}Z")).ToArray());
+
+    private static string ReviewRowsWithIds(params (int Id, string Body, string? CommitId, string State, string SubmittedAt)[] rows) =>
+        JsonSerializer.Serialize(rows.Select(row => new
         {
-            id = 1,
-            state,
-            commit_id = commitId,
-            body,
-            html_url = $"https://github.com/{Repo}/pull/{PullRequest}#pullrequestreview-1",
-            submitted_at = "2026-10-07T00:00:00Z",
+            id = row.Id,
+            state = row.State,
+            commit_id = row.CommitId,
+            body = row.Body,
+            html_url = $"https://github.com/{Repo}/pull/{PullRequest}#pullrequestreview-{row.Id}",
+            submitted_at = row.SubmittedAt,
             user = new { login = "reviewer" },
-        },
-    });
+        }));
 
     private static GitHubCommandResult Json(string json) => new() { ExitCode = 0, StdOut = json, StdErr = "" };
 

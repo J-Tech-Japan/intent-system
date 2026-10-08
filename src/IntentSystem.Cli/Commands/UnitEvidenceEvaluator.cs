@@ -21,19 +21,14 @@ internal static class UnitEvidenceEvaluator
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var supplied = snapshot.Facts.ToDictionary(fact => fact.Id, StringComparer.Ordinal);
-        var steps = PhaseFacts.Select(phase => BuildStep(phase.Step, phase.Facts, supplied)).ToArray();
+        var steps = PhaseFacts.Select(phase => BuildStep(phase.Step, phase.Facts, supplied,
+            snapshot.ApplicabilityState, snapshot.ApplicabilityCause, snapshot.ApplicabilityDetail, snapshot.UnavailableClass)).ToArray();
         var allFacts = steps.SelectMany(step => step.Subchecks).ToArray();
         var counts = StateNames.ToDictionary(state => state, state => allFacts.Count(fact => fact.State == state), StringComparer.Ordinal);
         var unavailableClasses = allFacts
             .Where(fact => fact.State == UnitStatusStates.Unavailable && !string.IsNullOrWhiteSpace(fact.UnavailableClass))
             .GroupBy(fact => fact.UnavailableClass!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
-        if (snapshot.ApplicabilityState == UnitStatusStates.Unavailable
-            && !string.IsNullOrWhiteSpace(snapshot.UnavailableClass))
-        {
-            unavailableClasses[snapshot.UnavailableClass!] = unavailableClasses.GetValueOrDefault(snapshot.UnavailableClass!) + 1;
-        }
-
         var exitCode = snapshot.ApplicabilityState == UnitStatusStates.Unavailable
             && snapshot.UnavailableClass != UnitStatusStates.ProvenanceLimit
                 ? 1
@@ -105,11 +100,32 @@ internal static class UnitEvidenceEvaluator
     private static UnitStatusStep BuildStep(
         string id,
         IReadOnlyList<string> factIds,
-        IReadOnlyDictionary<string, UnitStatusFact> supplied)
+        IReadOnlyDictionary<string, UnitStatusFact> supplied,
+        string? applicabilityState,
+        string? applicabilityCause,
+        string? applicabilityDetail,
+        string? unavailableClass)
     {
         var facts = factIds.Select(factId => supplied.TryGetValue(factId, out var fact)
-            ? NormalizeFact(fact)
-            : new UnitStatusFact
+            ? applicabilityState == UnitStatusStates.Unavailable
+                ? fact with
+                {
+                    State = UnitStatusStates.Unavailable,
+                    Cause = applicabilityCause ?? "applicability-unresolved",
+                    Detail = applicabilityDetail ?? "Observation stopped before this evidence was read.",
+                    UnavailableClass = unavailableClass ?? UnitStatusStates.ApplicabilityUnresolved,
+                }
+                : NormalizeFact(fact)
+            : applicabilityState == UnitStatusStates.Unavailable
+                ? new UnitStatusFact
+                {
+                    Id = factId,
+                    State = UnitStatusStates.Unavailable,
+                    Cause = applicabilityCause ?? "applicability-unresolved",
+                    Detail = applicabilityDetail ?? "Observation stopped before this evidence was read.",
+                    UnavailableClass = unavailableClass ?? UnitStatusStates.ApplicabilityUnresolved,
+                }
+                : new UnitStatusFact
             {
                 Id = factId,
                 State = UnitStatusStates.Missing,

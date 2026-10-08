@@ -129,6 +129,8 @@ intent-cli unit status --execution-unit <unit> --domain <domain> --team <team> -
 完了や merge readiness を意味しません。安定した `provenance-limit` は情報として示し、retry や
 再承認を指示しません。mode/team の欠落や未解決時は GitHub read を行わず、
 記録済み non-solo mode は not-applicable を返します。
+skipped または neutral の CI 結果は `missing` です。他 job の失敗後に条件付きで実行対象外となった場合も同じで、
+この inventory は branch-protection の必須 check を推定しません。state、cause、unavailable class の count を合わせて確認してください。
 
 ## cross-runtime implementation review（G834 — preview-through-1.x）
 

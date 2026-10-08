@@ -578,6 +578,8 @@ non-solo mode は solo-conductor phase を not-applicable にして GitHub read 
 solo-conductor では、API read を local で照合した issue/PR と観測 PR head に結び付けます。pagination は
 20 page まで完全に読み、head が変わった場合の retry は最大 1 回です。report は観測した check-run と
 commit-status を inventory として示しますが、branch protection や required-check rule は評価しません。
+skipped または neutral の check は `missing` として扱います。別 job の失敗後に条件付きで skip された場合も同じです。
+正常に読めたことは成功を意味しません。観測を読むときは state、cause、unavailable class の count を合わせて確認してください。
 
 exit 0 は observation が完了したことを示し、evidence の欠落や既知の `provenance-limit` だけで unavailable
 となる場合も含みます。exit 1 は不正な request または provenance 以外の observation failure を示します。

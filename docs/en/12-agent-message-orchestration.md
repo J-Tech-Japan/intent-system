@@ -141,7 +141,10 @@ phases, and unavailable evidence. Exit 0 means the observation completed; it
 does not mean the unit is complete or ready to merge. A stable
 `provenance-limit` finding is informational and is not a retry or
 re-approval instruction. Missing/unresolved mode and team context fail closed
-without GitHub reads; recorded non-solo mode returns not-applicable.
+without GitHub reads; recorded non-solo mode returns not-applicable. A skipped
+or neutral CI result is `missing`, including a conditional skip after another
+job failed; this read-only inventory does not infer branch-protection
+requirements. Read the state, cause, and unavailable-class counts together.
 
 ## Cross-runtime implementation review (G834 — preview-through-1.x)
 

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using IntentSystem.Supervisor.Models;
 using IntentSystem.Supervisor.Serialization;
+using YamlDotNet.RepresentationModel;
 
 namespace IntentSystem.Cli.Commands;
 
@@ -46,7 +47,7 @@ internal static class UnitStatusCommand
     {
         if (!TryParse(args[2..], out var unit, out var domain, out var team, out var format, out var error))
             return Emit(writer, Empty(unit ?? "(unresolved)", "invalid-request", error, UnitStatusStates.InvalidRequest), format);
-        return Emit(writer, Empty(unit!, "host-context-invalid", detail, UnitStatusStates.ApplicabilityUnresolved, domain, team), format);
+        return Emit(writer, Empty(unit!, "host-config-unreadable", detail, UnitStatusStates.ReadFailure, domain, team), format);
     }
 
     private static UnitStatusEvidenceSnapshot Capture(CliContext context, string unit, string? askedDomain, string? askedTeam, IUnitStatusSnapshotReader reader)
@@ -67,12 +68,17 @@ internal static class UnitStatusCommand
         var publishPath = Path.Combine(packetDir, "publish.yaml");
         IssuePublishArtifact? publish = null;
         string? publishError = null;
-        if (File.Exists(publishPath))
+        var publishIdentityInvalid = false;
+        if (File.Exists(publishPath) || Directory.Exists(publishPath))
         {
             try
             {
                 publish = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(publishPath));
-                if (publish.ExecutionUnit != unit) throw new InvalidOperationException("Publish artifact execution unit mismatches the requested unit.");
+                if (publish.ExecutionUnit != unit)
+                {
+                    publishIdentityInvalid = true;
+                    throw new InvalidOperationException("Publish artifact execution unit mismatches the requested unit.");
+                }
             }
             catch (Exception exception) when (IsReadException(exception)) { publishError = exception.Message; publish = null; }
         }
@@ -85,7 +91,6 @@ internal static class UnitStatusCommand
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
         if (domain is null && scopedDomains.Length == 1) domain = scopedDomains[0];
-        var publishIdentityInvalid = false;
         string? publishIssueRepo = null;
         int? publishIssueFromUrl = null;
         string? publishPrRepo = null;
@@ -141,11 +146,13 @@ internal static class UnitStatusCommand
         var claimedTeam = claims.ActiveClaim?.Team
             ?? (claimedTeams.Length == 1 ? claimedTeams[0] : null);
         var team = string.IsNullOrWhiteSpace(askedTeam) ? claimedTeam : askedTeam.Trim();
+        var packetUnitInvalid = packet?.Fields.GetValueOrDefault("execution_unit") is { } packetUnitValue
+            && !string.Equals(packetUnitValue, unit, StringComparison.Ordinal);
         var conflict = repoValues.Length > 1 || issueValues.Length > 1 || prValues.Length > 1 || scopedDomains.Length > 1
             || queueIdentity.Count > 1
             || runIdentity.Select(candidate => candidate.Path).Distinct(StringComparer.Ordinal).Count() > 1
             || runIdentity.Any(candidate => candidate.InvalidIdentity)
-            || publishIdentityInvalid || queueIdentityInvalid
+            || publishIdentityInvalid || packetUnitInvalid || queueIdentityInvalid
             || packetRepo is not null && !SafeRepo(packetRepo)
             || claims.ActiveClaim is null && claimedTeams.Length > 1
             || queueScanError is not null || runScanError is not null
@@ -155,7 +162,7 @@ internal static class UnitStatusCommand
 
         var sources = new List<string>();
         if (packetYaml is not null) sources.Add("packet.yaml");
-        if (publish is not null) sources.Add("publish.yaml");
+        if (publish is not null || publishError is not null) sources.Add("publish.yaml");
         if (queueIdentity.Count > 0) sources.Add("queue-state.json");
         if (runIdentity.Count > 0) sources.Add("runs.jsonl");
         if (claims.ActiveClaim is not null || claims.History.Count > 0) sources.Add("claim snapshot");
@@ -166,6 +173,27 @@ internal static class UnitStatusCommand
                 UnitStatusStates.Unavailable, queueScanError is not null || runScanError is not null ? "identity-candidates-unreadable" : "identity-conflict",
                 queueScanError ?? runScanError ?? "Packet, publish, queue, runs, claim, or explicit identity assertions disagree.",
                 queueScanError is not null || runScanError is not null ? UnitStatusStates.ReadFailure : UnitStatusStates.IdentityConflict);
+        if (team is not null) AddClaimFacts(facts, claims, team, unit);
+        if (packetError is not null)
+        {
+            var pointer = EvidenceFile("packet", Path.Combine(".intent-cli", "issues", unit, "packet.yaml").Replace('\\', '/'), unit,
+                "packet-identity-read-failure");
+            facts.Add(Unavailable("packet-current-validation", "packet-identity-unreadable", packetError, UnitStatusStates.ReadFailure)
+                with { Evidence = [pointer] });
+            facts.Add(Unavailable("bug-chain-or-ruling", "packet-unreadable", packetError, UnitStatusStates.ReadFailure)
+                with { Evidence = [pointer] });
+            return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
+                UnitStatusStates.Unavailable, "packet-identity-unreadable", packetError, UnitStatusStates.ReadFailure);
+        }
+        if (publishError is not null)
+        {
+            var pointer = EvidenceFile("publish-artifact", Path.Combine(".intent-cli", "issues", unit, "publish.yaml").Replace('\\', '/'), unit,
+                "required-publish-identity-read-failure");
+            facts.Add(Unavailable("publication-artifact", "publication-artifact-unreadable", publishError, UnitStatusStates.ReadFailure)
+                with { Evidence = [pointer] });
+            return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
+                UnitStatusStates.Unavailable, "publication-artifact-unreadable", publishError, UnitStatusStates.ReadFailure);
+        }
         if (domain is null)
             return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
                 UnitStatusStates.Unavailable, "domain-unresolved", "Domain could not be derived from the packet or an explicit assertion.", UnitStatusStates.ApplicabilityUnresolved);
@@ -187,6 +215,19 @@ internal static class UnitStatusCommand
         if (mode is null)
             return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
                 UnitStatusStates.Unavailable, "team-mode-unrecorded", "No current recorded mode exists for this exact domain/team entry.", UnitStatusStates.ApplicabilityUnresolved);
+        var packetUnit = packet?.Fields.GetValueOrDefault("execution_unit");
+        var hasExactUnitSource = string.Equals(packetUnit, unit, StringComparison.Ordinal)
+            || publish?.ExecutionUnit == unit
+            || queueIdentity.Any(candidate => candidate.Item.ExecutionUnit == unit)
+            || runIdentity.Count > 0
+            || claims.ActiveClaim?.Scope == "execution-unit:" + unit
+            || claims.History.Count > 0;
+        if (!hasExactUnitSource)
+            return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
+                UnitStatusStates.Unavailable, "unit-identity-unestablished", "The requested unit is not established by a matching packet, queue, publish, run, or claim record.", UnitStatusStates.ApplicabilityUnresolved);
+        if (claims.State == UnitStatusStates.Unavailable)
+            return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
+                UnitStatusStates.Unavailable, "claim-snapshot-unavailable", claims.Detail ?? "The configured claim snapshot could not be read.", claims.UnavailableClass ?? UnitStatusStates.ReadFailure);
         if (mode.Mode != TeamMode.SoloConductor)
         {
             var na = FactIds.Select(id => NotApplicable(id, "recorded-non-solo-mode",
@@ -195,7 +236,7 @@ internal static class UnitStatusCommand
                 UnitStatusStates.NotApplicable, "recorded-non-solo-mode", "All solo-conductor phases are not applicable.", null, mode);
         }
 
-        AddPacketFacts(facts, unit, packetDir, packetYaml, packetError, packet);
+        AddPacketFacts(facts, unit, root, packetDir, packetYaml, packetError, packet);
         AddQueueAndPublishFacts(facts, root, unit, domain, repo, issue, publish, publishError,
             out var queueItem, out var queuePath, out var runEvents, out var runsPath, out var queueReadError, out var runsReadError);
         if (queueScanError is not null)
@@ -204,8 +245,6 @@ internal static class UnitStatusCommand
             facts.Add(Unavailable("queue-seed", "queue-scan-unreadable", queueScanError, UnitStatusStates.ReadFailure));
         }
         if (queueReadError is not null || runsReadError is not null) localSources.Add("runtime state");
-        AddClaimFacts(facts, claims, team, unit);
-
         UnitStatusRemoteSnapshot? remote = null;
         if (repo is not null && issue is > 0 && pr is > 0)
             remote = reader.ObserveGitHub(context, repo, issue.Value, pr.Value, unit, domain, team);
@@ -374,7 +413,7 @@ internal static class UnitStatusCommand
         IReadOnlyList<int> PullRequests,
         bool InvalidIdentity);
 
-    private static void AddPacketFacts(ICollection<UnitStatusFact> facts, string unit, string directory, string? yaml, string? readError, PacketYamlDocument? packet)
+    private static void AddPacketFacts(ICollection<UnitStatusFact> facts, string unit, string root, string directory, string? yaml, string? readError, PacketYamlDocument? packet)
     {
         var packetPath = Path.Combine(".intent-cli", "issues", unit, "packet.yaml").Replace('\\', '/');
         var implementationPath = Path.Combine(directory, "implementation.md");
@@ -418,7 +457,7 @@ internal static class UnitStatusCommand
                 with { Evidence = packetEvidence });
             facts.Add(Unavailable("guide-declaration", "guide-declaration-unreadable", "Current packet declaration cannot be read.", UnitStatusStates.ReadFailure)
                 with { Evidence = [EvidenceFile("packet", packetPath, unit, "current-packet-file")] });
-            facts.Add(Missing("bug-chain-or-ruling", "source-links-not-recorded", "No explicit supported source or ruling reference was established."));
+            AddSourceArtifactFact(facts, root, unit, packetPath, packet);
             return;
         }
         if (yaml is null)
@@ -426,7 +465,9 @@ internal static class UnitStatusCommand
             facts.Add(readError is null ? Missing("packet-current-validation", "packet-yaml-missing", "Current packet validation needs packet.yaml.")
                 : Unavailable("packet-current-validation", "packet-yaml-unreadable", readError, UnitStatusStates.ReadFailure));
             facts.Add(Unavailable("guide-declaration", "guide-declaration-unreadable", "Current packet declaration cannot be read.", UnitStatusStates.ReadFailure));
-            facts.Add(Missing("bug-chain-or-ruling", "source-links-not-recorded", "No explicit supported source or ruling reference was established."));
+            facts.Add(readError is null
+                ? Missing("bug-chain-or-ruling", "source-links-not-recorded", "No packet was present to declare a source or ruling reference.")
+                : Unavailable("bug-chain-or-ruling", "packet-unreadable", readError, UnitStatusStates.ReadFailure));
             return;
         }
         var validation = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
@@ -455,7 +496,257 @@ internal static class UnitStatusCommand
         }
         catch (Exception exception) when (IsReadException(exception))
         { facts.Add(Unavailable("guide-declaration", "guide-declaration-unreadable", exception.Message, UnitStatusStates.ReadFailure)); }
-        facts.Add(Missing("bug-chain-or-ruling", "source-links-not-recorded", "No explicit supported source-issue or ruling artifact link was established."));
+        AddSourceArtifactFact(facts, root, unit, packetPath, packet);
+    }
+
+    private static void AddSourceArtifactFact(ICollection<UnitStatusFact> facts, string root, string unit,
+        string packetPath, PacketYamlDocument? packet)
+    {
+        if (packet is null)
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "packet-unparseable", "The packet source declaration could not be read from an unparseable packet.", UnitStatusStates.ReadFailure));
+            return;
+        }
+        var sourceReference = packet?.Fields.GetValueOrDefault("implementation_issue_packet.source_artifact")
+            ?? packet?.Fields.GetValueOrDefault("source_artifact");
+        var rulingReference = packet?.Fields.GetValueOrDefault("implementation_issue_packet.ruling_artifact")
+            ?? packet?.Fields.GetValueOrDefault("ruling_artifact");
+        if (string.IsNullOrWhiteSpace(sourceReference) && string.IsNullOrWhiteSpace(rulingReference))
+        {
+            facts.Add(Missing("bug-chain-or-ruling", "source-links-not-recorded", "A successfully read packet has no explicit supported source or ruling reference."));
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(rulingReference))
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "ruling-reference-unsupported",
+                "The packet declares a ruling artifact, but this status reader has no canonical read-only ruling-artifact parser.", UnitStatusStates.ProvenanceLimit)
+                with { RepairUnavailableReason = "no-supported-ruling-artifact-reader" });
+            return;
+        }
+
+        var source = sourceReference!.Trim();
+        string? explicitReportPath = null;
+        string? sourceUrl = null;
+        if (TryParseGithubUrl(source, "issues", out var sourceRepo, out var sourceIssue))
+        {
+            sourceUrl = $"https://github.com/{sourceRepo}/issues/{sourceIssue}";
+        }
+        else if (source.StartsWith(".intent-cli/bugs/", StringComparison.Ordinal)
+            && source.EndsWith(".report.yaml", StringComparison.Ordinal)
+            && !source.Contains("..", StringComparison.Ordinal)
+            && !source.Contains('\\'))
+        {
+            var absolute = Path.GetFullPath(Path.Combine(root, source.Replace('/', Path.DirectorySeparatorChar)));
+            var bugsRoot = Path.GetFullPath(Path.Combine(root, ".intent-cli", "bugs"));
+            if (!Contained(bugsRoot, absolute) || !string.Equals(Path.GetDirectoryName(absolute), bugsRoot, PathComparison))
+            {
+                facts.Add(Unavailable("bug-chain-or-ruling", "source-reference-identity-conflict", "The packet source report path escapes the canonical bug-artifact directory.", UnitStatusStates.IdentityConflict));
+                return;
+            }
+            explicitReportPath = absolute;
+        }
+        else
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "source-reference-unsupported",
+                "The packet source reference is freeform or uses an unsupported source format.", UnitStatusStates.ProvenanceLimit)
+                with { RepairUnavailableReason = "no-supported-source-reference-reader" });
+            return;
+        }
+
+        var bugsRootPath = Path.GetFullPath(Path.Combine(root, ".intent-cli", "bugs"));
+        if (explicitReportPath is null && !Directory.Exists(bugsRootPath))
+        {
+            facts.Add(Missing("bug-chain-or-ruling", "source-chain-not-recorded", "No canonical source bug report exists for the explicit source reference."));
+            return;
+        }
+
+        string[] reportPaths;
+        if (explicitReportPath is not null)
+        {
+            // An explicit local path asserts a concrete artifact. Missing or
+            // unreadable evidence is a read failure, unlike a URL inventory
+            // that was read successfully and contained no match.
+            reportPaths = [explicitReportPath];
+        }
+        else try
+        {
+            reportPaths = Directory.EnumerateFiles(bugsRootPath, "*.report.yaml", SearchOption.TopDirectoryOnly)
+                .Take(501)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception exception) when (IsReadException(exception))
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "source-inventory-unreadable", exception.Message, UnitStatusStates.ReadFailure));
+            return;
+        }
+        if (reportPaths.Length > 500)
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "source-inventory-truncated", "Canonical bug report inventory exceeded the 500-file bound.", UnitStatusStates.ReadFailure));
+            return;
+        }
+
+        var candidates = new List<(BugReportArtifact Report, UnitStatusEvidencePointer Evidence)>();
+        var conflictingSourceEvidence = new List<UnitStatusEvidencePointer>();
+        foreach (var path in reportPaths)
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (!Contained(bugsRootPath, fullPath) || !string.Equals(Path.GetDirectoryName(fullPath), bugsRootPath, PathComparison))
+            {
+                facts.Add(Unavailable("bug-chain-or-ruling", "source-inventory-identity-conflict", "Canonical bug report inventory contains a path outside its root.", UnitStatusStates.IdentityConflict));
+                return;
+            }
+
+            var yaml = ReadText(fullPath, out var readError);
+            if (yaml is null)
+            {
+                facts.Add(Unavailable("bug-chain-or-ruling", "source-report-unreadable", readError ?? "A canonical bug report disappeared during observation.", UnitStatusStates.ReadFailure));
+                return;
+            }
+
+            BugReportArtifact report;
+            try { report = BugReportArtifactYaml.Deserialize(yaml); }
+            catch (Exception exception) when (IsReadException(exception))
+            {
+                facts.Add(Unavailable("bug-chain-or-ruling", "source-report-unreadable", exception.Message, UnitStatusStates.ReadFailure));
+                return;
+            }
+            var canonicalReportRef = BugReportArtifactPathResolver.Resolve(report.BugId);
+            var canonicalReportPath = Path.GetFullPath(Path.Combine(root, canonicalReportRef.Replace('/', Path.DirectorySeparatorChar)));
+            if (!string.Equals(canonicalReportPath, fullPath, PathComparison))
+            {
+                facts.Add(Unavailable("bug-chain-or-ruling", "source-report-identity-conflict", "A report artifact filename disagrees with its embedded bug id.", UnitStatusStates.IdentityConflict));
+                return;
+            }
+            var linkedIssueMatches = sourceUrl is not null && report.LinkedIssueRefs.Any(reference =>
+                TryParseGithubUrl(reference, "issues", out var linkedRepo, out var linkedIssue)
+                    && string.Equals(linkedRepo, sourceRepo, StringComparison.OrdinalIgnoreCase)
+                    && linkedIssue == sourceIssue);
+            var foreignRepoIssueMatches = sourceUrl is not null
+                && report.LinkedExecutionUnits.Contains(unit, StringComparer.Ordinal)
+                && report.LinkedIssueRefs.Any(reference =>
+                    TryParseGithubUrl(reference, "issues", out var linkedRepo, out var linkedIssue)
+                        && linkedIssue == sourceIssue
+                        && !string.Equals(linkedRepo, sourceRepo, StringComparison.OrdinalIgnoreCase));
+            var directPathMatches = explicitReportPath is not null && string.Equals(fullPath, explicitReportPath, PathComparison);
+            var pointer = new UnitStatusEvidencePointer
+            {
+                Kind = "bug-report-artifact",
+                Path = Path.GetRelativePath(root, fullPath).Replace('\\', '/'),
+                RecordId = report.BugId,
+                Url = sourceUrl,
+                ExecutionUnit = unit,
+                Provenance = "canonical-local-bug-report-linked-by-explicit-packet-source-reference",
+            };
+            if (foreignRepoIssueMatches)
+                conflictingSourceEvidence.Add(pointer);
+            if (linkedIssueMatches || directPathMatches)
+                candidates.Add((report, pointer));
+        }
+
+        if (conflictingSourceEvidence.Count > 0)
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "source-chain-identity-conflict",
+                "A canonical report linked to this unit points at the packet's issue number in a different repository.", UnitStatusStates.IdentityConflict)
+                with { Evidence = conflictingSourceEvidence });
+            return;
+        }
+
+        if (candidates.Count == 0)
+        {
+            facts.Add(Missing("bug-chain-or-ruling", "source-chain-not-recorded", "No canonical bug report is linked to the packet's explicit source reference."));
+            return;
+        }
+        if (candidates.Count != 1)
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "source-chain-identity-conflict", "Multiple canonical bug reports match the explicit packet source reference.", UnitStatusStates.IdentityConflict)
+                with { Evidence = candidates.Select(candidate => candidate.Evidence).ToArray() });
+            return;
+        }
+
+        var selected = candidates[0];
+        var triageRef = BugTriageArtifactPathResolver.Resolve(selected.Report.BugId);
+        var planRef = BugExecutionArtifactPathResolver.Resolve(selected.Report.BugId);
+        var triagePath = Path.GetFullPath(Path.Combine(root, triageRef.Replace('/', Path.DirectorySeparatorChar)));
+        var planPath = Path.GetFullPath(Path.Combine(root, planRef.Replace('/', Path.DirectorySeparatorChar)));
+        if (!Contained(root, triagePath) || !Contained(root, planPath))
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "source-chain-path-conflict", "Canonical triage or plan path escapes the repository root.", UnitStatusStates.IdentityConflict));
+            return;
+        }
+        if (!File.Exists(triagePath) || !File.Exists(planPath))
+        {
+            facts.Add(Missing("bug-chain-or-ruling", "source-triage-plan-not-recorded", "The source report has no complete canonical triage and plan chain.")
+                with { Evidence = [selected.Evidence] });
+            return;
+        }
+
+        BugTriageArtifact triage;
+        BugExecutionArtifact plan;
+        try
+        {
+            triage = BugTriageArtifactYaml.Deserialize(File.ReadAllText(triagePath));
+            plan = BugExecutionArtifactYaml.Deserialize(File.ReadAllText(planPath));
+        }
+        catch (Exception exception) when (IsReadException(exception))
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "source-triage-plan-unreadable", exception.Message, UnitStatusStates.ReadFailure)
+                with { Evidence = [selected.Evidence] });
+            return;
+        }
+
+        var packetRelative = Path.GetRelativePath(root, packetPath).Replace('\\', '/');
+        var reportHasContradictoryUnits = selected.Report.LinkedExecutionUnits.Count > 0
+            && !selected.Report.LinkedExecutionUnits.Contains(unit, StringComparer.Ordinal);
+        var triageHasContradictoryUnits = triage.ResolvedExecutionUnits.Count > 0
+            && !triage.ResolvedExecutionUnits.Contains(unit, StringComparer.Ordinal);
+        var triageHasContradictoryPackets = triage.ResolvedPacketRefs.Count > 0
+            && !triage.ResolvedPacketRefs.Contains(packetRelative, StringComparer.Ordinal);
+        var planHasContradictoryPackets = plan.ResolvedPacketRefs.Count > 0
+            && !plan.ResolvedPacketRefs.Contains(packetRelative, StringComparer.Ordinal);
+        if (reportHasContradictoryUnits
+            || triage.BugId != selected.Report.BugId || triage.ReportRef != BugReportArtifactPathResolver.Resolve(selected.Report.BugId)
+            || triageHasContradictoryUnits || triageHasContradictoryPackets
+            || plan.BugId != selected.Report.BugId || plan.ReportRef != BugReportArtifactPathResolver.Resolve(selected.Report.BugId)
+            || plan.TriageRef != triageRef || planHasContradictoryPackets)
+        {
+            facts.Add(Unavailable("bug-chain-or-ruling", "source-chain-identity-conflict", "Canonical report, triage, plan, and packet references do not agree on bug and execution-unit identity.", UnitStatusStates.IdentityConflict)
+                with { Evidence = [selected.Evidence] });
+            return;
+        }
+
+        var chainEvidence = new[]
+        {
+            selected.Evidence,
+            new UnitStatusEvidencePointer { Kind = "bug-triage-artifact", Path = triageRef, RecordId = triage.BugId, ExecutionUnit = unit, Provenance = "canonical-local-bug-triage-artifact" },
+            new UnitStatusEvidencePointer { Kind = "bug-plan-artifact", Path = planRef, RecordId = plan.BugId, ExecutionUnit = unit, Provenance = "canonical-local-bug-plan-artifact" },
+            EvidenceFile("packet", packetPath, unit, "packet-source-artifact-declaration"),
+        };
+        facts.Add(Done("bug-chain-or-ruling", "canonical-source-chain-recorded", "The packet's explicit source issue resolves to one identity-matched canonical report, triage, and plan chain.")
+            with { Evidence = chainEvidence });
+    }
+
+    private static bool HasExplicitKnowledgeWriteBackDeclaration(string yaml)
+    {
+        try
+        {
+            var stream = new YamlStream();
+            using var reader = new StringReader(yaml);
+            stream.Load(reader);
+            if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode root) return false;
+            if (root.Children.TryGetValue(new YamlScalarNode("closeout_learning"), out var closeoutNode)
+                && closeoutNode is YamlMappingNode closeout
+                && closeout.Children.ContainsKey(new YamlScalarNode("write_back_required"))) return true;
+            if (!root.Children.TryGetValue(new YamlScalarNode("knowledge_updates"), out var updatesNode)
+                || updatesNode is not YamlMappingNode updates) return false;
+            return updates.Children.Values.OfType<YamlMappingNode>()
+                .Any(facet => facet.Children.ContainsKey(new YamlScalarNode("required")));
+        }
+        catch (YamlDotNet.Core.YamlException)
+        {
+            return false;
+        }
     }
 
     private static void AddQueueAndPublishFacts(ICollection<UnitStatusFact> facts, string root, string unit, string domain, string? repo, int? issue,
@@ -550,7 +841,10 @@ internal static class UnitStatusCommand
         }
         var rows = claims.History.OrderBy(row => row.RecordedAt).ThenBy(row => row.Path, StringComparer.Ordinal).ToArray();
         bool Role(string? actor, string role) => LogicalRoleNormalizer.TryNormalize(actor, out var normalized, out _) && normalized == role;
-        UnitStatusEvidencePointer ClaimEvidence(UnitStatusClaimRecordFact row, string role) => new()
+        string Disposition(string operation, string role) => operation == "takeover"
+            ? "takeover"
+            : role == LogicalRoleNormalizer.Architect ? "design-handoff" : "implementation-release";
+        UnitStatusEvidencePointer ClaimEvidence(UnitStatusClaimRecordFact row, string role, DateTimeOffset? epochClaimedAt = null) => new()
         {
             Kind = "claim-record",
             Path = row.Path,
@@ -558,39 +852,122 @@ internal static class UnitStatusCommand
             Role = role,
             ExecutionUnit = unit,
             RecordedAt = row.RecordedAt ?? row.ClaimedAt,
+            ClaimEpochClaimedAt = epochClaimedAt ?? row.DisplacedClaimedAt ?? row.ClaimedAt,
+            ClaimOperation = row.Operation ?? "acquire",
+            ClaimDisposition = row.Operation is null ? "active" : Disposition(row.Operation, role),
             Provenance = "configured-local-claim-snapshot:" + (claims.MetadataRef ?? "(unresolved)")
                 + "@" + (claims.MetadataOid ?? "(unresolved)"),
         };
-        UnitStatusEvidencePointer[] AcquiredEvidence(string role) =>
-            (claims.ActiveClaim is { } active && active.Team == team && Role(active.Actor, role)
-                ? [ClaimEvidence(active, role)]
-                : Array.Empty<UnitStatusEvidencePointer>())
-            .Concat(rows.Where(row => Role(row.DisplacedHolder, role) && row.DisplacedTeam == team
-                    || Role(row.Actor, role) && row.Team == team)
-                .Select(row => ClaimEvidence(row, role)))
-            .ToArray();
-        UnitStatusEvidencePointer[] ReleasedEvidence(string role) => rows
-            .Where(row => row.Operation == "release" && Role(row.Actor, role) && row.Team == team
-                || row.Operation == "takeover" && Role(row.DisplacedHolder, role) && row.DisplacedTeam == team)
-            .Select(row => ClaimEvidence(row, role))
-            .ToArray();
 
-        var designAcquired = AcquiredEvidence(LogicalRoleNormalizer.Architect);
-        var designReleased = ReleasedEvidence(LogicalRoleNormalizer.Architect);
-        var implementationAcquired = AcquiredEvidence(LogicalRoleNormalizer.Builder);
-        var implementationReleased = ReleasedEvidence(LogicalRoleNormalizer.Builder);
-        facts.Add(designAcquired.Length > 0
-            ? Done("design-claim-acquired", "design-claim-observed", "Claim snapshot establishes design/architect acquisition.") with { Evidence = designAcquired }
-            : Missing("design-claim-acquired", "design-claim-not-observed", "No matching design/architect acquisition evidence exists.") with { Evidence = [SnapshotEvidence()] });
-        facts.Add(designReleased.Length > 0
-            ? Done("design-claim-release", "design-claim-release-observed", "Claim history establishes design release or displacement.") with { Evidence = designReleased }
-            : Missing("design-claim-release", "design-claim-release-not-observed", "No design release or displacement was observed.") with { Evidence = [SnapshotEvidence()] });
-        facts.Add(implementationAcquired.Length > 0
-            ? Done("implementation-claim-acquired", "implementation-claim-observed", "Claim snapshot establishes implementation/builder acquisition.") with { Evidence = implementationAcquired }
-            : Missing("implementation-claim-acquired", "implementation-claim-not-observed", "No matching implementation/builder acquisition evidence exists.") with { Evidence = [SnapshotEvidence()] });
-        facts.Add(implementationReleased.Length > 0
-            ? Done("implementation-claim-release", "implementation-claim-release-observed", "Claim history establishes implementation release or displacement.") with { Evidence = implementationReleased }
-            : Missing("implementation-claim-release", "implementation-claim-release-not-observed", "No implementation release or displacement was observed.") with { Evidence = [SnapshotEvidence()] });
+        void AddRoleFacts(string role, string acquiredId, string releaseId)
+        {
+            var active = claims.ActiveClaim is { } current && current.Team == team && Role(current.Actor, role) ? current : null;
+            var acquisitionEpochs = new List<(DateTimeOffset At, UnitStatusEvidencePointer Evidence, bool Active)>();
+            var releaseEpochs = new List<(DateTimeOffset At, UnitStatusEvidencePointer Evidence)>();
+            var invalidDetail = (string?)null;
+            if (active is not null)
+            {
+                if (active.ClaimedAt is null || active.ClaimedAt == default)
+                    invalidDetail = "Active claim has no usable claimed_at value for its epoch.";
+                else
+                    acquisitionEpochs.Add((active.ClaimedAt.Value, ClaimEvidence(active, role, active.ClaimedAt), true));
+            }
+
+            foreach (var row in rows)
+            {
+                var actorMatches = Role(row.Actor, role) && row.Team == team;
+                var displacedMatches = Role(row.DisplacedHolder, role) && row.DisplacedTeam == team;
+                if (row.Operation == "release" && (actorMatches || displacedMatches))
+                {
+                    if (!actorMatches || !displacedMatches || row.DisplacedClaimedAt is null || row.DisplacedClaimedAt == default)
+                    {
+                        invalidDetail = "Release history has inconsistent holder/team/claim-epoch identity.";
+                        continue;
+                    }
+
+                    var pointer = ClaimEvidence(row, role, row.DisplacedClaimedAt);
+                    acquisitionEpochs.Add((row.DisplacedClaimedAt.Value, pointer, false));
+                    releaseEpochs.Add((row.DisplacedClaimedAt.Value, pointer));
+                }
+                else if (row.Operation == "takeover")
+                {
+                    if (actorMatches)
+                    {
+                        if (row.RecordedAt is null || row.RecordedAt == default)
+                            invalidDetail = "Takeover history has no usable recorded_at value for the incoming claim epoch.";
+                        else
+                            acquisitionEpochs.Add((row.RecordedAt.Value,
+                                ClaimEvidence(row, role, row.RecordedAt) with { Provenance = "configured-local-claim-snapshot:takeover-recorded-at:" + (claims.MetadataRef ?? "(unresolved)") + "@" + (claims.MetadataOid ?? "(unresolved)") },
+                                false));
+                    }
+
+                    if (displacedMatches)
+                    {
+                        if (row.DisplacedClaimedAt is null || row.DisplacedClaimedAt == default)
+                        {
+                            invalidDetail = "Takeover history has no usable displaced_claimed_at value for the outgoing claim epoch.";
+                            continue;
+                        }
+
+                        var pointer = ClaimEvidence(row, role, row.DisplacedClaimedAt);
+                        acquisitionEpochs.Add((row.DisplacedClaimedAt.Value, pointer, false));
+                        releaseEpochs.Add((row.DisplacedClaimedAt.Value, pointer));
+                    }
+                }
+            }
+
+            var acquiredEvidence = acquisitionEpochs.Select(item => item.Evidence).ToArray();
+            if (invalidDetail is not null)
+            {
+                facts.Add(Unavailable(acquiredId, "claim-epoch-identity-conflict", invalidDetail, UnitStatusStates.IdentityConflict)
+                    with { Evidence = acquiredEvidence.Append(SnapshotEvidence()).ToArray() });
+                facts.Add(Unavailable(releaseId, "claim-epoch-identity-conflict", invalidDetail, UnitStatusStates.IdentityConflict)
+                    with { Evidence = releaseEpochs.Select(item => item.Evidence).Append(SnapshotEvidence()).ToArray() });
+                return;
+            }
+
+            facts.Add(acquisitionEpochs.Count > 0
+                ? Done(acquiredId, "claim-epoch-acquisition-observed", "Claim history or the active claim establishes one or more matching role/team claim epochs.")
+                    with { Evidence = acquiredEvidence }
+                : Missing(acquiredId, role == LogicalRoleNormalizer.Architect ? "design-claim-not-observed" : "implementation-claim-not-observed",
+                    "No matching role/team claim acquisition evidence exists.") with { Evidence = [SnapshotEvidence()] });
+
+            if (acquisitionEpochs.Count == 0)
+            {
+                facts.Add(Missing(releaseId, role == LogicalRoleNormalizer.Architect ? "design-claim-release-not-observed" : "implementation-claim-release-not-observed",
+                    "No matching role/team claim epoch was observed to release.") with { Evidence = [SnapshotEvidence()] });
+                return;
+            }
+
+            var latestAt = acquisitionEpochs.Max(item => item.At);
+            var latestEpochs = acquisitionEpochs.Where(item => item.At == latestAt).ToArray();
+            var activeAtLatest = latestEpochs.Any(item => item.Active);
+            var releaseAtLatest = releaseEpochs.Where(item => item.At == latestAt).ToArray();
+            if (activeAtLatest && releaseAtLatest.Length > 0)
+            {
+                facts.Add(Unavailable(releaseId, "claim-epoch-identity-conflict", "Claim epoch timestamps tie across incompatible active/release evidence; no history row was selected by order.", UnitStatusStates.IdentityConflict)
+                    with { Evidence = releaseEpochs.Select(item => item.Evidence).Concat(latestEpochs.Select(item => item.Evidence)).Distinct().ToArray() });
+                return;
+            }
+
+            if (releaseAtLatest.Length > 0 && !activeAtLatest)
+            {
+                facts.Add(Done(releaseId, "claim-epoch-release-observed", "The latest matching role/team claim epoch has a release or displacement record.")
+                    with { Evidence = releaseAtLatest.Select(item => item.Evidence).Distinct().ToArray() });
+                return;
+            }
+
+            var oldReleaseEvidence = releaseEpochs.Select(item => item.Evidence).ToArray();
+            facts.Add(Missing(releaseId,
+                activeAtLatest || releaseEpochs.Count > 0 ? "claim-release-superseded-by-new-epoch" : "claim-release-not-observed",
+                activeAtLatest
+                    ? "A later matching claim acquisition is active; earlier release evidence cannot satisfy this epoch."
+                    : "No release evidence matches the latest observed claim epoch.")
+                with { Evidence = oldReleaseEvidence.Length == 0 ? [SnapshotEvidence()] : oldReleaseEvidence });
+        }
+
+        AddRoleFacts(LogicalRoleNormalizer.Architect, "design-claim-acquired", "design-claim-release");
+        AddRoleFacts(LogicalRoleNormalizer.Builder, "implementation-claim-acquired", "implementation-claim-release");
     }
 
     private static IReadOnlyList<UnitStatusObservedReview> AddCloseoutFacts(ICollection<UnitStatusFact> facts, string root, string unit, string? repo, int? pr,
@@ -648,7 +1025,12 @@ internal static class UnitStatusCommand
                 facts.Add(Unavailable(id, "packet-declaration-unreadable", exception.Message, UnitStatusStates.ReadFailure));
             return localReviews;
         }
-        if (!declaration.IsRequired)
+        if (!declaration.IsRequired && !HasExplicitKnowledgeWriteBackDeclaration(yaml))
+        {
+            facts.Add(Missing("architect-knowledge-writeback", "knowledge-writeback-declaration-absent", "Legacy packet has no knowledge write-back declaration."));
+            facts.Add(Missing("orchestrator-knowledge-writeback", "knowledge-writeback-declaration-absent", "Legacy packet has no knowledge write-back declaration."));
+        }
+        else if (!declaration.IsRequired)
         {
             facts.Add(NotApplicable("architect-knowledge-writeback", "knowledge-writeback-not-required", "Packet declares no required knowledge write-back."));
             facts.Add(NotApplicable("orchestrator-knowledge-writeback", "knowledge-writeback-not-required", "Packet declares no required knowledge write-back."));
@@ -678,17 +1060,16 @@ internal static class UnitStatusCommand
                 Pr = run.Pr,
             })
             .Where(item => item is not null).Cast<UnitStatusEvidencePointer>().ToArray();
-        facts.Add(candidates.Length == 0
+        var fact = candidates.Length == 0
             ? Missing(id, eventName + "-run-absent", "No matching " + eventName + " run receipt exists.")
-                with { Evidence = evidence is null ? [] : [evidence] }
             : exact.Length > 0
-                ? Done(id, eventName + "-run-recorded", "Matching run receipt exists.") with { Evidence = pointers }
+                ? Done(id, eventName + "-run-recorded", "Matching run receipt exists.")
                 : repo is null || pr is null
                     ? Unavailable(id, "run-identity-unresolved", "Run receipt exists, but exact repository/PR identity is unavailable.", UnitStatusStates.IdentityConflict)
                     : candidates.Any(run => run.Repo is null || run.Pr is null)
                         ? Unavailable(id, "run-identity-unrecorded", "Run receipt lacks the repository/PR fields required for exact attribution.", UnitStatusStates.ProvenanceLimit)
-                        : Unavailable(id, "run-identity-conflict", "Run receipt repository/PR identity disagrees with the resolved unit.", UnitStatusStates.IdentityConflict)
-                            with { Evidence = evidence is null ? [] : [evidence] });
+                        : Unavailable(id, "run-identity-conflict", "Run receipt repository/PR identity disagrees with the resolved unit.", UnitStatusStates.IdentityConflict);
+        facts.Add(fact with { Evidence = pointers.Length > 0 ? pointers : evidence is null ? [] : [evidence] });
     }
 
     private static void AddWritebackFact(ICollection<UnitStatusFact> facts, string root, string unit, string role, string id)
@@ -704,7 +1085,9 @@ internal static class UnitStatusCommand
             LocalFileEvidence(root, row.Path, "knowledge-writeback-record", unit, "role-attributed-local-closeout-record",
                 row.Record.RecordedAt.ToString("O", CultureInfo.InvariantCulture), recordedAt: row.Record.RecordedAt)!
                 with { Role = row.Record.Role };
-        var matching = rows.Where(row => row.Record.Role == role).ToArray();
+        var matching = rows.Where(row => row.Record.Role is not null
+            && CloseoutRecordRole.TryNormalize(row.Record.Role, out var normalizedRole, out _)
+            && normalizedRole == role).ToArray();
         var legacy = rows.Where(row => row.Record.Role is null).ToArray();
         if (errors.Count > 0) facts.Add(Unavailable(id, "writeback-unreadable", string.Join("; ", errors), UnitStatusStates.ReadFailure));
         else if (matching.Length > 1) facts.Add(Unavailable(id, "duplicate-closeout-role-record", "Duplicate records exist for this role duty.", UnitStatusStates.IdentityConflict)
@@ -762,12 +1145,24 @@ internal static class UnitStatusCommand
         LocalHeadSha = claims.LocalHeadSha, LocalHeadRef = claims.LocalHeadRef, ClaimMetadataRef = claims.MetadataRef, ClaimMetadataOid = claims.MetadataOid,
         ApplicabilityState = state, ApplicabilityCause = cause, ApplicabilityDetail = detail, UnavailableClass = unavailableClass,
         IdentitySources = identitySources, LocalSources = localSources,
-        Facts = facts.Count == 0 ? FactIds.Select(id => Missing(id, "evidence-not-observed", "Observation stopped before this evidence was read.")).ToArray() : facts,
+        Facts = CompleteFacts(facts, state, cause, detail, unavailableClass),
         Reviews = reviews ?? remote?.Reviews ?? [], Checks = remote?.Checks ?? [], GitHubSnapshotState = remote?.State ?? "not-observed",
         GitHubSnapshotCause = remote?.Cause, GitHubSnapshotDetail = remote?.Detail, GitHubHeadBefore = remote?.HeadBefore, GitHubHeadAfter = remote?.HeadAfter,
         MergeCommitSha = remote?.MergeCommitSha, PullRequestMerged = remote?.Merged, IssueLabels = remote?.IssueLabels ?? [], PullRequestLabels = remote?.PullRequestLabels ?? [],
         Warnings = remote?.Warnings ?? [],
     };
+
+    private static IReadOnlyList<UnitStatusFact> CompleteFacts(IReadOnlyList<UnitStatusFact> facts,
+        string state, string cause, string detail, string? unavailableClass)
+    {
+        var known = facts.ToDictionary(fact => fact.Id, StringComparer.Ordinal);
+        return FactIds.Select(id => known.TryGetValue(id, out var fact)
+            ? fact
+            : state == UnitStatusStates.Unavailable
+                ? Unavailable(id, cause, detail, unavailableClass ?? UnitStatusStates.ApplicabilityUnresolved)
+                : Missing(id, "evidence-not-observed", "Observation stopped before this evidence was read.")
+        ).ToArray();
+    }
 
     private static UnitStatusEvidenceSnapshot Empty(string unit, string cause, string detail, string unavailableClass, string? domain = null, string? team = null) => new()
     {

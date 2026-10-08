@@ -75,16 +75,63 @@ public sealed class UnitEvidenceEvaluatorG855Tests
     }
 
     [Fact]
+    public void MixedProvenanceAndReadFailureKeepsBothClassesAndExitsNonzero()
+    {
+        var report = UnitEvidenceEvaluator.Evaluate(Snapshot(
+        [
+            Fact("worker-completion-receipt", UnitStatusStates.Unavailable,
+                cause: "worker-completion-receipt-not-recorded", unavailableClass: UnitStatusStates.ProvenanceLimit),
+            Fact("posted-review", UnitStatusStates.Unavailable,
+                cause: "github-read-failed", unavailableClass: UnitStatusStates.ReadFailure),
+        ]));
+
+        Assert.Equal(1, report.Summary.ObservationExitCode);
+        Assert.Equal(2, report.Summary.StateCounts[UnitStatusStates.Unavailable]);
+        Assert.Equal(1, report.Summary.UnavailableClassCounts[UnitStatusStates.ProvenanceLimit]);
+        Assert.Equal(1, report.Summary.UnavailableClassCounts[UnitStatusStates.ReadFailure]);
+    }
+
+    [Fact]
     public void ApplicabilityReadFailureAndInvalidRequestExitNonzero()
     {
         var modeFailure = UnitEvidenceEvaluator.Evaluate(Snapshot([], UnitStatusStates.Unavailable,
             cause: "team-mode-unrecorded", unavailableClass: UnitStatusStates.ApplicabilityUnresolved));
         Assert.Equal(1, modeFailure.Summary.ObservationExitCode);
-        Assert.Equal(1, modeFailure.Summary.UnavailableClassCounts[UnitStatusStates.ApplicabilityUnresolved]);
+        Assert.Equal(26, modeFailure.Summary.StateCounts[UnitStatusStates.Unavailable]);
+        Assert.Equal(26, modeFailure.Summary.UnavailableClassCounts[UnitStatusStates.ApplicabilityUnresolved]);
 
         var requestFailure = UnitEvidenceEvaluator.Evaluate(Snapshot([], UnitStatusStates.Unavailable,
             cause: "invalid-request", unavailableClass: UnitStatusStates.InvalidRequest));
         Assert.Equal(1, requestFailure.Summary.ObservationExitCode);
+    }
+
+    [Fact]
+    public void ApplicabilityRefusalReclassifiesObservedFactsAndPreservesTheirEvidence()
+    {
+        var pointer = new UnitStatusEvidencePointer
+        {
+            Kind = "local-claim-snapshot",
+            Path = ".intent-cli/claims/active.json",
+            ExecutionUnit = "G855",
+            Provenance = "configured local claim snapshot",
+        };
+        var report = UnitEvidenceEvaluator.Evaluate(Snapshot(
+        [
+            Fact("design-claim-acquired", UnitStatusStates.Unavailable,
+                cause: "local-claim-record-unreadable", unavailableClass: UnitStatusStates.ReadFailure) with { Evidence = [pointer] },
+            Fact("worker-completion-receipt", UnitStatusStates.Unavailable,
+                cause: "worker-completion-receipt-not-recorded", unavailableClass: UnitStatusStates.ProvenanceLimit),
+        ], UnitStatusStates.Unavailable,
+            cause: "claim-snapshot-unavailable", unavailableClass: UnitStatusStates.ReadFailure));
+
+        var facts = report.Steps.SelectMany(step => step.Subchecks).ToArray();
+        Assert.All(facts, fact =>
+        {
+            Assert.Equal("unavailable", fact.State);
+            Assert.Equal("claim-snapshot-unavailable", fact.Cause);
+            Assert.Equal("read-failure", fact.UnavailableClass);
+        });
+        Assert.Same(pointer, Assert.Single(facts.Single(fact => fact.Id == "design-claim-acquired").Evidence));
     }
 
     [Fact]
