@@ -25,7 +25,7 @@ internal static class SoloConductorClaimReleaseGate
         string canonicalTargetRef)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(snapshotRoot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(executionUnit);
+        ArgumentNullException.ThrowIfNull(executionUnit);
         ArgumentException.ThrowIfNullOrWhiteSpace(team);
 
         var root = Path.GetFullPath(snapshotRoot);
@@ -51,6 +51,12 @@ internal static class SoloConductorClaimReleaseGate
         if (modeState is null || !modeState.Entries.Any(entry => TeamMode.IsSoloConductor(entry.Mode)))
         {
             return SoloConductorClaimReleaseGateResult.NotApplicable();
+        }
+
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var unitError))
+        {
+            return ApplicabilityRefusal(root, executionUnit, team, snapshotOid, canonicalTargetRef,
+                "execution-unit-unavailable", unitError, modePath);
         }
 
         var packetRelative = GuideReachabilityRecord.ResolvePacketPath(root, executionUnit);
@@ -93,18 +99,10 @@ internal static class SoloConductorClaimReleaseGate
                 packetRelative);
         }
 
-        if (!TryReadPacketField(packet!, "implementation_issue_packet.source_execution_unit", "source_execution_unit", out var rawAssertedUnit, out var unitConflict))
+        if (!TryValidatePacketExecutionUnitAssertion(packetYaml, executionUnit, out var unitConflict))
         {
             return ApplicabilityRefusal(root, executionUnit, team, snapshotOid, canonicalTargetRef,
                 "packet-identity-conflict", unitConflict!, packetRelative, domain);
-        }
-        var assertedUnit = rawAssertedUnit?.Trim();
-        if (!string.IsNullOrEmpty(assertedUnit) && !string.Equals(assertedUnit, executionUnit, StringComparison.Ordinal))
-        {
-            return ApplicabilityRefusal(root, executionUnit, team, snapshotOid, canonicalTargetRef,
-                "packet-identity-conflict",
-                $"Packet source_execution_unit '{assertedUnit}' does not match held scope unit '{executionUnit}'.",
-                packetRelative, domain);
         }
 
         TeamModeResolution resolution;
@@ -169,7 +167,11 @@ internal static class SoloConductorClaimReleaseGate
             Relative(root, packetPath),
         };
         var target = targetRef;
-        var queueLocation = RuntimeScopedStateResolver.ResolveQueueStatePathForRead(root, domain, targetRepo);
+        var scopedQueuePath = RuntimeScopedStateResolver.GetScopedQueueStatePath(root, domain, targetRepo);
+        var scopedQueueInspection = InspectPath(root, scopedQueuePath, expectDirectory: false);
+        var queueLocation = scopedQueueInspection.Kind == PathKind.Unavailable
+            ? new StateLocation(scopedQueuePath, StateLocationKind.Scoped)
+            : RuntimeScopedStateResolver.ResolveQueueStatePathForRead(root, domain, targetRepo);
         var queuePath = Path.GetFullPath(queueLocation.Path);
         var runsPath = queueLocation.Kind == StateLocationKind.Legacy
             ? RuntimeScopedStateResolver.GetLegacyRunLogPath(root)
@@ -793,6 +795,60 @@ internal static class SoloConductorClaimReleaseGate
                 .Any(facet => facet.Children.ContainsKey(new YamlScalarNode("required")));
         }
         catch (YamlDotNet.Core.YamlException) { return false; }
+    }
+
+    private static bool TryValidatePacketExecutionUnitAssertion(
+        string yaml,
+        string expectedUnit,
+        out string? error)
+    {
+        error = null;
+        try
+        {
+            var stream = new YamlStream();
+            using var reader = new StringReader(yaml);
+            stream.Load(reader);
+            if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode root)
+            {
+                error = "Packet YAML has no mapping root for source_execution_unit identity validation.";
+                return false;
+            }
+
+            var assertions = new List<(string Path, YamlNode Value)>();
+            if (root.Children.TryGetValue(new YamlScalarNode("source_execution_unit"), out var rootAssertion))
+            {
+                assertions.Add(("source_execution_unit", rootAssertion));
+            }
+            if (root.Children.TryGetValue(new YamlScalarNode("implementation_issue_packet"), out var implementationNode)
+                && implementationNode is YamlMappingNode implementation
+                && implementation.Children.TryGetValue(new YamlScalarNode("source_execution_unit"), out var nestedAssertion))
+            {
+                assertions.Add(("implementation_issue_packet.source_execution_unit", nestedAssertion));
+            }
+
+            foreach (var (path, value) in assertions)
+            {
+                if (value is not YamlScalarNode scalar || string.IsNullOrWhiteSpace(scalar.Value))
+                {
+                    error = $"Packet '{path}' must be a nonempty scalar execution-unit identity when present.";
+                    return false;
+                }
+
+                var assertedUnit = scalar.Value.Trim();
+                if (!string.Equals(assertedUnit, expectedUnit, StringComparison.Ordinal))
+                {
+                    error = $"Packet '{path}' value '{assertedUnit}' does not match held scope unit '{expectedUnit}'.";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidOperationException)
+        {
+            error = "Packet source_execution_unit identity could not be parsed: " + exception.Message;
+            return false;
+        }
     }
 
     private static bool TryReadPacketField(

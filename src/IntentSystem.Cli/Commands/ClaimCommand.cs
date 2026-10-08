@@ -674,7 +674,6 @@ internal static class ClaimCommand
         }
 
         var unit = request.Scope["execution-unit:".Length..];
-        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(unit, out _)) return false;
         executionUnit = unit;
         return true;
     }

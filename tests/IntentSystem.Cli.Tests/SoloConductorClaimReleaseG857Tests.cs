@@ -51,7 +51,7 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Acquire(repos.Writer);
         PullCanonicalHead(repos.Writer);
         var hostCommit = Git(repos.Writer, "rev-parse", "HEAD").Trim();
-        RecordKnowledge(repos.Writer, "design", hostCommit);
+        RecordKnowledge(repos.Writer, "design", hostCommit, note: "optional writer note is preserved");
         RecordKnowledge(repos.Writer, "orchestration", hostCommit);
         RecordGuide(repos.Writer, "design", hostCommit);
         RecordGuide(repos.Writer, "orchestration", hostCommit);
@@ -70,8 +70,19 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal("missing", Duty(blocked, "knowledge-architect").State);
         Assert.Equal("missing", Duty(blocked, "knowledge-orchestrator").State);
         Assert.Equal("missing", Duty(blocked, "guide-reachability").State);
-        Assert.Contains("refs/heads/main", Duty(blocked, "knowledge-architect").PublicationStep!, StringComparison.Ordinal);
-        Assert.Contains("git -C <canonical-host-checkout> add -- <exact-owned-artifact-paths>", Duty(blocked, "knowledge-architect").PublicationStep!, StringComparison.Ordinal);
+        foreach (var (id, commandToken, role) in new[]
+        {
+            ("knowledge-architect", "knowledge-writeback-record", "architect"),
+            ("knowledge-orchestrator", "knowledge-writeback-record", "orchestrator"),
+            ("guide-reachability", "guide-reachability-record", "architect"),
+        })
+        {
+            var duty = Duty(blocked, id);
+            Assert.Contains(commandToken, Assert.Single(duty.RecoveryCommands), StringComparison.Ordinal);
+            Assert.Contains($"--role {role}", duty.RecoveryCommands[0], StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", duty.PublicationStep!, StringComparison.Ordinal);
+            Assert.Contains("git -C <canonical-host-checkout> add -- <exact-owned-artifact-paths>", duty.PublicationStep!, StringComparison.Ordinal);
+        }
 
         var knowledgeArchitect = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
             KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "architect");
@@ -101,6 +112,9 @@ public sealed class SoloConductorClaimReleaseG857Tests
         using var inspection = JsonDocument.Parse(File.ReadAllText(
             Path.Combine(repos.CloneForInspection(), released.HistoryPath!)));
         Assert.Equal("release", inspection.RootElement.GetProperty("operation").GetString());
+        var releasedSnapshot = repos.CloneForInspection();
+        Assert.False(File.Exists(Path.Combine(releasedSnapshot, ClaimCommand.ClaimPath($"execution-unit:{Unit}"))));
+        Assert.Single(ClaimHistory(releasedSnapshot));
     }
 
     [Theory]
@@ -131,6 +145,8 @@ public sealed class SoloConductorClaimReleaseG857Tests
         if (omitted != "guide-architect") RecordGuide(repos.Writer, "architect", hostCommit);
         PublishExactReceipts(repos.Writer, "main");
 
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var historyBefore = ClaimHistory(repos.CloneForInspection()).ToArray();
         var result = Release(repos.Reader);
 
         Assert.Equal("completion-blocked", result.Status);
@@ -148,9 +164,8 @@ public sealed class SoloConductorClaimReleaseG857Tests
         }
         var inspection = repos.CloneForInspection();
         Assert.True(File.Exists(Path.Combine(inspection, ClaimCommand.ClaimPath($"execution-unit:{Unit}"))));
-        Assert.Empty(Directory.Exists(Path.Combine(inspection, ClaimCommand.ClaimsDirectory, "history"))
-            ? Directory.EnumerateFiles(Path.Combine(inspection, ClaimCommand.ClaimsDirectory, "history"))
-            : []);
+        Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(historyBefore, ClaimHistory(inspection));
     }
 
     [Fact]
@@ -351,6 +366,44 @@ public sealed class SoloConductorClaimReleaseG857Tests
         RecordKnowledge(repos.Writer, "design", hostCommit);
         RecordKnowledge(repos.Writer, "orchestration", hostCommit);
         RecordGuide(repos.Writer, "design", hostCommit);
+
+        var metadataBefore = Git(repos.Bare, "rev-parse", $"refs/heads/{branch}").Trim();
+        var blockedBeforePublication = Release(repos.Reader);
+        Assert.Equal("completion-blocked", blockedBeforePublication.Status);
+        Assert.Equal($"refs/heads/{branch}", blockedBeforePublication.SoloConductorCompletion?.CanonicalTargetRef);
+        foreach (var id in new[] { "knowledge-architect", "knowledge-orchestrator", "guide-reachability" })
+        {
+            var duty = Duty(blockedBeforePublication, id);
+            Assert.Equal("missing", duty.State);
+            Assert.Contains($"refs/heads/{branch}", duty.PublicationStep!, StringComparison.Ordinal);
+        }
+        Assert.Equal(metadataBefore, Git(repos.Bare, "rev-parse", $"refs/heads/{branch}").Trim());
+        Assert.True(File.Exists(Path.Combine(repos.CloneBranchForInspection(branch), ClaimCommand.ClaimPath($"execution-unit:{Unit}"))));
+
+        // Publish the writer-created artifacts to product/main only. The
+        // configured metadata ref remains the sole evidence authority.
+        var productCheckout = repos.CreateRacer();
+        var receiptPaths = ReceiptPaths();
+        foreach (var path in receiptPaths)
+        {
+            var source = Path.Combine(repos.Writer, path.Replace('/', Path.DirectorySeparatorChar));
+            var destination = Path.Combine(productCheckout, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination, overwrite: true);
+        }
+        Git(productCheckout, ["add", "--", .. receiptPaths]);
+        Git(productCheckout, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+            "commit", "--quiet", "-m", "publish receipts to product branch only");
+        Git(productCheckout, "push", "origin", "HEAD:refs/heads/main");
+        var productAfterReceiptOnly = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+
+        var blockedOnProductOnly = Release(repos.Reader);
+        Assert.Equal("completion-blocked", blockedOnProductOnly.Status);
+        Assert.Equal($"refs/heads/{branch}", blockedOnProductOnly.SoloConductorCompletion?.CanonicalTargetRef);
+        Assert.All(new[] { "knowledge-architect", "knowledge-orchestrator", "guide-reachability" }, id =>
+            Assert.Equal("missing", Duty(blockedOnProductOnly, id).State));
+        Assert.Equal(metadataBefore, Git(repos.Bare, "rev-parse", $"refs/heads/{branch}").Trim());
+
         PublishExactReceipts(repos.Writer, branch);
 
         var released = Release(repos.Reader);
@@ -359,7 +412,7 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal($"refs/heads/{branch}", released.TargetRef);
         Assert.Equal($"refs/heads/{branch}", released.SoloConductorCompletion?.CanonicalTargetRef);
         Assert.Equal(Git(repos.Bare, "rev-parse", $"refs/heads/{branch}").Trim(), released.Commit);
-        Assert.Equal(Git(repos.Bare, "rev-parse", "refs/heads/main").Trim(), repos.MainSeedHead);
+        Assert.Equal(productAfterReceiptOnly, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
     }
 
     [Fact]
@@ -375,6 +428,8 @@ public sealed class SoloConductorClaimReleaseG857Tests
         RecordKnowledge(repos.Writer, "orchestration", hostCommit);
         RecordGuide(repos.Writer, "design", hostCommit);
         PublishExactReceipts(repos.Writer, "main");
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
         var racer = repos.CreateRacer();
         var guidePath = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
             GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect");
@@ -405,7 +460,11 @@ public sealed class SoloConductorClaimReleaseG857Tests
             Assert.True(File.Exists(marker));
             Assert.Equal("implementation", result.Holder);
             Assert.Equal(Team, result.HolderTeam);
+            var advancedHead = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+            Assert.Equal(advancedHead, result.SoloConductorCompletion?.CanonicalSnapshotOid);
+            Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
             Assert.True(File.Exists(Path.Combine(repos.CloneForInspection(), ClaimCommand.ClaimPath($"execution-unit:{Unit}"))));
+            Assert.Empty(ClaimHistory(repos.CloneForInspection()));
         }
         finally
         {
@@ -427,6 +486,113 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal("not-applicable", Duty(result, "knowledge-writeback").State);
         Assert.Equal("not-applicable", Duty(result, "guide-reachability").State);
         Assert.Equal("satisfied", Duty(result, "closeout-queue").State);
+    }
+
+    [Fact]
+    public void CloseoutLearningOnlyFalseKnowledgeDeclarationIsExplicit_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: CloseoutLearningFalsePacketYaml);
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("satisfied", result.Completion?.Decision);
+        Assert.Equal("not-applicable", Duty(result.Completion!, "knowledge-writeback").State);
+        Assert.Equal("not-applicable", Duty(result.Completion!, "guide-reachability").State);
+    }
+
+    [Theory]
+    [InlineData("empty-knowledge-updates")]
+    [InlineData("empty-closeout-learning")]
+    public void EmptyEnclosingKnowledgeMappingsAreNotExplicitNoOpDeclarations_G857(string kind)
+    {
+        using var repos = new ClaimRepositories();
+        var packet = kind == "empty-knowledge-updates"
+            ? PacketWithKnowledgeFragment("knowledge_updates: {}")
+            : PacketWithKnowledgeFragment("closeout_learning: {}");
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: packet);
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("refused", result.Completion?.Decision);
+        Assert.Equal("missing", Duty(result.Completion!, "knowledge-declaration").State);
+    }
+
+    [Fact]
+    public void AbsentGuideDeclarationIsMissingForSoloRelease_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: PacketWithoutGuideDeclarationYaml);
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("refused", result.Completion?.Decision);
+        Assert.Equal("not-applicable", Duty(result.Completion!, "knowledge-writeback").State);
+        Assert.Equal("missing", Duty(result.Completion!, "guide-declaration").State);
+    }
+
+    [Fact]
+    public void MalformedGuideDeclarationIsUnavailableForSoloRelease_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: PacketWithMalformedGuideDeclarationYaml);
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("refused", result.Completion?.Decision);
+        Assert.Equal("not-applicable", Duty(result.Completion!, "knowledge-writeback").State);
+        Assert.Equal("unavailable", Duty(result.Completion!, "guide-declaration").State);
+        Assert.Equal("guide-declaration-unavailable", Duty(result.Completion!, "guide-declaration").Cause);
+    }
+
+    [Fact]
+    public void MalformedGuideRoutesUnderValidDeclarationAreUnavailable_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: PacketWithMalformedGuideRoutesYaml);
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("refused", result.Completion?.Decision);
+        Assert.Equal("not-applicable", Duty(result.Completion!, "knowledge-writeback").State);
+        Assert.Equal("unavailable", Duty(result.Completion!, "guide-declaration").State);
+        Assert.Equal("guide-declaration-unavailable", Duty(result.Completion!, "guide-declaration").Cause);
+    }
+
+    [Fact]
+    public void DuplicateArchitectGuideRecordsAtDifferentPathsAreUnavailable_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: ["pr-merged", "closeout-recorded"]);
+        var hostCommit = Git(repos.Writer, "rev-parse", "HEAD").Trim();
+        RecordKnowledge(repos.Writer, "architect", hostCommit);
+        RecordKnowledge(repos.Writer, "orchestrator", hostCommit);
+        RecordGuide(repos.Writer, "architect", hostCommit);
+        var architectPath = Path.Combine(repos.Writer,
+            RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect"));
+        var duplicatePath = Path.Combine(Path.GetDirectoryName(architectPath)!, "architect-duplicate.json");
+        File.Copy(architectPath, duplicatePath);
+        repos.PublishIntentChanges(repos.Writer, "main");
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+        var duty = Duty(result.Completion!, "guide-reachability");
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("refused", result.Completion?.Decision);
+        Assert.Equal("unavailable", duty.State);
+        Assert.Equal("duplicate-role-record", duty.Cause);
+        Assert.NotNull(duty.RepairUnavailableReason);
+        Assert.Equal(2, duty.Evidence.Count(evidence => evidence.Role == "architect"));
     }
 
     [Fact]
@@ -701,6 +867,346 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Null(result.SoloConductorCompletion);
     }
 
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("delivery")]
+    public void EmptyOrResolvedNonSoloModeKeepsLegacyReleaseResult_G857(string modeKind)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Active, runEvents: []);
+        TeamModeStore.Write(repos.Writer, new TeamModeState
+        {
+            SchemaVersion = TeamModeStore.SchemaVersion,
+            Entries = modeKind == "empty" ? [] : [ModeEntry(TeamMode.Delivery, Team)],
+        });
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Acquire(repos.Writer);
+
+        var result = Release(repos.Reader);
+
+        Assert.Equal("released", result.Status);
+        Assert.True(result.PushSucceeded);
+        Assert.Null(result.SoloConductorCompletion);
+        Assert.DoesNotContain("solo_conductor_completion", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProductOnlySoloModeDoesNotActivateConfiguredCanonicalMetadataBranch_G857()
+    {
+        using var repos = new ClaimRepositories();
+        const string branch = "intent-metadata";
+        repos.ConfigureMetadataWriteBranch(branch);
+        repos.PublishSnapshot(queueState: QueueItemState.Active, runEvents: []);
+        File.Delete(TeamModeStore.ResolvePath(repos.Writer));
+        repos.PublishIntentChanges(repos.Writer, branch);
+        Assert.False(File.Exists(TeamModeStore.ResolvePath(repos.Writer)));
+
+        var productCheckout = repos.CreateRacer();
+        TeamModeStore.Write(productCheckout, new TeamModeState
+        {
+            SchemaVersion = TeamModeStore.SchemaVersion,
+            Entries = [ModeEntry(TeamMode.SoloConductor, Team)],
+        });
+        repos.PublishIntentChanges(productCheckout, "main");
+        var productWithMode = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+
+        Acquire(repos.Writer);
+        var result = Release(repos.Reader);
+
+        Assert.Equal("released", result.Status);
+        Assert.True(result.PushSucceeded);
+        Assert.Null(result.SoloConductorCompletion);
+        Assert.Equal($"refs/heads/{branch}", result.TargetRef);
+        var metadataSnapshot = repos.CloneBranchForInspection(branch);
+        Assert.False(File.Exists(TeamModeStore.ResolvePath(metadataSnapshot)));
+        Assert.Equal(productWithMode, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+    }
+
+    [Fact]
+    public void MissingConfiguredCanonicalBranchDoesNotFallBackToProductMain_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Active, runEvents: []);
+        Acquire(repos.Writer);
+        const string branch = "intent-metadata";
+        repos.ConfigureMetadataWriteBranch(branch);
+        Git(repos.Bare, "update-ref", "-d", $"refs/heads/{branch}");
+        var mainBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+
+        var error = Assert.Throws<InvalidOperationException>(() => Release(repos.Reader));
+
+        Assert.Contains("is absent on origin", error.Message, StringComparison.Ordinal);
+        Assert.Equal(mainBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        var inspection = repos.CloneForInspection();
+        Assert.True(File.Exists(Path.Combine(inspection, ClaimCommand.ClaimPath($"execution-unit:{Unit}"))));
+        Assert.Empty(ClaimHistory(inspection));
+    }
+
+    [Theory]
+    [InlineData("design")]
+    [InlineData("architect")]
+    public void NonBuilderReleaseOnSoloHostDoesNotRequirePacket_G857(string actor)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Active, runEvents: []);
+        Acquire(repos.Writer, actor);
+        PullCanonicalHead(repos.Writer);
+        File.Delete(Path.Combine(repos.Writer, GuideReachabilityRecord.ResolvePacketPath(repos.Writer, Unit)));
+        repos.PublishIntentChanges(repos.Writer, "main");
+
+        var result = Release(repos.Reader, actor);
+
+        Assert.Equal("released", result.Status);
+        Assert.True(result.PushSucceeded);
+        Assert.Null(result.SoloConductorCompletion);
+    }
+
+    [Theory]
+    [InlineData("not-held", "not-held")]
+    [InlineData("mismatched-holder", "held")]
+    public void CandidateDryRunRetainsNotHeldAndHolderMismatchResults_G857(string setup, string expectedStatus)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: ["pr-merged", "closeout-recorded"]);
+        if (setup == "mismatched-holder") Acquire(repos.Writer, "implementation");
+        var before = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+
+        var result = Release(repos.Reader, actor: "builder", write: false);
+
+        Assert.Equal(expectedStatus, result.Status);
+        Assert.False(result.PushSucceeded);
+        Assert.Null(result.SoloConductorCompletion);
+        Assert.Equal(before, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+    }
+
+    [Theory]
+    [InlineData("G857+repair")]
+    [InlineData("..")]
+    [InlineData("équipe")]
+    public void InvalidExecutionUnitCannotBypassSoloReleaseGate_G857(string invalidUnit)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Active, runEvents: []);
+        var scope = $"execution-unit:{invalidUnit}";
+        Acquire(repos.Writer, scope: scope);
+        var before = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+
+        var preview = Release(repos.Reader, write: false, scope: scope);
+        Assert.Equal("completion-blocked", preview.Status);
+        Assert.Equal("execution-unit-unavailable", Duty(preview, "applicability").Cause);
+        Assert.Equal("unavailable", preview.SoloConductorCompletion?.Applicability.State);
+        Assert.Equal(before, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+
+        var result = Release(repos.Reader, scope: scope);
+        Assert.Equal("completion-blocked", result.Status);
+        Assert.Equal("execution-unit-unavailable", Duty(result, "applicability").Cause);
+        Assert.Equal(before, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        var inspection = repos.CloneForInspection();
+        Assert.True(File.Exists(Path.Combine(inspection, ClaimCommand.ClaimPath(scope))));
+        Assert.Empty(ClaimHistory(inspection));
+    }
+
+    [Fact]
+    public void InvalidExecutionUnitKeepsLegacyReleaseWhenNoSoloModeApplies_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Active, runEvents: []);
+        File.Delete(TeamModeStore.ResolvePath(repos.Writer));
+        repos.PublishIntentChanges(repos.Writer, "main");
+        var scope = "execution-unit:G857+repair";
+        Acquire(repos.Writer, scope: scope);
+
+        var result = Release(repos.Reader, scope: scope);
+
+        Assert.Equal("released", result.Status);
+        Assert.True(result.PushSucceeded);
+        Assert.Null(result.SoloConductorCompletion);
+    }
+
+    [Fact]
+    public void MissingScopedQueueUsesValidLegacyQueueAndRunsFallback_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: ExplicitNoDutyPacketYaml);
+        MoveScopedQueueAndRunsToLegacy(repos);
+        Acquire(repos.Writer);
+
+        var result = Release(repos.Reader);
+
+        Assert.Equal("released", result.Status);
+        Assert.Equal("satisfied", Duty(result, "closeout-queue").State);
+        Assert.Contains(".intent-cli/queue-state.json", Duty(result, "closeout-queue").Evidence.Select(evidence => evidence.Path));
+        Assert.Equal("satisfied", Duty(result, "pr-merged").State);
+        Assert.Equal("satisfied", Duty(result, "closeout-recorded").State);
+        Assert.Contains(".intent-cli/runs.jsonl", Duty(result, "pr-merged").Evidence.Select(evidence => evidence.Path));
+    }
+
+    [Theory]
+    [InlineData("scoped-directory")]
+    [InlineData("scoped-dangling-symlink")]
+    [InlineData("scoped-inaccessible-parent")]
+    public void UnavailableScopedQueueCannotFallBackToCompleteLegacyEvidence_G857(string kind)
+    {
+        if (OperatingSystem.IsWindows() && kind == "scoped-dangling-symlink") return;
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: ExplicitNoDutyPacketYaml);
+        MoveScopedQueueAndRunsToLegacy(repos);
+        var scopedQueue = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+        switch (kind)
+        {
+            case "scoped-directory":
+                Directory.CreateDirectory(scopedQueue);
+                File.WriteAllText(Path.Combine(scopedQueue, "marker.json"), "{}\n");
+                break;
+            case "scoped-dangling-symlink":
+                File.CreateSymbolicLink(scopedQueue, "missing-queue-target.json");
+                break;
+            case "scoped-inaccessible-parent":
+                var runtimeRoot = Path.Combine(repos.Writer, ".intent-cli", RuntimeScopedStateResolver.RuntimeDirectoryName);
+                Directory.Delete(runtimeRoot, recursive: true);
+                File.WriteAllText(runtimeRoot, "not a directory\n");
+                break;
+        }
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Acquire(repos.Writer);
+        var before = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+
+        var result = Release(repos.Reader);
+
+        Assert.Equal("completion-blocked", result.Status);
+        Assert.Equal("unavailable", Duty(result, "closeout-queue").State);
+        Assert.Equal("queue-unavailable", Duty(result, "closeout-queue").Cause);
+        Assert.Equal(before, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.True(File.Exists(Path.Combine(repos.CloneForInspection(), ClaimCommand.ClaimPath($"execution-unit:{Unit}"))));
+        Assert.Equal("unavailable", Duty(result, "pr-merged").State);
+        Assert.Equal("unavailable", Duty(result, "closeout-recorded").State);
+    }
+
+    [Theory]
+    [InlineData("nested", "  source_execution_unit:\n    - G857")]
+    [InlineData("nested", "  source_execution_unit: {}")]
+    [InlineData("nested", "  source_execution_unit:\n    value: G857")]
+    [InlineData("nested", "  source_execution_unit: null")]
+    [InlineData("nested", "  source_execution_unit: \"\"")]
+    [InlineData("nested", "  source_execution_unit: OTHER")]
+    [InlineData("root", "source_execution_unit:\n  - G857")]
+    [InlineData("root", "source_execution_unit: {}")]
+    [InlineData("root", "source_execution_unit:\n  value: G857")]
+    [InlineData("root", "source_execution_unit: null")]
+    [InlineData("root", "source_execution_unit: \"\"")]
+    [InlineData("root", "source_execution_unit: OTHER")]
+    public void PresentSourceExecutionUnitMustBeExactNonemptyScalar_G857(string location, string assertion)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"],
+            packetYaml: PacketWithExecutionUnitAssertion(location, assertion));
+        Acquire(repos.Writer);
+
+        var result = Release(repos.Reader);
+
+        Assert.Equal("completion-blocked", result.Status);
+        Assert.Equal("unavailable", result.SoloConductorCompletion?.Applicability.State);
+        Assert.Equal("packet-identity-conflict", Duty(result, "applicability").Cause);
+    }
+
+    [Fact]
+    public void RootLevelExactSourceExecutionUnitAssertionIsAccepted_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"],
+            packetYaml: PacketWithExecutionUnitAssertion("root", "source_execution_unit: G857", ExplicitNoDutyPacketYaml));
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("satisfied", result.Completion?.Decision);
+        Assert.DoesNotContain(result.Completion!.Duties, duty => duty.Id == "applicability");
+    }
+
+    [Theory]
+    [InlineData("malformed-packet", "packet-unavailable", "applicability")]
+    [InlineData("wrong-source-unit", "packet-identity-conflict", "applicability")]
+    [InlineData("invalid-target-repo", "target-repo-unavailable", "target-repo")]
+    [InlineData("foreign-target-repo", "queue-repo-conflict", "closeout-queue")]
+    [InlineData("duplicate-queue", "duplicate-queue-item", "closeout-queue")]
+    [InlineData("external-linked-pr", "queue-pr-identity-conflict", "closeout-queue")]
+    [InlineData("legacy-number-without-issue", "queue-pr-identity-conflict", "closeout-queue")]
+    public void InvalidPacketAndQueueIdentitiesRefuseCanonicalRelease_G857(string kind, string cause, string dutyId)
+    {
+        using var repos = new ClaimRepositories();
+        var packet = kind switch
+        {
+            "malformed-packet" => "implementation_issue_packet:\n  domain: [unterminated\n",
+            "wrong-source-unit" => PacketWithExecutionUnitAssertion("nested", "  source_execution_unit: OTHER"),
+            "invalid-target-repo" => PacketYaml.Replace("target_repo: J-Tech-Japan/intent-system", "target_repo: unsafe/../repo", StringComparison.Ordinal),
+            "foreign-target-repo" => PacketYaml.Replace("target_repo: J-Tech-Japan/intent-system", "target_repo: other/repo", StringComparison.Ordinal),
+            _ => PacketYaml,
+        };
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: packet);
+        if (kind == "foreign-target-repo")
+        {
+            var currentQueue = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+            var foreignQueue = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, "other/repo");
+            Directory.CreateDirectory(Path.GetDirectoryName(foreignQueue)!);
+            File.Copy(currentQueue, foreignQueue);
+            repos.PublishIntentChanges(repos.Writer, "main");
+        }
+        else if (kind is "duplicate-queue" or "external-linked-pr" or "legacy-number-without-issue")
+        {
+            var queuePath = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+            var queue = JsonNode.Parse(File.ReadAllText(queuePath))!.AsObject();
+            var items = queue["items"]!.AsArray();
+            if (kind == "duplicate-queue")
+            {
+                items.Add(items[0]!.DeepClone());
+            }
+            else if (kind == "external-linked-pr")
+            {
+                items[0]!["linked_pr"] = "https://example.com/J-Tech-Japan/intent-system/pull/1873";
+            }
+            else
+            {
+                items[0]!["linked_pr"] = PullRequest.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                items[0]!["linked_issue"] = null;
+            }
+            File.WriteAllText(queuePath, queue.ToJsonString());
+            repos.PublishIntentChanges(repos.Writer, "main");
+        }
+        Acquire(repos.Writer);
+
+        var result = Release(repos.Reader);
+
+        Assert.Equal("completion-blocked", result.Status);
+        Assert.Equal("unavailable", Duty(result, dutyId).State);
+        Assert.Equal(cause, Duty(result, dutyId).Cause);
+    }
+
+    [Fact]
+    public void MalformedCanonicalRunLineMakesBothCloseoutReceiptsUnavailable_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: ExplicitNoDutyPacketYaml);
+        var runPath = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        File.AppendAllText(runPath, "{ malformed json line\n");
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Acquire(repos.Writer);
+
+        var result = Release(repos.Reader);
+
+        Assert.Equal("completion-blocked", result.Status);
+        foreach (var id in new[] { "pr-merged", "closeout-recorded" })
+        {
+            Assert.Equal("unavailable", Duty(result, id).State);
+            Assert.Equal("run-log-unavailable", Duty(result, id).Cause);
+        }
+    }
+
     [Fact]
     public void RecordedDomainFallbackAndExactTeamOverrideAreRespected_G857()
     {
@@ -938,6 +1444,86 @@ public sealed class SoloConductorClaimReleaseG857Tests
     }
 
     [Fact]
+    public void UnreadableCanonicalRecordIsUnavailable_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: ["pr-merged", "closeout-recorded"]);
+        var hostCommit = Git(repos.Writer, "rev-parse", "HEAD").Trim();
+        RecordKnowledge(repos.Writer, "architect", hostCommit);
+        RecordKnowledge(repos.Writer, "orchestrator", hostCommit);
+        RecordGuide(repos.Writer, "architect", hostCommit);
+        var architectPath = Path.GetFullPath(Path.Combine(repos.Writer,
+            RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "architect")));
+        var originalFactory = GuardedFileRead.ReadAllTextFactory;
+        GuardedFileRead.ReadAllTextFactory = path =>
+        {
+            if (Path.GetFullPath(path) == architectPath)
+                throw new IOException("G857 named canonical receipt read failure");
+            return File.ReadAllText(path);
+        };
+
+        try
+        {
+            var result = EvaluateCanonicalSnapshot(repos.Writer);
+            var duty = Duty(result.Completion!, "knowledge-architect");
+
+            Assert.True(result.IsApplicable);
+            Assert.Equal("refused", result.Completion?.Decision);
+            Assert.Equal("unavailable", duty.State);
+            Assert.Contains("G857 named canonical receipt read failure", duty.Detail, StringComparison.Ordinal);
+            Assert.Contains("unreadable", duty.RepairUnavailableReason, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GuardedFileRead.ReadAllTextFactory = originalFactory;
+        }
+    }
+
+    [Fact]
+    public void UnavailableCompletionDiagnosticsMatchJsonAndMarkdown_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: ["pr-merged", "closeout-recorded"]);
+        Acquire(repos.Writer);
+        PullCanonicalHead(repos.Writer);
+        var hostCommit = Git(repos.Writer, "rev-parse", "HEAD").Trim();
+        RecordKnowledge(repos.Writer, "architect", hostCommit);
+        RecordKnowledge(repos.Writer, "orchestrator", hostCommit);
+        RecordGuide(repos.Writer, "architect", hostCommit);
+        var architectPath = Path.Combine(repos.Writer, RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+            KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "architect"));
+        File.WriteAllText(architectPath, "{ malformed-json\n");
+        PublishExactReceipts(repos.Writer, "main");
+        using var json = new StringWriter();
+        using var markdown = new StringWriter();
+        var arguments = new[]
+        {
+            "--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+            "--reason", "G857 unavailable diagnostics", "--format",
+        };
+
+        Assert.Equal(1, ClaimCommand.ExecuteRelease(Context(repos.Reader), [.. arguments, "json"], json));
+        Assert.Equal(1, ClaimCommand.ExecuteRelease(Context(repos.Reader), [.. arguments, "markdown"], markdown));
+
+        using var jsonDocument = JsonDocument.Parse(json.ToString());
+        var jsonCompletion = jsonDocument.RootElement.GetProperty("solo_conductor_completion");
+        var heading = string.Join(Environment.NewLine, "## Solo-conductor completion", string.Empty, "```json", string.Empty);
+        var start = markdown.ToString().IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        start += heading.Length;
+        var end = markdown.ToString().IndexOf(Environment.NewLine + "```", start, StringComparison.Ordinal);
+        Assert.True(end > start);
+        using var markdownDocument = JsonDocument.Parse(markdown.ToString()[start..end]);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(jsonCompletion.GetRawText()), JsonNode.Parse(markdownDocument.RootElement.GetRawText())));
+        var unavailable = Duty(Assert.IsType<SoloConductorClaimReleaseCompletion>(
+            jsonCompletion.Deserialize<SoloConductorClaimReleaseCompletion>()), "knowledge-architect");
+        Assert.Equal("unavailable", unavailable.State);
+        Assert.Equal("knowledge-record-unavailable", unavailable.Cause);
+        Assert.NotNull(unavailable.RepairUnavailableReason);
+    }
+
+    [Fact]
     public void CandidateBlockedJsonAndMarkdownExposeEquivalentCompletionDiagnostics_G857()
     {
         using var repos = new ClaimRepositories();
@@ -1023,18 +1609,18 @@ public sealed class SoloConductorClaimReleaseG857Tests
         return staleRoot;
     }
 
-    private static void Acquire(string repoRoot, string actor = "implementation")
+    private static void Acquire(string repoRoot, string actor = "implementation", string? scope = null)
     {
-        var acquired = ClaimCommand.RunTransaction(repoRoot, Request(ClaimOperation.Acquire, actor: actor));
+        var acquired = ClaimCommand.RunTransaction(repoRoot, Request(ClaimOperation.Acquire, actor: actor, scope: scope));
         Assert.Equal("acquired", acquired.Status);
     }
 
-    private static ClaimTransactionResult Release(string repoRoot) =>
-        ClaimCommand.RunTransaction(repoRoot, Request(ClaimOperation.Release));
+    private static ClaimTransactionResult Release(string repoRoot, string actor = "implementation", bool write = true, string? scope = null) =>
+        ClaimCommand.RunTransaction(repoRoot, Request(ClaimOperation.Release, actor: actor, write: write, scope: scope));
 
-    private static ClaimRequest Request(ClaimOperation operation, string actor = "implementation", bool write = true) => new(
+    private static ClaimRequest Request(ClaimOperation operation, string actor = "implementation", bool write = true, string? scope = null) => new(
         operation,
-        $"execution-unit:{Unit}",
+        scope ?? $"execution-unit:{Unit}",
         actor,
         Team,
         operation == ClaimOperation.Release ? "G857 complete" : null,
@@ -1061,10 +1647,49 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Git(root, "push", "origin", $"HEAD:refs/heads/{branch}");
     }
 
+    private static string[] ReceiptPaths() =>
+    [
+        RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "architect"),
+        RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "orchestrator"),
+        RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect"),
+    ];
+
+    private static void MoveScopedQueueAndRunsToLegacy(ClaimRepositories repos)
+    {
+        var scopedQueue = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+        var scopedRuns = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        var legacyQueue = RuntimeScopedStateResolver.GetLegacyQueueStatePath(repos.Writer);
+        var legacyRuns = RuntimeScopedStateResolver.GetLegacyRunLogPath(repos.Writer);
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyQueue)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyRuns)!);
+        File.Move(scopedQueue, legacyQueue);
+        File.Move(scopedRuns, legacyRuns);
+        repos.PublishIntentChanges(repos.Writer, "main");
+    }
+
+    private static string PacketWithExecutionUnitAssertion(
+        string location,
+        string assertion,
+        string? packetYaml = null)
+    {
+        var yaml = (packetYaml ?? PacketYaml).Replace("  source_execution_unit: G857\n", string.Empty, StringComparison.Ordinal);
+        var marker = location == "nested" ? "  target_repo:" : "knowledge_updates:";
+        var fragment = location == "nested" ? assertion : assertion;
+        if (!yaml.Contains(marker, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Packet fixture lacks insertion marker '{marker}'.");
+        return yaml.Replace(marker, $"{fragment}\n{marker}", StringComparison.Ordinal);
+    }
+
+    private static string PacketWithKnowledgeFragment(string fragment) =>
+        ExplicitNoDutyPacketYaml.Replace(
+            "knowledge_updates:\n  intent_tree:\n    required: false\n",
+            fragment + "\n",
+            StringComparison.Ordinal);
+
     private static IReadOnlyList<string> ClaimHistory(string root)
     {
         var history = Path.Combine(root, ClaimCommand.ClaimsDirectory, "history");
-        return Directory.Exists(history) ? Directory.GetFiles(history) : [];
+        return Directory.Exists(history) ? Directory.GetFiles(history, "*", SearchOption.AllDirectories) : [];
     }
 
     private static string FindGitExecutable()
@@ -1087,11 +1712,14 @@ public sealed class SoloConductorClaimReleaseG857Tests
                 StringComparer.Ordinal),
         StringComparer.Ordinal);
 
-    private static void RecordKnowledge(string root, string role, string commit)
+    private static void RecordKnowledge(string root, string role, string commit, string? note = null)
     {
         using var writer = new StringWriter();
+        var arguments = new List<string> { "--execution-unit", Unit, "--role", role, "--commit", commit };
+        if (note is not null) arguments.AddRange(["--note", note]);
+        arguments.AddRange(["--write", "--format", "json"]);
         var exitCode = AutomationKnowledgeWriteBackRecordCommand.Execute(
-            Context(root), ["--execution-unit", Unit, "--role", role, "--commit", commit, "--write", "--format", "json"], writer);
+            Context(root), arguments.ToArray(), writer);
         Assert.Equal(0, exitCode);
     }
 
@@ -1324,6 +1952,13 @@ public sealed class SoloConductorClaimReleaseG857Tests
             return path;
         }
 
+        public string CloneBranchForInspection(string branch)
+        {
+            var path = Path.Combine(temp.Path, $"inspect-{branch}-{Guid.NewGuid():N}");
+            Git(temp.Path, "clone", "--quiet", "--single-branch", "--branch", branch, Bare, path);
+            return path;
+        }
+
         public void Dispose() => temp.Dispose();
     }
 
@@ -1358,6 +1993,18 @@ public sealed class SoloConductorClaimReleaseG857Tests
           routes: []
         """;
 
+    private const string CloseoutLearningFalsePacketYaml = """
+        implementation_issue_packet:
+          domain: intent-cli
+          source_execution_unit: G857
+          target_repo: J-Tech-Japan/intent-system
+        closeout_learning:
+          write_back_required: false
+        guide_reachability:
+          no_role_facing_surface: true
+          routes: []
+        """;
+
     private const string PacketWithoutKnowledgeDeclarationYaml = """
         implementation_issue_packet:
           domain: intent-cli
@@ -1366,6 +2013,40 @@ public sealed class SoloConductorClaimReleaseG857Tests
         guide_reachability:
           no_role_facing_surface: true
           routes: []
+        """;
+
+    private const string PacketWithoutGuideDeclarationYaml = """
+        implementation_issue_packet:
+          domain: intent-cli
+          source_execution_unit: G857
+          target_repo: J-Tech-Japan/intent-system
+        knowledge_updates:
+          intent_tree:
+            required: false
+        """;
+
+    private const string PacketWithMalformedGuideDeclarationYaml = """
+        implementation_issue_packet:
+          domain: intent-cli
+          source_execution_unit: G857
+          target_repo: J-Tech-Japan/intent-system
+        knowledge_updates:
+          intent_tree:
+            required: false
+        guide_reachability: []
+        """;
+
+    private const string PacketWithMalformedGuideRoutesYaml = """
+        implementation_issue_packet:
+          domain: intent-cli
+          source_execution_unit: G857
+          target_repo: J-Tech-Japan/intent-system
+        knowledge_updates:
+          intent_tree:
+            required: false
+        guide_reachability:
+          no_role_facing_surface: false
+          routes: true
         """;
 
     private const string PacketWithMalformedKnowledgeDeclarationYaml = """
