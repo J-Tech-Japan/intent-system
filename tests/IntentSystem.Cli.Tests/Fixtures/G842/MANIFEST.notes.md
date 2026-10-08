@@ -5,6 +5,8 @@
 - The no-launch source-guard tables are measured at merge base `a24cf8abfb88a323b2f0efe04fe2481c746d9e9f` and carry the abbreviated commit in each filename. There are no retained pre-G842 tables; the guard has no consumer for them.
 - G855 adds only the bounded `UnitStatusReadAdapter.cs` launch-token/type-reference/surface rows and its declared-type entry to these pinned tables; existing unrelated rows and the base C# path table are preserved. The pins cover the injected read runners, the required claim-path facade/record DTOs, and the adapter type declaration; its optional-argument constructor owns the default runners.
 - The G855 table edits do not change any `base/` golden artifact. `MANIFEST.sha256` is regenerated after the source-guard table and note updates.
+- G856 adds only the bounded `SoloConductorReviewReader.cs` runner-token and surface pins, the corresponding reader declarations/references, and type-reference declarations for the extracted parser/evaluator contracts and transition outcome. The pre-existing rows are preserved, and the base C# path table is unchanged.
+- The G856 parser and evaluator remain pure (no runner/process tokens). Their new cross-file type references and the reader's optional default runner are pinned explicitly; no `base/` golden artifact changes. `MANIFEST.sha256` is regenerated after these table and note updates.
 - **Scrub rule** (from 2026-09-17). A live capture is scrubbed before it is copied here.
   - Every occurrence of the operator email is replaced with `<operator-email>`.
   - Every occurrence of `/Users/tomohisa` is replaced with `<home>`.

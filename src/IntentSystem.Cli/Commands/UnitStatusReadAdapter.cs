@@ -479,25 +479,28 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         {
             foreach (var item in reviewItems)
             {
-                if (!TryReadReview(item, executionUnit, domain, team, repo, pullRequest, localReviews,
-                    out var review, out var failureKind, out var parseDetail))
+                var reviewEvidence = IndependentReviewEvidence.ParseRow(
+                    item, executionUnit, domain, team, repo, pullRequest, localReviews);
+                if (!reviewEvidence.ObserverAccepted)
                 {
+                    var failureKind = reviewEvidence.ObserverFailureKind;
                     reviewIdentityFailure |= failureKind == ReviewParseFailure.IdentityConflict;
                     reviewNamedUnstructured |= failureKind == ReviewParseFailure.ProvenanceLimit;
                     reviewReadFailure |= failureKind == ReviewParseFailure.Malformed;
                     if (failureKind is ReviewParseFailure.Malformed or ReviewParseFailure.IdentityConflict)
-                        reviewFailureDetail = parseDetail;
+                        reviewFailureDetail = reviewEvidence.ObserverFailureDetail;
                     if (failureKind == ReviewParseFailure.ProvenanceLimit)
                     {
-                        var legacyEvidence = LegacyReviewEvidence(item, repo, pullRequest);
+                        var legacyEvidence = IndependentReviewEvidence.LegacyReviewEvidence(item, repo, pullRequest);
                         legacyReviewEvidence.Add(legacyEvidence);
                         warnings.Add($"GitHub review {legacyEvidence.RecordId ?? "(unknown)"} is a named legacy review without complete identity; it is retained as provenance only.");
                     }
                     continue;
                 }
 
-                reviewRows.Add(review!);
-                if (review!.Dismissed)
+                var review = reviewEvidence.ObserverReview!;
+                reviewRows.Add(review);
+                if (review.Dismissed)
                 {
                     warnings.Add($"GitHub review {review.RecordId ?? "(unknown)"} is dismissed and does not satisfy current-head review.");
                 }
@@ -904,321 +907,6 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
 
         failure = null;
         return true;
-    }
-
-    private bool TryReadReview(
-        JsonElement item,
-        string unit,
-        string domain,
-        string team,
-        string repo,
-        int pullRequest,
-        CrossRuntimeReviewReadResult localReviews,
-        out UnitStatusObservedReview? review,
-        out ReviewParseFailure failureKind,
-        out string failureDetail)
-    {
-        review = null;
-        failureKind = ReviewParseFailure.None;
-        failureDetail = "";
-        if (!TryReadLong(item, "id", out var id)
-            || !TryReadString(item, "state", out var state)
-            || !TryReadNullableString(item, "commit_id", out var commitId)
-            || !TryReadNullableString(item, "body", out var body)
-            || !TryReadOptionalNullableString(item, "html_url", out var reviewUrl))
-        {
-            failureKind = ReviewParseFailure.Malformed;
-            failureDetail = "Pull-request review response is missing id, state, commit_id, or body, or has a non-null, non-string html_url.";
-            return false;
-        }
-
-        if (state is not ("PENDING" or "COMMENTED" or "APPROVED" or "CHANGES_REQUESTED" or "DISMISSED"))
-        {
-            failureKind = ReviewParseFailure.Malformed;
-            failureDetail = "Pull-request review response has an unknown state.";
-            return false;
-        }
-
-        var reviewer = item.TryGetProperty("user", out var user) && TryReadString(user, "login", out var login) ? login : null;
-        DateTimeOffset? submittedAt = null;
-        var submittedAtPresent = item.TryGetProperty("submitted_at", out _);
-        if (submittedAtPresent && !TryReadNullableDateTime(item, "submitted_at", out submittedAt)
-            || !submittedAtPresent && state != "PENDING")
-        {
-            failureKind = ReviewParseFailure.Malformed;
-            failureDetail = "Pull-request review response has an invalid submitted_at field.";
-            return false;
-        }
-        if (state is "COMMENTED" or "APPROVED" or "CHANGES_REQUESTED" or "DISMISSED"
-            && (string.IsNullOrWhiteSpace(reviewer) || submittedAt is null))
-        {
-            failureKind = ReviewParseFailure.Malformed;
-            failureDetail = "A submitted pull-request review is missing its reviewer login or valid submitted_at timestamp.";
-            return false;
-        }
-        if (string.IsNullOrWhiteSpace(body)) return false;
-
-        var parsed = ParseReviewBody(body);
-        if (!parsed.NamedIndependent)
-        {
-            return false;
-        }
-        if (parsed.Conflicting)
-        {
-            failureKind = ReviewParseFailure.IdentityConflict;
-            failureDetail = "The structured review body contains conflicting repeated identity fields or contradictory heading/verdict assertions.";
-            return false;
-        }
-        if (!parsed.IsStructured)
-        {
-            failureKind = ReviewParseFailure.ProvenanceLimit;
-            return false;
-        }
-
-        if (!string.Equals(parsed.ExecutionUnit, unit, StringComparison.Ordinal)
-            || !string.Equals(parsed.Kind, CrossRuntimeReviewRecord.KindImplementation, StringComparison.Ordinal))
-        {
-            review = new UnitStatusObservedReview
-            {
-                Source = "github-pr-review",
-                HeadSha = parsed.HeadSha!,
-                Verdict = parsed.Verdict!,
-                ReviewState = state,
-                Reviewer = reviewer,
-                Runtime = parsed.Runtime,
-                Relation = parsed.Relation,
-                At = submittedAt,
-                RecordId = id.ToString(CultureInfo.InvariantCulture),
-                Url = reviewUrl,
-                Qualification = !string.Equals(parsed.ExecutionUnit, unit, StringComparison.Ordinal)
-                    ? "nonqualifying-other-unit-review"
-                    : "nonqualifying-design-review",
-                Dismissed = string.Equals(state, "DISMISSED", StringComparison.OrdinalIgnoreCase),
-            };
-            return true;
-        }
-
-        var dismissed = string.Equals(state, "DISMISSED", StringComparison.OrdinalIgnoreCase);
-        var valid = parsed.HeadSha is not null
-            && IsObjectId(parsed.HeadSha)
-            && string.Equals(parsed.HeadSha, commitId, StringComparison.OrdinalIgnoreCase)
-            && parsed.Verdict is CrossRuntimeReviewVerdict.Approve or CrossRuntimeReviewVerdict.RequestChanges
-            && (parsed.Relation is null
-                || CrossRuntimeReviewRuntimes.IsSupported(parsed.Runtime)
-                && CrossRuntimeReviewRuntimes.IsSupported(parsed.ConductorRuntime)
-                && (parsed.Relation == "same-runtime"
-                    ? string.Equals(parsed.Runtime, parsed.ConductorRuntime, StringComparison.Ordinal)
-                    : !string.Equals(parsed.Runtime, parsed.ConductorRuntime, StringComparison.Ordinal)));
-        if (!valid)
-        {
-            failureKind = ReviewParseFailure.IdentityConflict;
-            return false;
-        }
-
-        string? citedRecordPath = null;
-        if (parsed.CitedRecord is { } citedRecord
-            && !TryValidateCitedReviewRecord(localReviews, citedRecord, unit, domain, team, repo, pullRequest, parsed, out citedRecordPath))
-        {
-            failureKind = ReviewParseFailure.IdentityConflict;
-            return false;
-        }
-        review = new UnitStatusObservedReview
-        {
-            Source = "github-pr-review",
-            HeadSha = parsed.HeadSha!,
-            Verdict = parsed.Verdict!,
-            ReviewState = state,
-            Reviewer = reviewer,
-            Runtime = parsed.Runtime,
-            Relation = parsed.Relation,
-            At = submittedAt,
-            RecordId = id.ToString(CultureInfo.InvariantCulture),
-            CitedRecordPath = citedRecordPath,
-            Url = reviewUrl,
-            Qualification = "implementation-review",
-            Dismissed = dismissed,
-        };
-        return true;
-    }
-
-    private static UnitStatusEvidencePointer LegacyReviewEvidence(JsonElement item, string repo, int pullRequest)
-    {
-        var recordId = TryReadLong(item, "id", out var id) ? id.ToString(CultureInfo.InvariantCulture) : null;
-        var url = TryReadNullableString(item, "html_url", out var parsedUrl) ? parsedUrl : null;
-        return new UnitStatusEvidencePointer
-        {
-            Kind = "github-pr-review",
-            Url = url ?? $"https://github.com/{repo}/pull/{pullRequest}",
-            RecordId = recordId,
-            Repo = repo,
-            Pr = pullRequest,
-            ReviewDisposition = "legacy-review-identity-unrecorded",
-            Provenance = "named-unstructured-github-pr-review",
-        };
-    }
-
-    private static bool TryValidateCitedReviewRecord(
-        CrossRuntimeReviewReadResult localReviews,
-        string citedRecord,
-        string unit,
-        string domain,
-        string team,
-        string repo,
-        int pullRequest,
-        UnitStatusReviewBodyParse parsed,
-        out string? recordPath)
-    {
-        recordPath = null;
-        if (localReviews.Unreadable.Any(item => string.Equals(item.RelativePath, citedRecord, StringComparison.Ordinal))) return false;
-        var stored = localReviews.Records.FirstOrDefault(item => string.Equals(item.RelativePath, citedRecord, StringComparison.Ordinal));
-        if (stored is null) return false;
-        var record = stored.Record;
-        if (!string.Equals(record.Repo, repo, StringComparison.OrdinalIgnoreCase)
-            || record.Pr != pullRequest
-            || !string.Equals(record.ExecutionUnit, unit, StringComparison.Ordinal)
-            || !string.Equals(record.Domain, domain, StringComparison.Ordinal)
-            || !string.Equals(record.Team, team, StringComparison.Ordinal)
-            || !string.Equals(record.Kind, CrossRuntimeReviewRecord.KindImplementation, StringComparison.Ordinal)
-            || !string.Equals(record.HeadSha, parsed.HeadSha, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(record.Runtime, parsed.Runtime, StringComparison.Ordinal)
-            || !string.Equals(record.ConductorRuntime, parsed.ConductorRuntime, StringComparison.Ordinal)
-            || !string.Equals(record.Verdict, parsed.Verdict, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        recordPath = stored.RelativePath;
-        return true;
-    }
-
-    private static UnitStatusReviewBodyParse ParseReviewBody(string body)
-    {
-        static bool IsNamedIndependentHeading(string? value) => value is not null
-            && (value.StartsWith("Independent subagent review:", StringComparison.OrdinalIgnoreCase)
-                || value.StartsWith("Independent same-runtime subagent review:", StringComparison.OrdinalIgnoreCase)
-                || value.StartsWith("Cross-runtime review:", StringComparison.OrdinalIgnoreCase));
-
-        static string? NamedIndependentVerdict(string? value) => IsNamedIndependentHeading(value)
-            ? value![(value!.IndexOf(':') + 1)..].Trim()
-            : null;
-
-        static bool IsExplicitVerdict(string? value) => value is not null
-            && CrossRuntimeReviewVerdict.VerdictValues.Contains(value, StringComparer.Ordinal);
-
-        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var leadingLine = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')
-            .Select(line => line.Trim()).FirstOrDefault(line => line.Length > 0);
-        string? heading = null;
-        string? citedRecord = null;
-        var conflicting = false;
-        var inMetadataHeader = true;
-        foreach (var rawLine in body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
-        {
-            var line = rawLine.Trim();
-            if (heading is null && line.StartsWith("## ", StringComparison.Ordinal)) heading = line[3..].Trim();
-            if (line.StartsWith("Recorded as `", StringComparison.Ordinal)
-                && line.EndsWith("` by `intent-cli review cross-runtime record`.", StringComparison.Ordinal))
-            {
-                var close = line.IndexOf('`', "Recorded as `".Length);
-                if (close > "Recorded as `".Length)
-                {
-                    var citation = line["Recorded as `".Length..close];
-                    if (citedRecord is not null && !string.Equals(citedRecord, citation, StringComparison.Ordinal)) conflicting = true;
-                    else citedRecord = citation;
-                }
-            }
-
-            if (line.StartsWith("### ", StringComparison.Ordinal))
-            {
-                inMetadataHeader = false;
-                continue;
-            }
-
-            if (!inMetadataHeader) continue;
-            if (line.StartsWith("- ", StringComparison.Ordinal)) line = line[2..].Trim();
-            var colon = line.IndexOf(':');
-            if (colon <= 0) continue;
-            var key = line[..colon].Trim().ToLowerInvariant() switch
-            {
-                "head sha" => "head_sha",
-                "execution unit" => "execution_unit",
-                "conductor runtime" => "conductor_runtime",
-                "runtime version" => "runtime_version",
-                var other => other,
-            };
-            if (key is not ("reviewer" or "runtime" or "runtime_version" or "model" or "effort"
-                or "conductor_runtime" or "head_sha" or "kind" or "execution_unit" or "verdict")) continue;
-            var value = line[(colon + 1)..].Trim().Trim('`');
-            if (fields.TryGetValue(key, out var previous) && !string.Equals(previous, value, StringComparison.Ordinal))
-            {
-                conflicting = true;
-            }
-            else
-            {
-                fields[key] = value;
-            }
-        }
-
-        var relation = heading?.StartsWith("Cross-runtime review:", StringComparison.Ordinal) == true
-            ? "cross-runtime"
-            : heading?.StartsWith("Independent same-runtime subagent review:", StringComparison.Ordinal) == true
-                ? "same-runtime"
-                : null;
-        var reviewer = fields.GetValueOrDefault("reviewer");
-        var namedIndependentHeading = IsNamedIndependentHeading(heading);
-        var leadingReviewLine = leadingLine?.StartsWith("## ", StringComparison.Ordinal) == true
-            ? leadingLine[3..].Trim()
-            : leadingLine;
-        var namedIndependentLead = IsNamedIndependentHeading(leadingReviewLine);
-        var headingVerdict = NamedIndependentVerdict(heading);
-        var leadingVerdict = NamedIndependentVerdict(leadingReviewLine);
-        var namedIndependent = relation is not null
-            || namedIndependentHeading
-            || namedIndependentLead
-            || string.Equals(reviewer, "independent same-runtime subagent review", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(reviewer, "independent subagent review", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(reviewer, "cross-runtime review", StringComparison.OrdinalIgnoreCase);
-        var verdict = fields.GetValueOrDefault("verdict");
-        var headingVerdictConflict = IsExplicitVerdict(headingVerdict)
-            && !string.IsNullOrWhiteSpace(verdict)
-            && !string.Equals(headingVerdict, verdict, StringComparison.Ordinal);
-        var leadingVerdictConflict = IsExplicitVerdict(leadingVerdict)
-            && !string.IsNullOrWhiteSpace(verdict)
-            && !string.Equals(leadingVerdict, verdict, StringComparison.Ordinal);
-        var headingAndLeadingVerdictConflict = IsExplicitVerdict(headingVerdict)
-            && IsExplicitVerdict(leadingVerdict)
-            && !string.Equals(headingVerdict, leadingVerdict, StringComparison.Ordinal);
-        conflicting |= headingVerdictConflict || leadingVerdictConflict || headingAndLeadingVerdictConflict;
-        var canonicalRelationMatchesReviewer = relation switch
-        {
-            "cross-runtime" => string.Equals(reviewer, "cross-runtime review", StringComparison.OrdinalIgnoreCase),
-            "same-runtime" => string.Equals(reviewer, "independent same-runtime subagent review", StringComparison.OrdinalIgnoreCase),
-            _ => true,
-        };
-        var structured = !conflicting
-            && namedIndependent
-            && canonicalRelationMatchesReviewer
-            && !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("execution_unit"))
-            && !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("head_sha"))
-            && !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("kind"))
-            && !string.IsNullOrWhiteSpace(verdict)
-            && (!IsExplicitVerdict(headingVerdict) || string.Equals(headingVerdict, verdict, StringComparison.Ordinal))
-            && (!IsExplicitVerdict(leadingVerdict) || string.Equals(leadingVerdict, verdict, StringComparison.Ordinal))
-            && (relation is null
-                || !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("runtime"))
-                && !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("conductor_runtime")));
-        return new UnitStatusReviewBodyParse(
-            structured,
-            namedIndependent,
-            relation,
-            fields.GetValueOrDefault("execution_unit"),
-            fields.GetValueOrDefault("head_sha"),
-            fields.GetValueOrDefault("kind"),
-            verdict,
-            fields.GetValueOrDefault("runtime"),
-            fields.GetValueOrDefault("conductor_runtime"),
-            citedRecord,
-            conflicting);
     }
 
     private bool TryReadCheckRun(JsonElement item, string expectedRepo, string expectedHead, out UnitStatusObservedCheck? check, out long? runId, out string error)

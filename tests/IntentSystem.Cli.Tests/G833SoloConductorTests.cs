@@ -282,6 +282,7 @@ public sealed class G833SoloConductorTests : IDisposable
             {
                 "## Model", "## Per-unit loop", "## Independence rules (blocking)", "## Pacing", "## Operator questions",
                 "## Host discipline", "## Handoff durability", "## Limits", "## No-execution boundary",
+                "## Generic independent review template (G856)",
                 "## Builder invocations (guidance)",
             })
             {
@@ -431,6 +432,49 @@ public sealed class G833SoloConductorTests : IDisposable
         var guide = GuideSoloConductorCommand.BuildGuide();
         Assert.Contains("four evidence states", guide.Loop.Single(step => step.Number == 7).Instruction, StringComparison.Ordinal);
         Assert.Contains("four evidence states", guide.Loop.Single(step => step.Number == 10).Instruction, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void G856_GenericReviewTemplate_IsByteIdenticalAcrossGuideFixtureAndEnJaDocs()
+    {
+        var repoRoot = RepoVersionPolicySource.RepoRoot();
+        var fixture = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "tests",
+            "IntentSystem.Cli.Tests",
+            "Fixtures",
+            "G856",
+            "solo-generic-review-template.md"));
+        Assert.Equal(GuideSoloConductorCommand.GenericReviewTemplate, fixture);
+
+        static string ExtractTemplate(string source)
+        {
+            const string opening = "```markdown\n";
+            var start = source.IndexOf(opening, StringComparison.Ordinal);
+            Assert.True(start >= 0, "The documented generic review template is missing its Markdown fence.");
+            start += opening.Length;
+            var end = source.IndexOf("\n```", start, StringComparison.Ordinal);
+            Assert.True(end >= 0, "The documented generic review template has no closing fence.");
+            return source[start..end];
+        }
+
+        using var markdown = new StringWriter();
+        Assert.Equal(0, GuideSoloConductorCommand.Execute(CreateContext(), ["--format", "markdown"], markdown));
+        Assert.Equal(fixture, ExtractTemplate(markdown.ToString()));
+
+        using var json = new StringWriter();
+        Assert.Equal(0, GuideSoloConductorCommand.Execute(CreateContext(), ["--format", "json"], json));
+        using var document = JsonDocument.Parse(json.ToString());
+        Assert.Equal(fixture, document.RootElement.GetProperty("generic_review_template").GetString());
+
+        foreach (var language in new[] { "en", "ja" })
+        {
+            foreach (var file in new[] { "08-command-reference.md", "12-agent-message-orchestration.md" })
+            {
+                var path = Path.Combine(repoRoot, "docs", language, file);
+                Assert.Equal(fixture, ExtractTemplate(File.ReadAllText(path)));
+            }
+        }
     }
 
     [Fact]

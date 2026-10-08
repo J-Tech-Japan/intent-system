@@ -242,6 +242,9 @@ IStandaloneUpdateInstaller	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 IUpdateProcessRunner	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 IUpdateReleaseClient	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 IdentityReadResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
+IndependentReviewEvidence	src/IntentSystem.Cli/Commands/IndependentReviewEvidence.cs
+IndependentReviewEvidenceKind	src/IntentSystem.Cli/Commands/IndependentReviewEvidence.cs
+IndependentReviewRowEvidence	src/IntentSystem.Cli/Commands/IndependentReviewEvidence.cs
 InspectOptions	src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs
 InstalledCliProbeResult	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe.cs
 InstalledCliResolution	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe.cs
@@ -483,6 +486,7 @@ RepairCycleHistoryResult	src/IntentSystem.Cli/Commands/NotifySuperviseRepairCycl
 RepairOptions	src/IntentSystem.Cli/Commands/NotifySuperviseRepairCycleHistoryCommand.cs
 ReplaceLabelsRequestBody	src/IntentSystem.Cli/Commands/IGitHubLabelMutator.cs
 RequiredSurface	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe.cs
+ReviewBlocker	src/IntentSystem.Cli/Commands/SoloConductorApprovalGate.cs
 SafetyNestedProviderHandoffCommand	src/IntentSystem.Cli/Commands/SafetyNestedProviderHandoffCommand.cs
 SameRepoMetadataPreflightProbe	src/IntentSystem.Cli/Commands/AutomationSameRepoMetadataPreflightCommand.cs
 SameRepoMetadataPreflightResult	src/IntentSystem.Cli/Commands/AutomationSameRepoMetadataPreflightCommand.cs
@@ -513,6 +517,14 @@ SessionLayerSeatPreflightStore	src/IntentSystem.Cli/Commands/SessionLayerSeatPre
 SessionLayerSeatProbe	src/IntentSystem.Cli/Commands/SessionLayerSeatPreflightCommand.cs
 ShellGitRunner	src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs
 SignalLabelPlan	src/IntentSystem.Cli/Commands/WorkerSignalContract.cs
+SoloConductorApprovalEvaluation	src/IntentSystem.Cli/Commands/SoloConductorApprovalGate.cs
+SoloConductorApprovalGate	src/IntentSystem.Cli/Commands/SoloConductorApprovalGate.cs
+SoloConductorQualifyingReview	src/IntentSystem.Cli/Commands/SoloConductorApprovalGate.cs
+SoloConductorReviewObligation	src/IntentSystem.Cli/Commands/SoloConductorApprovalGate.cs
+SoloConductorReviewReadRequest	src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs
+SoloConductorReviewReadResult	src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs
+SoloConductorReviewReader	src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs
+SoloConductorReviewTransitionOutcome	src/IntentSystem.Cli/Commands/AutomationPrTransitionCommand.cs
 StalledWorkCiBreakdown	src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs
 StalledWorkCiOutcomes	src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs
 StalledWorkCiProjection	src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs
@@ -543,6 +555,7 @@ TaskingTaskPacketCommand	src/IntentSystem.Cli/Commands/TaskingTaskPacketCommand.
 TaskingTaskPacketPreviewCommand	src/IntentSystem.Cli/Commands/TaskingTaskPacketPreviewCommand.cs
 TransitionPlan	src/IntentSystem.Cli/Commands/AutomationPrTransitionCommand.cs
 UnitStatusReadAdapter	src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs
+UnitStatusReviewBodyParse	src/IntentSystem.Cli/Commands/UnitStatusReadContracts.cs
 UpdateChannelDetection	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 UpdateChannelDetector	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 UpdateChannelName	src/IntentSystem.Cli/Commands/UpdateCommand.cs

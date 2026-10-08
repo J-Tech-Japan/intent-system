@@ -254,6 +254,88 @@ seat rather than acting as a security boundary.
 `[[cross_runtime_review.teams]]` and applies no gate. Refresh every intent-cli
 that transitions PRs for a declared team before relying on the gate.
 
+## Posted solo-conductor approval (G856 — preview-through-1.x)
+
+The existing `automation pr-transition --transition approved` boundary now also
+requires posted independent approval for a currently recorded solo-conductor
+team, including a team without a G834 declaration. It applies only to the
+approved transition and does not infer solo mode from topology. The command
+resolves the queue PR/unit, packet domain and held claim team through the
+existing authoritative resolver, then resolves team mode. If a valid mode file
+contains any solo entry, an unresolved or ambiguous PR identity refuses
+conservatively because the command cannot prove that this PR is non-solo.
+Malformed or unreadable mode evidence also refuses. Resolved delivery or
+authoring-only teams retain their existing behavior, as do resolved non-solo
+teams on hosts with no solo entry.
+
+Solo approval requires a full `--head-sha` on dry-run and write. The command
+reads the current PR head before the review inventory, requires the posted
+review's REST `commit_id`, structured body head and expected head to match, and
+rechecks the head after evaluation immediately before labels. It retrieves
+`repos/{owner}/{repo}/pulls/{pr}/reviews?per_page=100&page={page}` with a
+100-page cap; a short page completes the read, and the cap or any incomplete
+page refuses rather than accepting a partial inventory. Head or review read
+failure, missing approval and unresolved review evidence are named refusals.
+Refusal leaves the label set and durable CI wait unchanged. The existing claim
+resolver's network/ref effects remain possible on a solo-configured host: its
+established `git fetch` can update remote-tracking refs, `FETCH_HEAD`, and
+fetched Git objects. These are lookup effects, not permission to mutate labels
+or CI wait.
+
+When the exact existing G834 predicate holds—`IsGatedRepo(repo)` and
+`TryGetDeclared(resolvedDomain, resolvedTeam, ...)`—the transition keeps the
+unchanged local cross-runtime gate and additionally requires posted canonical
+bodies for both currently deciding relation slots. The repo test is global
+across declarations: if any declaration lists the repo, a resolved declared
+team retains the local-gate behavior even when that team's own repo list omits
+it. If no declaration lists the repo, a solo team uses generic approval even
+when it is declared for another repository. Generic blockers apply on either
+route.
+
+The generic route uses the sanctioned `gh pr review --comment --body-file`
+writer with the fresh reviewer's actual verdict. The body is exact; only its
+placeholders are filled from the real review:
+
+```markdown
+## Independent subagent review: approve
+
+- reviewer: independent subagent review
+- execution unit: <unit>
+- kind: implementation
+- head SHA: <full-head-sha>
+- verdict: approve
+
+### Blocking findings
+
+- none
+
+### Notes
+
+<actual reviewer notes>
+```
+
+For a blocking verdict, both `approve` values become `request-changes` and the
+actual findings remain. A state of COMMENTED or APPROVED does not turn a
+request-changes body into approval. A named malformed/conflicting review with a
+trusted REST login, positive numeric ID and submission time creates a login
+scoped obligation. Only a strictly later valid current-head approval by that
+same login repairs it; a stale, pending, dismissed, other-login or malformed
+row does not. Canonical runtime obligations remain separate. An independent
+row with no trusted login/ID/time is unscopable and cannot be repaired by an
+unrelated repost; fix API availability or use a replacement PR through normal
+review and canonical worker linkage. The transition reports when this evidence
+has no guaranteed same-PR repair.
+
+There is no override, approval receipt, completion/release gate, or claim that
+the login proves reviewer independence. The gate assumes an honest seat, and
+GitHub labels cannot be atomically tied to a SHA. Preserve exact-head CI and
+merge with `gh pr merge <pr> --repo <owner/repo> --squash
+--match-head-commit <head-sha>`.
+
+**Forward compatibility.** An intent-cli without G856 does not enforce posted
+solo approval. Update every host binary that can approve PR transitions before
+relying on this boundary.
+
 ## Cross-runtime design review and model selection (G835 — preview-through-1.x)
 
 G835 extends the declared-team cross-runtime review surface in two ways:

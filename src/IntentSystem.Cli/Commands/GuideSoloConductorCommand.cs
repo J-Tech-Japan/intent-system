@@ -23,6 +23,23 @@ internal static class GuideSoloConductorCommand
     private const string ModelRequiredPrefix = "The model is required. ";
     private const string UsageLine =
         "Usage: intent-cli guide solo-conductor [--format markdown|json]";
+    internal const string GenericReviewTemplate = """
+## Independent subagent review: approve
+
+- reviewer: independent subagent review
+- execution unit: <unit>
+- kind: implementation
+- head SHA: <full-head-sha>
+- verdict: approve
+
+### Blocking findings
+
+- none
+
+### Notes
+
+<actual reviewer notes>
+""";
 
     private static readonly string[] BuilderContractItems =
     [
@@ -217,7 +234,7 @@ internal static class GuideSoloConductorCommand
             {
                 Number = 7,
                 Id = "independent-subagent-review",
-                Instruction = "Start a fresh reviewer subagent with only the review inputs, record its verdict on the PR, and inspect current evidence with `intent-cli unit status --execution-unit <unit> --domain <domain> --team <team> --format json`. Unit status uses four evidence states: `done`, `missing`, `not-applicable`, and `unavailable`. This is an observation, not merge readiness; missing evidence and stable provenance limits remain visible without authorizing retry or re-approval. For a team declared in `[[cross_runtime_review.teams]]` (G834), from the host root: render one request with `review cross-runtime request --repo <owner/repo> --pr <pr> --head-sha <head-sha> --execution-unit <unit> --runtime <runtime> --clone <read-only-clone> --out-dir <out-dir> [--model <model>] [--effort <level>] [--opencode-provider-config <file>]` for the declared conductor runtime (the same-runtime reviewer) and one for a different runtime (the cross-runtime reviewer), each into its own out-dir; the seat runs the command in each `<out-dir>/invocation.txt` itself in a read-only clone at the head (a claude or cursor verdict must be that pinned invocation's envelope, so an in-session subagent's reply cannot be recorded for those runtimes); then `review cross-runtime record --repo <owner/repo> --pr <pr> --head-sha <head-sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <version> --verdict-file <verdict-file> [--model <model>] [--effort <level>] --write` both verdicts, and post each rendered comment with `gh pr review --comment --body-file`. Read-only enforcement differs by runtime (measured): codex `-s read-only` is sandbox-enforced; the claude invocation removes only the Edit, Write, and NotebookEdit tools, so the Claude reviewer may run commands such as tests and shell-level writes are not sandbox-enforced; cursor `--mode ask` refuses every non-read-only tool, including shell commands, so the Cursor reviewer reads files but cannot run git or tests; copilot `--available-tools view rg glob` leaves only those three tools, so the reviewer reads files but cannot write or run commands; opencode's rendered config denies every tool and allows only read, glob, grep, and list. copilot and opencode reviewers may return the verdict as one trailing fenced JSON object. On both `request` and `record`, `--model` is required for `copilot` and `opencode` and optional for `codex`, `claude`, and `cursor`; `--effort` is supported by `copilot` and `opencode`; request-only `--opencode-provider-config` is supported by `opencode`; --opencode-provider-config must name a source outside the workspace and outside every operator-protected root, with no group or other permission bits (request refuses one that has any); a source extracted for one run is deleted after record --write, as the out-dir is. Advise a reviewer model from a different vendor and model family than the conductor's model; the gate does not check this. After `record --write` has stored the verdict, the seat deletes the out-dir, or keeps it under a directory only that user can read; intent-cli does not delete it. intent-cli renders the request and records verdicts; it does not start, launch, or manage the reviewer. Confirming each vendor's automation terms is the operator's responsibility.",
+                Instruction = "Start a fresh reviewer subagent with only the review inputs, record its verdict on the PR, and inspect current evidence with `intent-cli unit status --execution-unit <unit> --domain <domain> --team <team> --format json`. Unit status uses four evidence states: `done`, `missing`, `not-applicable`, and `unavailable`. This is an observation, not merge readiness; missing evidence and stable provenance limits remain visible without authorizing retry or re-approval. For a team declared in `[[cross_runtime_review.teams]]` (G834), from the host root: render one request with `review cross-runtime request --repo <owner/repo> --pr <pr> --head-sha <head-sha> --execution-unit <unit> --runtime <runtime> --clone <read-only-clone> --out-dir <out-dir> [--model <model>] [--effort <level>] [--opencode-provider-config <file>]` for the declared conductor runtime (the same-runtime reviewer) and one for a different runtime (the cross-runtime reviewer), each into its own out-dir; the seat runs the command in each `<out-dir>/invocation.txt` itself in a read-only clone at the head (a claude or cursor verdict must be that pinned invocation's envelope, so an in-session subagent's reply cannot be recorded for those runtimes); then `review cross-runtime record --repo <owner/repo> --pr <pr> --head-sha <head-sha> --execution-unit <unit> --kind implementation --runtime <runtime> --runtime-version <version> --verdict-file <verdict-file> [--model <model>] [--effort <level>] --write` both verdicts, and post each rendered comment with `gh pr review --comment --body-file`. Read-only enforcement differs by runtime (measured): codex `-s read-only` is sandbox-enforced; the claude invocation removes only the Edit, Write, and NotebookEdit tools, so the Claude reviewer may run commands such as tests and shell-level writes are not sandbox-enforced; cursor `--mode ask` refuses every non-read-only tool, including shell commands, so the Cursor reviewer reads files but cannot run git or tests; copilot `--available-tools view rg glob` leaves only those three tools, so the reviewer reads files but cannot write or run commands; opencode's rendered config denies every tool and allows only read, glob, grep, and list. copilot and opencode reviewers may return the verdict as one trailing fenced JSON object. On both `request` and `record`, `--model` is required for `copilot` and `opencode` and optional for `codex`, `claude`, and `cursor`; `--effort` is supported by `copilot` and `opencode`; request-only `--opencode-provider-config` is supported by `opencode`; --opencode-provider-config must name a source outside the workspace and outside every operator-protected root, with no group or other permission bits (request refuses one that has any); a source extracted for one run is deleted after record --write, as the out-dir is. Advise a reviewer model from a different vendor and model family than the conductor's model; the gate does not check this. After `record --write` has stored the verdict, the seat deletes the out-dir, or keeps it under a directory only that user can read; intent-cli does not delete it. intent-cli renders the request and records verdicts; it does not start, launch, or manage the reviewer. Confirming each vendor's automation terms is the operator's responsibility. For every recorded solo-conductor team, G856 also requires a full current `--head-sha` and a posted independent implementation approval. Teams matching the exact existing G834 predicate keep the local gate and post both currently deciding canonical relation comments; all other solo teams use the exact generic review template below with the fresh reviewer's actual verdict. The REST commit, body head and current PR head must match.",
                 Commands =
                 [
                     IntentCli($"intent-cli review cross-runtime request --repo <owner/repo> --pr <pr> --head-sha <head-sha> --execution-unit <unit> --runtime {RuntimePlaceholder} --clone <read-only-clone> --out-dir <out-dir> [--model <model>] [--effort <level>] [--opencode-provider-config <file>] --format json"),
@@ -230,7 +247,7 @@ internal static class GuideSoloConductorCommand
             {
                 Number = 8,
                 Id = "fix-and-delta-review",
-                Instruction = "Fix blocking findings, push, and have a new reviewer subagent re-review the delta against the new head before merge. For a declared team, a blocking finding from either reviewer stops merge, and the runtime that raised it must re-review the new head (`cross-runtime-review-rereview-missing` otherwise). A later approve on the same head supersedes that runtime's request-changes only when it comes from a fresh reviewer run, never a repeated prompt to the same session.",
+                Instruction = "Fix blocking findings, push, and have a new reviewer subagent re-review the delta against the new head before merge. For a declared team, a blocking finding from either reviewer stops merge, and the runtime that raised it must re-review the new head (`cross-runtime-review-rereview-missing` otherwise). A later approve on the same head supersedes that runtime's request-changes only when it comes from a fresh reviewer run, never a repeated prompt to the same session. G856's generic trusted malformed-row obligation is repaired only by a strictly later valid current-head approval from that same REST login; unscopable evidence cannot be repaired by an unrelated repost. Canonical G834 runtime obligations remain separate.",
                 Commands =
                 [
                     Git("git -C <isolated-clone> push origin <branch>"),
@@ -241,7 +258,7 @@ internal static class GuideSoloConductorCommand
             {
                 Number = 9,
                 Id = "exact-head-ci-and-merge",
-                Instruction = "Wait for CI on the exact head SHA, record the approved transition from the host root with that head, and merge only that head. For a declared team the transition refuses unless the cross-runtime review gate on that head is satisfied; `review cross-runtime status` shows why.",
+                Instruction = "Wait for CI on the exact head SHA, record the approved transition from the host root with that head, and merge only that head. For a declared team the transition refuses unless the cross-runtime review gate on that head is satisfied; `review cross-runtime status` shows why. For solo teams, dry-run and write both require the full head, check it before reviews, and recheck immediately before label changes. Refusal leaves labels and CI wait unchanged; the exact G834 predicate is global repo gating plus a declaration for the resolved domain/team. Merge with `--match-head-commit <head-sha>` because the label write cannot compare the SHA atomically. No override or approval receipt is added.",
                 Commands =
                 [
                     Gh("gh run list --repo <owner/repo> --commit <head-sha> --json databaseId,headSha,attempt,status,conclusion"),
@@ -295,9 +312,14 @@ internal static class GuideSoloConductorCommand
             "Review independence depends on the subagent boundary; a runtime that cannot start an isolated subagent must not use this model.",
             "A deviation from an acceptance criterion is recorded as an architect decision before merge.",
             "Cross-runtime review (G834) is required only for teams declared in `[[cross_runtime_review.teams]]`; the gate assumes an honest seat and is not a security boundary, because `gh pr merge` is not gated.",
+            "G856 solo approval applies to currently recorded solo-conductor teams without topology inference. A valid team-mode file with any solo entry activates authoritative PR resolution; unresolved identity refuses conservatively. The existing claim resolver may run its established `git fetch`, changing remote-tracking refs, `FETCH_HEAD`, and fetched Git objects; this is the known lookup effect, not a label or CI-wait mutation.",
+            "The G834 local gate applies exactly when `Config.CrossRuntimeReview.IsGatedRepo(repo)` and `TryGetDeclared(resolvedDomain, resolvedTeam, ...)` both hold. The repository test is global across declarations; a team declared only for other repositories uses generic approval when no declaration lists this repo.",
+            "G856 reports scoped malformed-review obligations and unscopable evidence separately. Same-login later approval can repair a trusted scoped row; permanently unscopable identity/order may require a replacement PR and normal worker linkage. No override, approval receipt, completion gate, or release gate is added.",
+            "The gate assumes an honest seat and is not a security boundary, because `gh pr merge` is not gated; merge with `--match-head-commit <sha>`.",
         ],
         NoExecutionBoundary = "This guide renders text only. The conductor seat starts reviewer subagents; intent-cli does not start, launch, or manage any agent, and reads no host metadata to render this contract.",
         Builder = BuildBuilder(),
+        GenericReviewTemplate = GenericReviewTemplate,
         OrcaMailboxLifecycle = OrcaMailboxLifecycleGuidance.CreateTemplate(),
     };
 
@@ -365,6 +387,15 @@ internal static class GuideSoloConductorCommand
                 writer.WriteLine($"   - [{command.Tool}] `{command.Command}`");
             }
         }
+
+        writer.WriteLine();
+        writer.WriteLine("## Generic independent review template (G856)");
+        writer.WriteLine();
+        writer.WriteLine("Use this exact body for an actual fresh generic review verdict. Replace placeholders with the real unit, full head SHA, and reviewer notes; do not invent findings or approval.");
+        writer.WriteLine();
+        writer.WriteLine("```markdown");
+        writer.WriteLine(guide.GenericReviewTemplate);
+        writer.WriteLine("```");
 
         WriteBuilder(writer, guide.Builder);
 
@@ -448,6 +479,7 @@ internal sealed record SoloConductorGuide
     [JsonPropertyName("limits")] public required IReadOnlyList<string> Limits { get; init; }
     [JsonPropertyName("no_execution_boundary")] public required string NoExecutionBoundary { get; init; }
     [JsonPropertyName("builder")] public required SoloConductorBuilder Builder { get; init; }
+    [JsonPropertyName("generic_review_template")] public required string GenericReviewTemplate { get; init; }
     [JsonPropertyName("orca_mailbox_lifecycle")] public required OrcaMailboxLifecycleContract OrcaMailboxLifecycle { get; init; }
 }
 

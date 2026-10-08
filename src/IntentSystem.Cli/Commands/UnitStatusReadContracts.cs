@@ -95,4 +95,13 @@ internal sealed record UnitStatusReviewBodyParse(
     string? Runtime,
     string? ConductorRuntime,
     string? CitedRecord,
-    bool Conflicting);
+    bool Conflicting)
+{
+    public string? Reviewer { get; init; }
+    public string? HeadingVerdict { get; init; }
+    public string? LeadingVerdict { get; init; }
+    public bool HasCitationAssertion { get; init; }
+    public bool HasStructuredMetadata { get; init; }
+    public bool ApprovalEvidenceConflicting { get; init; }
+    public bool ExplicitRequestChangesAssertion { get; init; }
+}
