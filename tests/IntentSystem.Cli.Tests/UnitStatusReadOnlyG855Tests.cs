@@ -1173,6 +1173,103 @@ public sealed class UnitStatusReadOnlyG855Tests
         Assert.Equal("identity-conflict", publication.GetProperty("unavailable_class").GetString());
     }
 
+    [Theory]
+    [InlineData("issue-created", "both-null")]
+    [InlineData("issue-created", "number-null")]
+    [InlineData("issue-created", "url-null")]
+    [InlineData("issue-created", "nonpositive-number")]
+    [InlineData("issue-created", "invalid-url")]
+    [InlineData("published", "both-null")]
+    [InlineData("published", "number-null")]
+    [InlineData("published", "url-null")]
+    [InlineData("published", "nonpositive-number")]
+    [InlineData("published", "invalid-url")]
+    public void ExecuteCore_PublishedStatusesWithoutExactIssueIdentityAreUnavailable(string publishStatus, string identityShape)
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: false);
+        host.WriteQueueLinkedIssue("intent-cli", _repo, _publicIssue);
+        int? createdIssueNumber = identityShape is "both-null" or "number-null"
+            ? null
+            : identityShape == "nonpositive-number" ? 0 : _publicIssue;
+        var createdIssueUrl = identityShape is "both-null" or "url-null"
+            ? null
+            : identityShape == "invalid-url" ? "https://example.invalid/issues/1862" : $"https://github.com/{_repo}/issues/{_publicIssue}";
+        host.WritePublishArtifact(new IssuePublishArtifact
+        {
+            ExecutionUnit = "G855",
+            PublishStatus = publishStatus,
+            PacketPath = ".intent-cli/issues/G855/packet.yaml",
+            IssueBodyPath = ".intent-cli/issues/G855/github-body.md",
+            CreatedIssueNumber = createdIssueNumber,
+            CreatedIssueUrl = createdIssueUrl,
+            PublishedLabelName = publishStatus == "published" ? "intent-target" : null,
+            LifecycleState = IssuePublishLifecycle.IssueCreated,
+        });
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest,
+            allowPullRequestEndpoints: false);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
+        Assert.Equal(1, exit);
+        Assert.Equal(0, github.ForbiddenCalls);
+        Assert.Single(github.Calls);
+        Assert.Equal($"repos/{_repo}/issues/{_publicIssue}", github.Calls[0][3]);
+        using var report = JsonDocument.Parse(output.ToString());
+        var publication = FindFact(report.RootElement, "publication-artifact");
+        Assert.Equal("unavailable", publication.GetProperty("state").GetString());
+        Assert.Equal("publication-identity-unavailable", publication.GetProperty("cause").GetString());
+        Assert.Equal("identity-conflict", publication.GetProperty("unavailable_class").GetString());
+        Assert.Contains(publication.GetProperty("evidence").EnumerateArray(), evidence =>
+            evidence.GetProperty("path").GetString() == ".intent-cli/issues/G855/publish.yaml");
+        Assert.Equal(1, report.RootElement.GetProperty("summary").GetProperty("observation_exit_code").GetInt32());
+    }
+
+    [Fact]
+    public void ExecuteCore_MalformedPublishedIssueUrlWithoutIndependentIssueIdentityRefusesBeforeGitHub()
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: false);
+        host.WritePublishArtifact(new IssuePublishArtifact
+        {
+            ExecutionUnit = "G855",
+            PublishStatus = "issue-created",
+            PacketPath = ".intent-cli/issues/G855/packet.yaml",
+            IssueBodyPath = ".intent-cli/issues/G855/github-body.md",
+            CreatedIssueNumber = _publicIssue,
+            CreatedIssueUrl = "https://example.invalid/issues/1862",
+            PublishedLabelName = null,
+            LifecycleState = IssuePublishLifecycle.IssueCreated,
+        });
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest,
+            allowPullRequestEndpoints: false);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
+        Assert.Equal(1, exit);
+        Assert.Empty(github.Calls);
+        Assert.Equal(0, github.ForbiddenCalls);
+        using var report = JsonDocument.Parse(output.ToString());
+        Assert.Equal("identity-conflict", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+        Assert.Equal("identity-conflict", report.RootElement.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+    }
+
     [Fact]
     public void ProgramMain_HostlessStatusIsStructuredAndHelpIsMetadataFreeWithoutWritingFiles()
     {

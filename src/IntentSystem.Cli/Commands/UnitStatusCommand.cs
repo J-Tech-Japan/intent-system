@@ -94,6 +94,14 @@ internal static class UnitStatusCommand
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
         if (domain is null && scopedDomains.Length == 1) domain = scopedDomains[0];
+        var issueIdentityEstablishedOutsidePublish = packetRepo is { } packetRepoValue && SafeRepo(packetRepoValue)
+            && (queueIdentity.Any(candidate => candidate.Item.LinkedIssue is { } linkedIssue
+                    && linkedIssue.Number > 0
+                    && string.Equals(linkedIssue.Repo, packetRepoValue, StringComparison.OrdinalIgnoreCase))
+                || runIdentity.Any(candidate => !candidate.InvalidIdentity
+                    && candidate.Issues.Count == 1
+                    && candidate.Repos.Count > 0
+                    && candidate.Repos.All(candidateRepo => string.Equals(candidateRepo, packetRepoValue, StringComparison.OrdinalIgnoreCase))));
         string? publishIssueRepo = null;
         int? publishIssueFromUrl = null;
         string? publishPrRepo = null;
@@ -102,7 +110,7 @@ internal static class UnitStatusCommand
         {
             if (TryParseGithubUrl(issueUrl, "issues", out var parsedRepo, out var parsedIssue))
             { publishIssueRepo = parsedRepo; publishIssueFromUrl = parsedIssue; }
-            else publishIdentityInvalid = true;
+            else if (publish.PublishStatus is not ("issue-created" or "published") || !issueIdentityEstablishedOutsidePublish) publishIdentityInvalid = true;
         }
         if (publish?.CreatedIssueNumber is > 0 and { } createdNumber && publishIssueFromUrl is { } fromUrl && createdNumber != fromUrl)
             publishIdentityInvalid = true;
@@ -867,8 +875,8 @@ internal static class UnitStatusCommand
                 ? Done("publication-artifact", "issue-created-observed", "The publish artifact records a newly created issue with matching repository and issue identity.")
             : publish.PublishStatus == "published" && issueUrlIsExact
                 ? Done("publication-artifact", "publication-issue-published", "The publish artifact records a published issue with matching repository and issue identity.")
-            : publish.PublishStatus == "published"
-                ? Unavailable("publication-artifact", "publication-identity-unavailable", "Published status lacks a valid created issue URL and number matching the resolved repository and issue.", UnitStatusStates.IdentityConflict)
+            : publish.PublishStatus is "issue-created" or "published"
+                ? Unavailable("publication-artifact", "publication-identity-unavailable", "Issue-created or published status lacks a valid created issue URL and number matching the resolved repository and issue.", UnitStatusStates.IdentityConflict)
             : Missing("publication-artifact", "publication-not-published", "Publish artifact exists, but its status does not record a published issue.");
         facts.Add(publicationFact with { Evidence = publishPointers });
         runsPath = repo is null ? RuntimeScopedStateResolver.GetLegacyRunLogPath(root) : RuntimeScopedStateResolver.ResolveRunLogPathForRead(root, domain, repo).Path;
