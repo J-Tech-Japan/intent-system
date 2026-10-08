@@ -142,7 +142,7 @@ public sealed class UnitStatusCommandG855Tests
             CreatedIssueNumber = null,
             CreatedIssueUrl = null,
             PublishedLabelName = null,
-            LifecycleState = "drafted",
+            LifecycleState = null,
             LinkedPrNumber = null,
             LinkedPrUrl = null,
         }));

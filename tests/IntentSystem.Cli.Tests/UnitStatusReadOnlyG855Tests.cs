@@ -992,7 +992,7 @@ public sealed class UnitStatusReadOnlyG855Tests
             new UnitStatusReadAdapter(github, git));
 
         Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
-        Assert.Equal(0, exit);
+        Assert.True(exit == 0, output.ToString());
         using var report = JsonDocument.Parse(output.ToString());
         var root = report.RootElement;
         Assert.Equal("done", FindFact(root, "publication-artifact").GetProperty("state").GetString());
@@ -1058,15 +1058,87 @@ public sealed class UnitStatusReadOnlyG855Tests
     }
 
     [Theory]
-    [InlineData("issue-created", "issue-created", "done", "issue-created-observed", 0)]
-    [InlineData("issue-created", null, "done", "issue-created-observed", 0)]
-    [InlineData("published", "issue-created", "unavailable", "publication-status-identity-conflict", 1)]
-    public void ExecuteCore_PublicationStatusAndLifecycleMustAgree(
-        string publishStatus,
-        string? lifecycleState,
-        string expectedState,
-        string expectedCause,
-        int expectedExit)
+    [InlineData("issue-created", null)]
+    [InlineData("issue-created", "issue-created")]
+    [InlineData("issue-created", "published")]
+    [InlineData("issue-created", "pr-created")]
+    [InlineData("issue-created", "closed-out")]
+    [InlineData("published", null)]
+    [InlineData("published", "issue-created")]
+    [InlineData("published", "published")]
+    [InlineData("published", "pr-created")]
+    [InlineData("published", "closed-out")]
+    public void ExecuteCore_PublicationStatusAndLifecycleMayAdvanceIndependently(string publishStatus, string? lifecycleState)
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: false);
+        host.WritePublishArtifact(new IssuePublishArtifact
+        {
+            ExecutionUnit = "G855",
+            PublishStatus = publishStatus,
+            PacketPath = ".intent-cli/issues/G855/packet.yaml",
+            IssueBodyPath = ".intent-cli/issues/G855/github-body.md",
+            CreatedIssueNumber = _publicIssue,
+            CreatedIssueUrl = $"https://github.com/{_repo}/issues/{_publicIssue}",
+            PublishedLabelName = "intent-target",
+            LifecycleState = lifecycleState is null or IssuePublishLifecycle.IssueCreated
+                ? lifecycleState
+                : IssuePublishLifecycle.IssueCreated,
+        });
+        if (lifecycleState is not null and not IssuePublishLifecycle.IssueCreated)
+        {
+            var artifactPath = Path.Combine(host.Root, ".intent-cli", "issues", "G855", "publish.yaml");
+            AutomationPublishLifecycleRepairCommand.ApplyRepair(new PublishLifecycleEntry
+            {
+                ExecutionUnit = "G855",
+                ArtifactPath = artifactPath,
+                CurrentLifecycleState = IssuePublishLifecycle.IssueCreated,
+                RecommendedLifecycleState = lifecycleState,
+                Classification = PublishLifecycleAnalyzer.ClassificationStaleIssueCreated,
+                Evidence = ["R8 test applied the canonical lifecycle repair writer."],
+                RecommendedLinkedPrNumber = lifecycleState is IssuePublishLifecycle.PrCreated or IssuePublishLifecycle.ClosedOut ? _pullRequest : null,
+                RecommendedLinkedPrUrl = lifecycleState is IssuePublishLifecycle.PrCreated or IssuePublishLifecycle.ClosedOut
+                    ? $"https://github.com/{_repo}/pull/{_pullRequest}"
+                    : null,
+                RecommendedClosedOutAt = lifecycleState == IssuePublishLifecycle.ClosedOut ? "2026-10-07T00:00:00Z" : null,
+            }, _repo);
+        }
+        var writtenArtifact = IssuePublishArtifactYaml.Deserialize(File.ReadAllText(
+            Path.Combine(host.Root, ".intent-cli", "issues", "G855", "publish.yaml")));
+        Assert.Equal(publishStatus, writtenArtifact.PublishStatus);
+        Assert.Equal(lifecycleState, writtenArtifact.LifecycleState);
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest,
+            allowPullRequestEndpoints: true);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
+        Assert.True(exit == 0, output.ToString());
+        Assert.Equal(0, github.ForbiddenCalls);
+        Assert.Contains(github.Calls, call => call[3] == $"repos/{_repo}/issues/{_publicIssue}");
+        using var report = JsonDocument.Parse(output.ToString());
+        var publication = FindFact(report.RootElement, "publication-artifact");
+        Assert.Equal("done", publication.GetProperty("state").GetString());
+        Assert.Equal(publishStatus == "issue-created" ? "issue-created-observed" : "publication-issue-published",
+            publication.GetProperty("cause").GetString());
+        Assert.Equal("missing", FindFact(report.RootElement, "host-pr-linkage").GetProperty("state").GetString());
+        Assert.Equal("missing", FindFact(report.RootElement, "issue-published-run").GetProperty("state").GetString());
+        Assert.Equal("missing", FindFact(report.RootElement, "pr-merged-run").GetProperty("state").GetString());
+        Assert.Equal("missing", FindFact(report.RootElement, "closeout-recorded-run").GetProperty("state").GetString());
+    }
+
+    [Theory]
+    [InlineData("issue-created", "unknown-lifecycle")]
+    [InlineData("published", "unknown-lifecycle")]
+    [InlineData("drafted", "issue-created")]
+    public void ExecuteCore_PublicationArtifactRejectsUnsupportedLifecycleOrDraftedIssueIdentity(string publishStatus, string lifecycleState)
     {
         using var host = new HostFixture();
         host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: false);
@@ -1084,7 +1156,6 @@ public sealed class UnitStatusReadOnlyG855Tests
         var git = new BoundedGitRunner(_head, _metadataOid);
         var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest,
             allowPullRequestEndpoints: false);
-        var before = host.SnapshotAllFilesAndGitMarkers();
         using var output = new StringWriter();
 
         var exit = UnitStatusCommand.ExecuteCore(
@@ -1093,14 +1164,13 @@ public sealed class UnitStatusReadOnlyG855Tests
             output,
             new UnitStatusReadAdapter(github, git));
 
-        Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
-        Assert.Equal(expectedExit, exit);
+        Assert.Equal(1, exit);
         Assert.Single(github.Calls);
-        Assert.Equal($"repos/{_repo}/issues/{_publicIssue}", github.Calls[0][3]);
         using var report = JsonDocument.Parse(output.ToString());
         var publication = FindFact(report.RootElement, "publication-artifact");
-        Assert.Equal(expectedState, publication.GetProperty("state").GetString());
-        Assert.Equal(expectedCause, publication.GetProperty("cause").GetString());
+        Assert.Equal("unavailable", publication.GetProperty("state").GetString());
+        Assert.Equal("publication-status-identity-conflict", publication.GetProperty("cause").GetString());
+        Assert.Equal("identity-conflict", publication.GetProperty("unavailable_class").GetString());
     }
 
     [Fact]

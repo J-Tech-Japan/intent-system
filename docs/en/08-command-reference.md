@@ -634,13 +634,16 @@ visible as evidence but do not satisfy posted-review or delta-review. Read the
 state, cause, and unavailable-class counts together when assessing the
 observation.
 
-Publication is `done` for a consistent publish record with an exact
-unit/repository/issue match in either
-`publish_status: issue-created` or `publish_status: published`. For
-`issue-created`, an absent legacy `lifecycle_state` or
-`lifecycle_state: issue-created` yields cause `issue-created-observed`;
-`published` yields cause
-`publication-issue-published`. The separate `issue-published-run` fact is
+Publication is `done` when `execution_unit` matches the requested unit, the
+created issue URL and number match the resolved repository and issue,
+`publish_status` is `issue-created` or `published`, and
+`lifecycle_state` is null/absent (the legacy baseline) or one of the canonical
+states at or after issue creation: `issue-created`, `published`, `pr-created`,
+or `closed-out`. The cause follows `publish_status`:
+`issue-created-observed` or `publication-issue-published`, respectively.
+Unsupported lifecycle values remain unavailable. Lifecycle state does not
+establish PR linkage or run/closeout evidence. The separate
+`issue-published-run` fact is
 `done` only for a matching unit/repository/issue lifecycle event: a canonical
 `issue-created` event yields `issue-created-run-recorded`, and `issue-published` yields
 `issue-published-run-recorded`. A matching issue artifact alone does not

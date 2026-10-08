@@ -585,11 +585,12 @@ check は `missing` として扱います。別 job の失敗後に条件付き�
 GitHub の pending review は evidence として保持しますが、posted-review または delta-review を満たしません。観測を読むときは
 state、cause、unavailable class の count を合わせて確認してください。
 
-publication が `done` になるのは、status と lifecycle に矛盾がなく、`publish_status: issue-created` または
-`publish_status: published`、unit、created issue の URL/number が解決済みの unit/repository/issue に正確に一致する場合です。
-`issue-created` では legacy record の未記録
-`lifecycle_state` または `lifecycle_state: issue-created` が cause `issue-created-observed` になり、`published` は cause
-`publication-issue-published` になります。別 fact の `issue-published-run` は一致する lifecycle event がある場合だけ `done` となり、
+publication が `done` になるのは、publish record の `execution_unit` が requested unit、created issue URL/number が解決済みの
+repository/issue に一致し、`publish_status` が `issue-created` または `published`、`lifecycle_state` が未記録/null（legacy baseline）または
+issue 作成以降の既知 state（`issue-created`、`published`、
+`pr-created`、`closed-out`）である場合です。cause は `publish_status` に従い、`issue-created-observed` または
+`publication-issue-published` です。未対応の lifecycle value は unavailable のままです。lifecycle state は PR linkage や
+run/closeout evidence を確立しません。別 fact の `issue-published-run` は一致する lifecycle event がある場合だけ `done` となり、
 unit/repository/issue が一致する `issue-created` event は `issue-created-run-recorded`、`issue-published` event は
 `issue-published-run-recorded` が cause です。
 issue artifact の identity だけでは run event を満たしません。これらの observation は automation の `issue-publish` command が

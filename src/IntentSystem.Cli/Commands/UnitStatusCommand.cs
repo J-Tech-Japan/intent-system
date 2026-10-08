@@ -854,9 +854,8 @@ internal static class UnitStatusCommand
             && TryParseGithubUrl(createdUrl, "issues", out var createdRepo, out var createdIssue)
             && string.Equals(createdRepo, repo, StringComparison.OrdinalIgnoreCase)
             && createdIssue == issue;
-        var lifecycleContradictsStatus = publish?.LifecycleState is { } lifecycle
-            && (publish.PublishStatus == "published" && IssuePublishLifecycle.Rank(lifecycle) < IssuePublishLifecycle.Rank(IssuePublishLifecycle.Published)
-                || publish.PublishStatus == "issue-created" && IssuePublishLifecycle.Rank(lifecycle) > IssuePublishLifecycle.Rank(IssuePublishLifecycle.IssueCreated)
+        var lifecycleContradictsStatus = publish is not null
+            && (publish.LifecycleState is { } lifecycle && !IssuePublishLifecycle.IsKnown(lifecycle)
                 || publish.PublishStatus == "drafted" && (publish.CreatedIssueNumber is not null || publish.CreatedIssueUrl is not null));
         var publicationFact = publishError is not null
             ? Unavailable("publication-artifact", "publication-artifact-unreadable", publishError, UnitStatusStates.ReadFailure)
@@ -864,9 +863,7 @@ internal static class UnitStatusCommand
                 ? Missing("publication-artifact", "publication-artifact-absent", "No publish artifact exists for this unit.")
             : lifecycleContradictsStatus || publish.PublishStatus is not ("drafted" or "issue-created" or "published")
                 ? Unavailable("publication-artifact", "publication-status-identity-conflict", "Publish status and lifecycle identity are contradictory or unsupported.", UnitStatusStates.IdentityConflict)
-            : publish.PublishStatus == "issue-created"
-                && (publish.LifecycleState is null or IssuePublishLifecycle.IssueCreated)
-                && issueUrlIsExact
+            : publish.PublishStatus == "issue-created" && issueUrlIsExact
                 ? Done("publication-artifact", "issue-created-observed", "The publish artifact records a newly created issue with matching repository and issue identity.")
             : publish.PublishStatus == "published" && issueUrlIsExact
                 ? Done("publication-artifact", "publication-issue-published", "The publish artifact records a published issue with matching repository and issue identity.")
