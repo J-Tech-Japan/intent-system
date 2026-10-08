@@ -1042,6 +1042,117 @@ public sealed class SoloConductorClaimReleaseG857Tests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RecordedSoloTakeoverRemainsAvailableWithMissingPacketAndCloseout_G857(bool write)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: null, runEvents: []);
+        var packetPath = Path.Combine(repos.Writer, KnowledgeWriteBackRecord.PacketRootRelativePath, Unit, "packet.yaml");
+        var queuePath = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+        var runsPath = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        var packetRelative = Path.GetRelativePath(repos.Writer, packetPath);
+        File.Delete(packetPath);
+        if (File.Exists(queuePath)) File.Delete(queuePath);
+        if (File.Exists(runsPath)) File.Delete(runsPath);
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Acquire(repos.Writer, actor: "design");
+
+        var claimRelative = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var beforeRoot = repos.CloneForInspection();
+        Assert.False(File.Exists(Path.Combine(beforeRoot, packetRelative)));
+        Assert.False(File.Exists(Path.Combine(beforeRoot, Path.GetRelativePath(repos.Writer, queuePath))));
+        Assert.False(File.Exists(Path.Combine(beforeRoot, Path.GetRelativePath(repos.Writer, runsPath))));
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimBefore = File.ReadAllBytes(Path.Combine(beforeRoot, claimRelative));
+        var historyBefore = ClaimHistory(beforeRoot).OrderBy(path => path, StringComparer.Ordinal).ToArray();
+
+        var takeover = Request(ClaimOperation.Takeover, actor: "implementation", write: write) with
+        {
+            Reason = "explicit reassignment fixture",
+            DisplacedHolder = "design",
+        };
+        var result = ClaimCommand.RunTransaction(repos.Reader, takeover);
+
+        Assert.Equal(write ? "taken-over" : "planned", result.Status);
+        Assert.Equal(write, result.PushSucceeded);
+        Assert.Equal("execution-unit:G857", result.Scope);
+        Assert.Null(result.SoloConductorCompletion);
+        Assert.DoesNotContain("solo_conductor_completion", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+        if (write)
+        {
+            Assert.Equal("design", result.DisplacedHolder);
+            Assert.NotNull(result.HistoryPath);
+            var afterRoot = repos.CloneForInspection();
+            using var active = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(afterRoot, claimRelative)));
+            Assert.Equal("implementation", active.RootElement.GetProperty("actor").GetString());
+            Assert.Equal(Team, active.RootElement.GetProperty("team").GetString());
+            var historyAfter = ClaimHistory(afterRoot).OrderBy(path => path, StringComparer.Ordinal).ToArray();
+            Assert.Equal(historyBefore.Length + 1, historyAfter.Length);
+            using var takeoverHistory = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(afterRoot, result.HistoryPath!)));
+            Assert.Equal("takeover", takeoverHistory.RootElement.GetProperty("operation").GetString());
+            Assert.Equal("design", takeoverHistory.RootElement.GetProperty("displaced_holder").GetString());
+            Assert.Equal("implementation", takeoverHistory.RootElement.GetProperty("actor").GetString());
+            Assert.Equal(takeover.Reason, takeoverHistory.RootElement.GetProperty("reason").GetString());
+        }
+        else
+        {
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            Assert.Null(result.HistoryPath);
+            var afterRoot = repos.CloneForInspection();
+            Assert.Equal(claimBefore, File.ReadAllBytes(Path.Combine(afterRoot, claimRelative)));
+            Assert.Equal(historyBefore, ClaimHistory(afterRoot).OrderBy(path => path, StringComparer.Ordinal));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReleasePrepClaimKeepsLegacyReleaseBehaviorWithoutCompletionPayload_G857(bool write)
+    {
+        using var repos = new ClaimRepositories();
+        const string scope = "release-prep:J-Tech-Japan/intent-system:0.30.1";
+        repos.PublishSnapshot(queueState: null, runEvents: []);
+        Acquire(repos.Writer, actor: "builder", scope: scope);
+
+        var claimRelative = ClaimCommand.ClaimPath(scope);
+        var beforeRoot = repos.CloneForInspection();
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimBefore = File.ReadAllBytes(Path.Combine(beforeRoot, claimRelative));
+        var historyBefore = ClaimHistory(beforeRoot).OrderBy(path => path, StringComparer.Ordinal).ToArray();
+        var result = ClaimCommand.RunTransaction(
+            repos.Reader,
+            Request(ClaimOperation.Release, actor: "builder", write: write, scope: scope));
+
+        Assert.Equal(write ? "released" : "planned", result.Status);
+        Assert.Equal(write, result.PushSucceeded);
+        Assert.Equal(scope, result.Scope);
+        Assert.Null(result.SoloConductorCompletion);
+        Assert.DoesNotContain("solo_conductor_completion", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+        if (write)
+        {
+            Assert.NotNull(result.HistoryPath);
+            var afterRoot = repos.CloneForInspection();
+            Assert.False(File.Exists(Path.Combine(afterRoot, claimRelative)));
+            var historyAfter = ClaimHistory(afterRoot).OrderBy(path => path, StringComparer.Ordinal).ToArray();
+            Assert.Equal(historyBefore.Length + 1, historyAfter.Length);
+            using var releaseHistory = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(afterRoot, result.HistoryPath!)));
+            Assert.Equal("release", releaseHistory.RootElement.GetProperty("operation").GetString());
+            Assert.Equal(scope, releaseHistory.RootElement.GetProperty("scope").GetString());
+            Assert.Equal("builder", releaseHistory.RootElement.GetProperty("actor").GetString());
+            Assert.Equal(Team, releaseHistory.RootElement.GetProperty("team").GetString());
+        }
+        else
+        {
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            Assert.Null(result.HistoryPath);
+            var afterRoot = repos.CloneForInspection();
+            Assert.Equal(claimBefore, File.ReadAllBytes(Path.Combine(afterRoot, claimRelative)));
+            Assert.Equal(historyBefore, ClaimHistory(afterRoot).OrderBy(path => path, StringComparer.Ordinal));
+        }
+    }
+
+    [Theory]
     [InlineData("empty")]
     [InlineData("delivery")]
     public void EmptyOrResolvedNonSoloModeKeepsLegacyReleaseResult_G857(string modeKind)
