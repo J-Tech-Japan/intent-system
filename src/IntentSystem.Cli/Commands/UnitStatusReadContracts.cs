@@ -1,5 +1,13 @@
 namespace IntentSystem.Cli.Commands;
 
+internal enum ReviewParseFailure
+{
+    None,
+    Malformed,
+    ProvenanceLimit,
+    IdentityConflict,
+}
+
 /// <summary>Plain-data seam used to test bounded reads without a live GitHub or Git process.</summary>
 internal interface IUnitStatusSnapshotReader
 {

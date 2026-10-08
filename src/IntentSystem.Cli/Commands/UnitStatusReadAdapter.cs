@@ -453,7 +453,8 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                     reviewIdentityFailure |= failureKind == ReviewParseFailure.IdentityConflict;
                     reviewNamedUnstructured |= failureKind == ReviewParseFailure.ProvenanceLimit;
                     reviewReadFailure |= failureKind == ReviewParseFailure.Malformed;
-                    if (failureKind == ReviewParseFailure.Malformed) reviewFailureDetail = parseDetail;
+                    if (failureKind is ReviewParseFailure.Malformed or ReviewParseFailure.IdentityConflict)
+                        reviewFailureDetail = parseDetail;
                     continue;
                 }
 
@@ -474,7 +475,8 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
 
         var reviewInventoryReadable = reviewReadOk && !reviewReadFailure;
         facts.Add(reviewInventoryReadable && reviewIdentityFailure
-            ? UnavailableFact("posted-review", "review-identity-conflict", "A structured named review has mismatched or invalid unit/head/kind/cited-record identity.", UnitStatusStates.IdentityConflict)
+            ? UnavailableFact("posted-review", "review-identity-conflict",
+                "A structured named review has mismatched or invalid identity. " + reviewFailureDetail, UnitStatusStates.IdentityConflict)
             : reviewReadOk && reviewReadFailure
                 ? UnavailableFact("posted-review", "github-review-invalid", reviewFailureDetail, UnitStatusStates.ReadFailure)
             : reviewReadOk
@@ -769,8 +771,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 }
                 else if (root.ValueKind == JsonValueKind.Object
                          && root.TryGetProperty(arrayProperty, out array)
-                         && root.TryGetProperty("total_count", out var totalCount)
-                         && totalCount.TryGetInt32(out var parsedTotal))
+                         && TryReadInt(root, "total_count", out var parsedTotal))
                 {
                     total = parsedTotal;
                 }
@@ -902,7 +903,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         if (parsed.Conflicting)
         {
             failureKind = ReviewParseFailure.IdentityConflict;
-            failureDetail = "The structured review body contains conflicting repeated identity fields.";
+            failureDetail = "The structured review body contains conflicting repeated identity fields or contradictory heading/verdict assertions.";
             return false;
         }
         if (!parsed.IsStructured)
@@ -1013,6 +1014,18 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
 
     private static UnitStatusReviewBodyParse ParseReviewBody(string body)
     {
+        static bool IsNamedIndependentHeading(string? value) => value is not null
+            && (value.StartsWith("Independent subagent review:", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("Independent same-runtime subagent review:", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("Cross-runtime review:", StringComparison.OrdinalIgnoreCase));
+
+        static string? NamedIndependentVerdict(string? value) => IsNamedIndependentHeading(value)
+            ? value![(value!.IndexOf(':') + 1)..].Trim()
+            : null;
+
+        static bool IsExplicitVerdict(string? value) => value is not null
+            && CrossRuntimeReviewVerdict.VerdictValues.Contains(value, StringComparer.Ordinal);
+
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var leadingLine = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')
             .Select(line => line.Trim()).FirstOrDefault(line => line.Length > 0);
@@ -1072,16 +1085,14 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             : heading?.StartsWith("Independent same-runtime subagent review:", StringComparison.Ordinal) == true
                 ? "same-runtime"
                 : null;
-        var headingVerdict = relation is null || heading is null ? null : heading[(heading.IndexOf(':') + 1)..].Trim();
         var reviewer = fields.GetValueOrDefault("reviewer");
-        var namedIndependentHeading = heading is not null
-            && (heading.StartsWith("Independent subagent review:", StringComparison.OrdinalIgnoreCase)
-                || heading.StartsWith("Independent same-runtime subagent review:", StringComparison.OrdinalIgnoreCase)
-                || heading.StartsWith("Cross-runtime review:", StringComparison.OrdinalIgnoreCase));
-        var namedIndependentLead = leadingLine is not null
-            && (leadingLine.StartsWith("Independent subagent review:", StringComparison.OrdinalIgnoreCase)
-                || leadingLine.StartsWith("Independent same-runtime subagent review:", StringComparison.OrdinalIgnoreCase)
-                || leadingLine.StartsWith("Cross-runtime review:", StringComparison.OrdinalIgnoreCase));
+        var namedIndependentHeading = IsNamedIndependentHeading(heading);
+        var leadingReviewLine = leadingLine?.StartsWith("## ", StringComparison.Ordinal) == true
+            ? leadingLine[3..].Trim()
+            : leadingLine;
+        var namedIndependentLead = IsNamedIndependentHeading(leadingReviewLine);
+        var headingVerdict = NamedIndependentVerdict(heading);
+        var leadingVerdict = NamedIndependentVerdict(leadingReviewLine);
         var namedIndependent = relation is not null
             || namedIndependentHeading
             || namedIndependentLead
@@ -1089,6 +1100,16 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             || string.Equals(reviewer, "independent subagent review", StringComparison.OrdinalIgnoreCase)
             || string.Equals(reviewer, "cross-runtime review", StringComparison.OrdinalIgnoreCase);
         var verdict = fields.GetValueOrDefault("verdict");
+        var headingVerdictConflict = IsExplicitVerdict(headingVerdict)
+            && !string.IsNullOrWhiteSpace(verdict)
+            && !string.Equals(headingVerdict, verdict, StringComparison.Ordinal);
+        var leadingVerdictConflict = IsExplicitVerdict(leadingVerdict)
+            && !string.IsNullOrWhiteSpace(verdict)
+            && !string.Equals(leadingVerdict, verdict, StringComparison.Ordinal);
+        var headingAndLeadingVerdictConflict = IsExplicitVerdict(headingVerdict)
+            && IsExplicitVerdict(leadingVerdict)
+            && !string.Equals(headingVerdict, leadingVerdict, StringComparison.Ordinal);
+        conflicting |= headingVerdictConflict || leadingVerdictConflict || headingAndLeadingVerdictConflict;
         var canonicalRelationMatchesReviewer = relation switch
         {
             "cross-runtime" => string.Equals(reviewer, "cross-runtime review", StringComparison.OrdinalIgnoreCase),
@@ -1102,8 +1123,10 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             && !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("head_sha"))
             && !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("kind"))
             && !string.IsNullOrWhiteSpace(verdict)
-            && (relation is null || string.Equals(headingVerdict, verdict, StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("runtime"))
+            && (!IsExplicitVerdict(headingVerdict) || string.Equals(headingVerdict, verdict, StringComparison.Ordinal))
+            && (!IsExplicitVerdict(leadingVerdict) || string.Equals(leadingVerdict, verdict, StringComparison.Ordinal))
+            && (relation is null
+                || !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("runtime"))
                 && !string.IsNullOrWhiteSpace(fields.GetValueOrDefault("conductor_runtime")));
         return new UnitStatusReviewBodyParse(
             structured,
@@ -1834,7 +1857,9 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
     private static bool TryReadLabels(JsonElement root, out IReadOnlyList<string> labels)
     {
         labels = [];
-        if (!root.TryGetProperty("labels", out var raw) || raw.ValueKind != JsonValueKind.Array) return false;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("labels", out var raw)
+            || raw.ValueKind != JsonValueKind.Array) return false;
         var values = new List<string>();
         foreach (var label in raw.EnumerateArray())
         {
@@ -1882,6 +1907,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         value = 0;
         return root.ValueKind == JsonValueKind.Object
             && root.TryGetProperty(name, out var raw)
+            && raw.ValueKind == JsonValueKind.Number
             && raw.TryGetInt32(out value);
     }
 
@@ -1890,6 +1916,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         value = 0;
         return root.ValueKind == JsonValueKind.Object
             && root.TryGetProperty(name, out var raw)
+            && raw.ValueKind == JsonValueKind.Number
             && raw.TryGetInt64(out value);
     }
 
@@ -1919,14 +1946,6 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
     {
         target = value;
         return true;
-    }
-
-    private enum ReviewParseFailure
-    {
-        None,
-        Malformed,
-        ProvenanceLimit,
-        IdentityConflict,
     }
 
 }

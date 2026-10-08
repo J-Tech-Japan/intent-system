@@ -139,7 +139,7 @@ internal static class UnitEvidenceEvaluator
     {
         var facts = factIds.Select(factId => supplied.TryGetValue(factId, out var fact)
             ? applicabilityState == UnitStatusStates.Unavailable
-                ? IsClaimSnapshotProvenanceLimit(fact)
+                ? IsObservedClaimSnapshotFailure(fact)
                     ? NormalizeFact(fact)
                     : NormalizeFact(fact with
                     {
@@ -176,11 +176,9 @@ internal static class UnitEvidenceEvaluator
         };
     }
 
-    private static bool IsClaimSnapshotProvenanceLimit(UnitStatusFact fact) =>
+    private static bool IsObservedClaimSnapshotFailure(UnitStatusFact fact) =>
         fact.Id is "design-claim-acquired" or "design-claim-release" or "implementation-claim-acquired" or "implementation-claim-release"
-        && fact.State == UnitStatusStates.Unavailable
-        && fact.Cause == "local-claim-ref-unavailable"
-        && fact.UnavailableClass == UnitStatusStates.ProvenanceLimit;
+        && fact.State == UnitStatusStates.Unavailable;
 
     private static UnitStatusFact NormalizeFact(UnitStatusFact fact)
     {

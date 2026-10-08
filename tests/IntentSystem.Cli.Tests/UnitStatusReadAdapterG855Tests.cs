@@ -113,6 +113,310 @@ public sealed class UnitStatusReadAdapterG855Tests
         Assert.Empty(runner.Calls);
     }
 
+    [Theory]
+    [InlineData("\"1864\"")]
+    [InlineData("null")]
+    [InlineData("true")]
+    [InlineData("{\"nested\":1864}")]
+    [InlineData("[1864]")]
+    [InlineData("1864.5")]
+    [InlineData("2147483648")]
+    public void PullRequestNumberWithWrongJsonKindReturnsStructuredUnavailable(string rawNumber)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] == $"repos/{Repo}/pulls/{PullRequest}"
+            ? Json($"{{\"number\":{rawNumber},\"head\":{{\"sha\":\"{Head}\"}},\"merged\":false,\"labels\":[]}}")
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("unavailable", snapshot.State);
+        Assert.Equal(7, snapshot.Facts.Count);
+        Assert.All(snapshot.Facts, fact =>
+        {
+            Assert.Equal(UnitStatusStates.Unavailable, fact.State);
+            Assert.Equal("github-api-error", fact.Cause);
+            Assert.Equal(UnitStatusStates.ReadFailure, fact.UnavailableClass);
+        });
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("\"1862\"")]
+    [InlineData("null")]
+    [InlineData("true")]
+    [InlineData("{\"nested\":1862}")]
+    [InlineData("[1862]")]
+    [InlineData("1862.5")]
+    [InlineData("2147483648")]
+    public void IssueNumberWithWrongJsonKindReturnsStructuredUnavailable(string rawNumber)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] == $"repos/{Repo}/issues/{Issue}"
+            ? Json($"{{\"number\":{rawNumber},\"labels\":[]}}")
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHubIssue(host.Context, Repo, Issue, "G855");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var fact = Assert.Single(snapshot.Facts);
+        Assert.Equal("github-api-error", fact.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, fact.UnavailableClass);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("\"0\"")]
+    [InlineData("null")]
+    [InlineData("false")]
+    [InlineData("{\"nested\":0}")]
+    [InlineData("[0]")]
+    [InlineData("0.5")]
+    [InlineData("2147483648")]
+    public void CheckRunTotalCountWithWrongJsonKindReturnsStructuredUnavailable(string rawTotalCount)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith(
+                $"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal)
+            ? Json($"{{\"total_count\":{rawTotalCount},\"check_runs\":[]}}")
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var ci = Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.Unavailable, ci.State);
+        Assert.Equal("github-api-error", ci.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, ci.UnavailableClass);
+        Assert.Equal(UnitStatusStates.Missing, Assert.Single(snapshot.Facts, fact => fact.Id == "issue-completion-marker").State);
+        Assert.Equal(UnitStatusStates.Missing, Assert.Single(snapshot.Facts, fact => fact.Id == "pr-merged").State);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("\"114\"")]
+    [InlineData("null")]
+    [InlineData("false")]
+    [InlineData("{\"nested\":114}")]
+    [InlineData("[114]")]
+    [InlineData("114.5")]
+    [InlineData("9223372036854775808")]
+    public void CheckRunNumericIdWithWrongJsonKindReturnsStructuredUnavailable(string rawId)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith(
+                $"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal)
+            ? Json($"{{\"total_count\":1,\"check_runs\":[{{\"id\":{rawId},\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"{Head}\",\"app\":{{\"slug\":\"external-ci\"}},\"details_url\":null}}]}}")
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var ci = Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci");
+        Assert.Equal("github-api-error", ci.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, ci.UnavailableClass);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("\"1\"")]
+    [InlineData("null")]
+    [InlineData("false")]
+    [InlineData("{\"nested\":1}")]
+    [InlineData("[1]")]
+    [InlineData("1.5")]
+    [InlineData("2147483648")]
+    public void ActionsRunAttemptWithWrongJsonKindReturnsStructuredUnavailable(string rawAttempt)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) =>
+        {
+            if (arguments[3].StartsWith($"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal))
+                return Json($"{{\"total_count\":1,\"check_runs\":[{{\"id\":114,\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"{Head}\",\"app\":{{\"slug\":\"github-actions\"}},\"details_url\":\"https://github.com/{Repo}/actions/runs/77\"}}]}}");
+            if (arguments[3] == $"repos/{Repo}/actions/runs/77")
+                return Json($"{{\"id\":77,\"head_sha\":\"{Head}\",\"run_attempt\":{rawAttempt}}}");
+            return DefaultResponse(arguments);
+        });
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var ci = Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci");
+        Assert.Equal("github-api-error", ci.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, ci.UnavailableClass);
+        Assert.Single(snapshot.Checks);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("true")]
+    [InlineData("\"not-object\"")]
+    public void PaginatedCheckResponseWithWrongRootKindReturnsStructuredUnavailable(string rawRoot)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith(
+                $"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal)
+            ? Json(rawRoot)
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var ci = Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci");
+        Assert.Equal("github-api-error", ci.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, ci.UnavailableClass);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("\"bad-item\"")]
+    [InlineData("false")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("114.5")]
+    public void CheckRunItemsWithWrongJsonKindsReturnStructuredUnavailable(string rawItem)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith(
+                $"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal)
+            ? Json($"{{\"total_count\":1,\"check_runs\":[{rawItem}]}}")
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var ci = Assert.Single(snapshot.Facts, fact => fact.Id == "observed-ci");
+        Assert.Equal("github-api-error", ci.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, ci.UnavailableClass);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("\"not-array\"")]
+    [InlineData("null")]
+    [InlineData("false")]
+    [InlineData("{}")]
+    [InlineData("1862")]
+    public void IssueLabelsWithWrongJsonKindReturnStructuredUnavailable(string rawLabels)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] == $"repos/{Repo}/issues/{Issue}"
+            ? Json($"{{\"number\":{Issue},\"labels\":{rawLabels}}}")
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHubIssue(host.Context, Repo, Issue, "G855");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var issueFact = Assert.Single(snapshot.Facts);
+        Assert.Equal("github-api-error", issueFact.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, issueFact.UnavailableClass);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("review-id")]
+    [InlineData("commit-status-id")]
+    [InlineData("actions-run-id")]
+    public void LongNumericIdsInReviewStatusesAndActionRunAreTypeChecked(string location)
+    {
+        using var host = new TempHost();
+        var body = StructuredReviewBody("G855", "implementation", "approve");
+        var runner = new FakeGitHub((arguments, _) =>
+        {
+            var endpoint = arguments[3];
+            if (location == "review-id" && endpoint.StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal))
+                return Json(ReviewRowsWithIds((0, body, Head, "COMMENTED", "2026-10-07T00:00:00Z"))
+                    .Replace("\"id\":0", "\"id\":\"bad\"", StringComparison.Ordinal));
+            if (location == "commit-status-id" && endpoint.StartsWith($"repos/{Repo}/commits/{Head}/statuses?", StringComparison.Ordinal))
+                return Json("[{\"id\":\"bad\",\"context\":\"ci/unit\",\"state\":\"success\"}]");
+            if (location == "actions-run-id" && endpoint.StartsWith($"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal))
+                return Json($"{{\"total_count\":1,\"check_runs\":[{{\"id\":114,\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"{Head}\",\"app\":{{\"slug\":\"github-actions\"}},\"details_url\":\"https://github.com/{Repo}/actions/runs/77\"}}]}}");
+            if (location == "actions-run-id" && endpoint == $"repos/{Repo}/actions/runs/77")
+                return Json($"{{\"id\":\"bad\",\"head_sha\":\"{Head}\",\"run_attempt\":1}}");
+            return DefaultResponse(arguments);
+        });
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var failureFact = snapshot.Facts.Single(fact => fact.Id == (location == "review-id" ? "posted-review" : "observed-ci"));
+        Assert.Equal(UnitStatusStates.Unavailable, failureFact.State);
+        Assert.Equal(UnitStatusStates.ReadFailure, failureFact.UnavailableClass);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("true")]
+    [InlineData("\"not-object\"")]
+    public void PullRequestResponseWithWrongRootKindReturnsStructuredUnavailable(string rawRoot)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] == $"repos/{Repo}/pulls/{PullRequest}"
+            ? Json(rawRoot)
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHub(host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("unavailable", snapshot.State);
+        Assert.Equal("github-api-error", snapshot.Cause);
+        Assert.Equal(7, snapshot.Facts.Count);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("true")]
+    [InlineData("\"not-object\"")]
+    public void IssueResponseWithWrongRootKindReturnsStructuredUnavailable(string rawRoot)
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] == $"repos/{Repo}/issues/{Issue}"
+            ? Json(rawRoot)
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHubIssue(host.Context, Repo, Issue, "G855");
+
+        Assert.Equal("unavailable", snapshot.State);
+        Assert.Equal("github-api-error", snapshot.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, Assert.Single(snapshot.Facts).UnavailableClass);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
+    [Fact]
+    public void LabelsArrayWithWrongItemKindReturnsStructuredUnavailable()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] == $"repos/{Repo}/issues/{Issue}"
+            ? Json($"{{\"number\":{Issue},\"labels\":[null]}}")
+            : DefaultResponse(arguments));
+        var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
+
+        var snapshot = adapter.ObserveGitHubIssue(host.Context, Repo, Issue, "G855");
+
+        Assert.Equal("unavailable", snapshot.State);
+        var issueFact = Assert.Single(snapshot.Facts);
+        Assert.Equal("github-api-error", issueFact.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, issueFact.UnavailableClass);
+        Assert.All(runner.Calls, AssertBoundedGet);
+    }
+
     [Fact]
     public void ReadAdapterRejectsUnlistedGitCommandsAndEscapingPathsBeforeRunner()
     {
@@ -414,6 +718,64 @@ public sealed class UnitStatusReadAdapterG855Tests
         Assert.Null(review.Relation);
         Assert.Equal("approve", review.Verdict);
         Assert.Equal(UnitStatusStates.Done, snapshot.Facts.Single(fact => fact.Id == "posted-review").State);
+
+        const string noHeading = "- reviewer: independent subagent review\n- kind: implementation\n- execution unit: G855\n- head SHA: " + Head + "\n- verdict: approve";
+        var noHeadingRunner = new FakeGitHub((arguments, _) => arguments[3].EndsWith("/reviews?per_page=100&page=1", StringComparison.Ordinal)
+            ? Json(ReviewArray(noHeading, Head))
+            : DefaultResponse(arguments));
+        var noHeadingSnapshot = new UnitStatusReadAdapter(noHeadingRunner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", historicalTeam);
+        Assert.Equal("approve", Assert.Single(noHeadingSnapshot.Reviews).Verdict);
+        Assert.Equal(UnitStatusStates.Done, noHeadingSnapshot.Facts.Single(fact => fact.Id == "posted-review").State);
+
+        var matchedChangeBody = $$"""
+## Independent subagent review: request-changes
+- reviewer: independent subagent review
+- kind: implementation
+- execution unit: G855
+- head SHA: {{Head}}
+- verdict: request-changes
+""";
+        var matchedChangeRunner = new FakeGitHub((arguments, _) => arguments[3].EndsWith("/reviews?per_page=100&page=1", StringComparison.Ordinal)
+            ? Json(ReviewArray(matchedChangeBody, Head, "CHANGES_REQUESTED"))
+            : DefaultResponse(arguments));
+        var matchedChangeSnapshot = new UnitStatusReadAdapter(matchedChangeRunner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", historicalTeam);
+        Assert.Equal("request-changes", Assert.Single(matchedChangeSnapshot.Reviews).Verdict);
+        Assert.Equal(UnitStatusStates.Done, matchedChangeSnapshot.Facts.Single(fact => fact.Id == "posted-review").State);
+    }
+
+    [Theory]
+    [InlineData("## Independent subagent review: request-changes\n", "approve")]
+    [InlineData("Independent subagent review: request-changes\n", "approve")]
+    [InlineData("Independent subagent review: request-changes\n## Independent subagent review: approve\n", "approve")]
+    [InlineData("## Independent subagent review: approve\n", "request-changes")]
+    [InlineData("Independent subagent review: approve\n", "request-changes")]
+    public void GenericStructuredReviewContradictoryVerdictAssertionsAreUnavailable(string leadingAssertions, string fieldVerdict)
+    {
+        using var host = new TempHost();
+        var body = leadingAssertions + "- reviewer: independent subagent review\n"
+            + "- kind: implementation\n"
+            + "- execution unit: G855\n"
+            + $"- head SHA: {Head}\n"
+            + "- verdict: " + fieldVerdict + "\n";
+        var runner = new FakeGitHub((arguments, _) => arguments[3].EndsWith("/reviews?per_page=100&page=1", StringComparison.Ordinal)
+            ? Json(ReviewArray(body, Head))
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var posted = Assert.Single(snapshot.Facts, fact => fact.Id == "posted-review");
+        Assert.Equal(UnitStatusStates.Unavailable, posted.State);
+        Assert.Equal("review-identity-conflict", posted.Cause);
+        Assert.Equal(UnitStatusStates.IdentityConflict, posted.UnavailableClass);
+        Assert.Contains("contradictory heading/verdict assertions", posted.Detail, StringComparison.Ordinal);
+        var delta = Assert.Single(snapshot.Facts, fact => fact.Id == "delta-review");
+        Assert.Equal(UnitStatusStates.Unavailable, delta.State);
+        Assert.Equal(UnitStatusStates.IdentityConflict, delta.UnavailableClass);
+        Assert.Empty(snapshot.Reviews);
+        Assert.All(runner.Calls, AssertBoundedGet);
     }
 
     [Fact]
@@ -1009,6 +1371,14 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
         if (endpoint.StartsWith($"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal)) return Json("{\"total_count\":0,\"check_runs\":[]}");
         if (endpoint.StartsWith($"repos/{Repo}/commits/{Head}/statuses?", StringComparison.Ordinal)) return Json("[]");
         return new GitHubCommandResult { ExitCode = 1, StdOut = "", StdErr = "HTTP 404 unexpected endpoint" };
+    }
+
+    private static void AssertBoundedGet(IReadOnlyList<string> arguments)
+    {
+        Assert.Equal(4, arguments.Count);
+        Assert.Equal("api", arguments[0]);
+        Assert.Equal("--method", arguments[1]);
+        Assert.Equal("GET", arguments[2]);
     }
 
     private static string PullJson(string head = Head) =>

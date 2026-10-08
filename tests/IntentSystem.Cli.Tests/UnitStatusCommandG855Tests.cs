@@ -169,6 +169,35 @@ public sealed class UnitStatusCommandG855Tests
     }
 
     [Fact]
+    public void CanonicalPacketSourceExecutionUnitMismatchIsIdentityConflict()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact(packetUnit: "G999", publishUnit: "G855");
+        var reader = new FixedReader();
+        using var writer = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"], writer, reader);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, reader.GitHubReads);
+        using var report = JsonDocument.Parse(writer.ToString());
+        Assert.Equal("identity-conflict", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+        Assert.Equal("identity-conflict", report.RootElement.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+        Assert.All(report.RootElement.GetProperty("steps").EnumerateArray(), step =>
+        {
+            Assert.Equal("unavailable", step.GetProperty("state").GetString());
+            Assert.All(step.GetProperty("subchecks").EnumerateArray(), fact =>
+            {
+                Assert.Equal("unavailable", fact.GetProperty("state").GetString());
+                Assert.Equal("identity-conflict", fact.GetProperty("cause").GetString());
+                Assert.Equal("identity-conflict", fact.GetProperty("unavailable_class").GetString());
+            });
+        });
+    }
+
+    [Fact]
     public void PacketDerivedTraversalDomainIsRejectedBeforeScopedPathResolution()
     {
         using var host = new TempHost();
@@ -986,7 +1015,8 @@ public sealed class UnitStatusCommandG855Tests
     {
         var directory = Path.Combine(_root, ".intent-cli", "issues", "G855");
         Directory.CreateDirectory(directory);
-        var packetYaml = "schema_version: 1\ndomain: " + packetDomain + "\nexecution_unit: " + (packetUnit ?? "G855") + "\nimplementation_issue_packet:\n  target_repo: J-Tech-Japan/intent-system\n";
+        var packetYaml = "schema_version: 1\nimplementation_issue_packet:\n  source_execution_unit: "
+            + (packetUnit ?? "G855") + "\n  domain: " + packetDomain + "\n  target_repo: J-Tech-Japan/intent-system\n";
         if (sourceArtifact is not null) packetYaml += "  source_artifact: \"" + sourceArtifact + "\"\n";
         if (rulingArtifact is not null) packetYaml += "  ruling_artifact: \"" + rulingArtifact + "\"\n";
         if (knowledgeRequired is { } required)

@@ -62,7 +62,9 @@ internal static class UnitStatusCommand
         var packetYaml = ReadText(GuideReachabilityRecord.ResolvePacketPath(root, unit), out var packetError);
         PacketYamlDocument? packet = null;
         if (packetYaml is not null && !PacketYamlDocument.TryParse(packetYaml, out packet, out var parseError)) packetError = parseError;
-        var declaredDomain = packet?.Fields.GetValueOrDefault("domain");
+        var declaredDomain = packet?.Fields.GetValueOrDefault("implementation_issue_packet.domain")
+            ?? packet?.Fields.GetValueOrDefault("domain");
+        var packetUnit = packet?.Fields.GetValueOrDefault("implementation_issue_packet.source_execution_unit");
         var packetRepo = packet?.Fields.GetValueOrDefault("implementation_issue_packet.target_repo") ?? packet?.Fields.GetValueOrDefault("target_repo");
 
         var publishPath = Path.Combine(packetDir, "publish.yaml");
@@ -149,7 +151,7 @@ internal static class UnitStatusCommand
         var packetDomainInvalid = !string.IsNullOrWhiteSpace(declaredDomain) && !SafeScope(declaredDomain.Trim());
         var domainScopeInvalid = domain is not null && !SafeScope(domain) || scopedDomains.Any(candidate => !SafeScope(candidate));
         var teamScopeInvalid = team is not null && !SafeScope(team);
-        var packetUnitInvalid = packet?.Fields.GetValueOrDefault("execution_unit") is { } packetUnitValue
+        var packetUnitInvalid = packetUnit is { } packetUnitValue
             && !string.Equals(packetUnitValue, unit, StringComparison.Ordinal);
         var conflict = repoValues.Length > 1 || issueValues.Length > 1 || prValues.Length > 1 || scopedDomains.Length > 1
             || queueIdentity.Count > 1
@@ -228,7 +230,6 @@ internal static class UnitStatusCommand
         if (mode is null)
             return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
                 UnitStatusStates.Unavailable, "team-mode-unrecorded", "No current recorded mode exists for this exact domain/team entry.", UnitStatusStates.ApplicabilityUnresolved);
-        var packetUnit = packet?.Fields.GetValueOrDefault("execution_unit");
         var hasExactUnitSource = string.Equals(packetUnit, unit, StringComparison.Ordinal)
             || publish?.ExecutionUnit == unit
             || queueIdentity.Any(candidate => candidate.Item.ExecutionUnit == unit)

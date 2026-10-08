@@ -149,7 +149,7 @@ public sealed class UnitEvidenceEvaluatorG855Tests
     }
 
     [Fact]
-    public void ApplicabilityRefusalReclassifiesObservedFactsAndPreservesTheirEvidence()
+    public void ApplicabilityRefusalPreservesObservedClaimFailureAndReclassifiesOtherFacts()
     {
         var pointer = new UnitStatusEvidencePointer
         {
@@ -168,7 +168,13 @@ public sealed class UnitEvidenceEvaluatorG855Tests
             cause: "claim-snapshot-unavailable", unavailableClass: UnitStatusStates.ReadFailure));
 
         var facts = report.Steps.SelectMany(step => step.Subchecks).ToArray();
-        Assert.All(facts, fact =>
+        Assert.All(facts.Where(fact => fact.Id == "design-claim-acquired"), fact =>
+        {
+            Assert.Equal("unavailable", fact.State);
+            Assert.Equal("local-claim-record-unreadable", fact.Cause);
+            Assert.Equal("read-failure", fact.UnavailableClass);
+        });
+        Assert.All(facts.Where(fact => fact.Id != "design-claim-acquired"), fact =>
         {
             Assert.Equal("unavailable", fact.State);
             Assert.Equal("claim-snapshot-unavailable", fact.Cause);
