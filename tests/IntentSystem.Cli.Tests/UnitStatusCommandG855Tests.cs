@@ -359,6 +359,17 @@ public sealed class UnitStatusCommandG855Tests
         Assert.Equal(claimedAtB, evidence.GetProperty("claim_epoch_claimed_at").GetDateTimeOffset());
         Assert.Equal("release", evidence.GetProperty("claim_operation").GetString());
         Assert.Contains("0001-release.json", evidence.GetProperty("path").GetString()!, StringComparison.Ordinal);
+
+        using var markdown = new StringWriter();
+        var markdownExit = UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "markdown"], markdown, reader);
+        Assert.Equal(0, markdownExit);
+        Assert.Contains($"claim_epoch_claimed_at=`{claimedAtB:O}`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claim_operation=`release`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains(actor == "architect" ? "claim_disposition=`design-handoff`" : "claim_disposition=`implementation-release`",
+            markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains($"claim_actor=`{actor}`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claim_team=`intent-cli-dev`", markdown.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -678,6 +689,12 @@ public sealed class UnitStatusCommandG855Tests
 
         public UnitStatusRemoteSnapshot ObserveGitHub(CliContext context, string repo, int issue, int pullRequest,
             string executionUnit, string domain, string team)
+        {
+            GitHubReads++;
+            return _remote ?? new UnitStatusRemoteSnapshot { State = "completed", Facts = [] };
+        }
+
+        public UnitStatusRemoteSnapshot ObserveGitHubIssue(CliContext context, string repo, int issue, string executionUnit)
         {
             GitHubReads++;
             return _remote ?? new UnitStatusRemoteSnapshot { State = "completed", Facts = [] };

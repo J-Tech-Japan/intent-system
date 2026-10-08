@@ -166,14 +166,15 @@ internal static class UnitStatusCommand
         if (queueIdentity.Count > 0) sources.Add("queue-state.json");
         if (runIdentity.Count > 0) sources.Add("runs.jsonl");
         if (claims.ActiveClaim is not null || claims.History.Count > 0) sources.Add("claim snapshot");
-        var localSources = new List<string> { "packet", "publish artifact", "configured local claim ref" };
+        var localSources = new List<string> { "packet", "publish artifact", "local claim snapshot" };
         var facts = new List<UnitStatusFact>();
+        if (claims.State == UnitStatusStates.Unavailable) AddClaimFacts(facts, claims, team, unit);
         if (conflict)
             return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
                 UnitStatusStates.Unavailable, queueScanError is not null || runScanError is not null ? "identity-candidates-unreadable" : "identity-conflict",
                 queueScanError ?? runScanError ?? "Packet, publish, queue, runs, claim, or explicit identity assertions disagree.",
                 queueScanError is not null || runScanError is not null ? UnitStatusStates.ReadFailure : UnitStatusStates.IdentityConflict);
-        if (team is not null) AddClaimFacts(facts, claims, team, unit);
+        if (claims.State != UnitStatusStates.Unavailable && team is not null) AddClaimFacts(facts, claims, team, unit);
         if (packetError is not null)
         {
             var pointer = EvidenceFile("packet", Path.Combine(".intent-cli", "issues", unit, "packet.yaml").Replace('\\', '/'), unit,
@@ -225,9 +226,22 @@ internal static class UnitStatusCommand
         if (!hasExactUnitSource)
             return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
                 UnitStatusStates.Unavailable, "unit-identity-unestablished", "The requested unit is not established by a matching packet, queue, publish, run, or claim record.", UnitStatusStates.ApplicabilityUnresolved);
-        if (claims.State == UnitStatusStates.Unavailable)
+        var claimRefProvenanceOnly = claims.State == UnitStatusStates.Unavailable
+            && claims.Cause == "local-claim-ref-unavailable"
+            && claims.UnavailableClass == UnitStatusStates.ProvenanceLimit;
+        if (claims.State == UnitStatusStates.Unavailable && !claimRefProvenanceOnly)
             return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
                 UnitStatusStates.Unavailable, "claim-snapshot-unavailable", claims.Detail ?? "The configured claim snapshot could not be read.", claims.UnavailableClass ?? UnitStatusStates.ReadFailure);
+        if (claimRefProvenanceOnly
+            && (string.IsNullOrWhiteSpace(askedDomain)
+                || string.IsNullOrWhiteSpace(askedTeam)
+                || !(string.Equals(packetUnit, unit, StringComparison.Ordinal) || publish?.ExecutionUnit == unit)))
+        {
+            return Build(unit, domain, team, repo, issue, pr, observedAt, claims, facts, sources, localSources,
+                UnitStatusStates.Unavailable, "unit-identity-unestablished",
+                "A local claim reference is unconfigured and packet/publish identity with explicit --domain and --team is required to continue.",
+                UnitStatusStates.ApplicabilityUnresolved);
+        }
         if (mode.Mode != TeamMode.SoloConductor)
         {
             var na = FactIds.Select(id => NotApplicable(id, "recorded-non-solo-mode",
@@ -237,7 +251,7 @@ internal static class UnitStatusCommand
         }
 
         AddPacketFacts(facts, unit, root, packetDir, packetYaml, packetError, packet);
-        AddQueueAndPublishFacts(facts, root, unit, domain, repo, issue, publish, publishError,
+        AddQueueAndPublishFacts(facts, root, unit, domain, repo, issue, pr, publish, publishError,
             out var queueItem, out var queuePath, out var runEvents, out var runsPath, out var queueReadError, out var runsReadError);
         if (queueScanError is not null)
         {
@@ -246,8 +260,10 @@ internal static class UnitStatusCommand
         }
         if (queueReadError is not null || runsReadError is not null) localSources.Add("runtime state");
         UnitStatusRemoteSnapshot? remote = null;
-        if (repo is not null && issue is > 0 && pr is > 0)
-            remote = reader.ObserveGitHub(context, repo, issue.Value, pr.Value, unit, domain, team);
+        if (repo is not null && issue is > 0)
+            remote = pr is > 0
+                ? reader.ObserveGitHub(context, repo, issue.Value, pr.Value, unit, domain, team)
+                : reader.ObserveGitHubIssue(context, repo, issue.Value, unit);
         var stableHead = remote is not null
             && remote.HeadBefore is not null
             && string.Equals(remote.HeadBefore, remote.HeadAfter, StringComparison.OrdinalIgnoreCase)
@@ -267,6 +283,17 @@ internal static class UnitStatusCommand
         if (remote is not null)
         {
             facts.AddRange(remote.Facts);
+            if (pr is null)
+            {
+                foreach (var id in new[] { "posted-review", "delta-review", "observed-ci", "approved-marker", "approval-head-receipt", "pr-merged" })
+                    facts.Add(Missing(id, "pr-not-linked", "No pull request is linked to this successfully resolved issue identity yet."));
+            }
+        }
+        else if (pr is null && repo is not null && issue is > 0)
+        {
+            facts.Add(Unavailable("issue-completion-marker", "github-read-failed", "The issue labels could not be observed.", UnitStatusStates.ReadFailure));
+            foreach (var id in new[] { "posted-review", "delta-review", "observed-ci", "approved-marker", "approval-head-receipt", "pr-merged" })
+                facts.Add(Missing(id, "pr-not-linked", "No pull request is linked to this successfully resolved issue identity yet."));
         }
         else
         {
@@ -749,7 +776,7 @@ internal static class UnitStatusCommand
         }
     }
 
-    private static void AddQueueAndPublishFacts(ICollection<UnitStatusFact> facts, string root, string unit, string domain, string? repo, int? issue,
+    private static void AddQueueAndPublishFacts(ICollection<UnitStatusFact> facts, string root, string unit, string domain, string? repo, int? issue, int? pr,
         IssuePublishArtifact? publish, string? publishError, out QueueItem? queueItem, out string queuePath,
         out IReadOnlyList<RunEvent> runs, out string runsPath, out string? queueError, out string? runsError)
     {
@@ -775,12 +802,32 @@ internal static class UnitStatusCommand
                 : Done("queue-seed", "queue-item-present", "A matching queue item was read.") with { Evidence = queueEvidence is null ? [] : [queueEvidence with { RecordId = unit }] });
         var publishPath = Path.Combine(root, ".intent-cli", "issues", unit, "publish.yaml");
         var publishEvidence = LocalFileEvidence(root, publishPath, "publish-artifact", unit, "issue-publish-artifact");
-        facts.Add(publishError is not null
-            ? Unavailable("publication-artifact", "publication-artifact-unreadable", publishError, UnitStatusStates.ReadFailure) with { Evidence = publishEvidence is null ? [] : [publishEvidence] }
+        UnitStatusEvidencePointer[] publishPointers = publishEvidence is null
+            ? []
+            : [publishEvidence with { RecordId = publish?.CreatedIssueNumber?.ToString(CultureInfo.InvariantCulture) }];
+        var issueUrlIsExact = publish?.CreatedIssueNumber is > 0
+            && publish.CreatedIssueUrl is { } createdUrl
+            && repo is not null
+            && issue is > 0
+            && TryParseGithubUrl(createdUrl, "issues", out var createdRepo, out var createdIssue)
+            && string.Equals(createdRepo, repo, StringComparison.OrdinalIgnoreCase)
+            && createdIssue == issue;
+        var lifecycleContradictsStatus = publish?.LifecycleState is { } lifecycle
+            && (publish.PublishStatus == "published" && IssuePublishLifecycle.Rank(lifecycle) < IssuePublishLifecycle.Rank(IssuePublishLifecycle.Published)
+                || publish.PublishStatus == "issue-created" && IssuePublishLifecycle.Rank(lifecycle) > IssuePublishLifecycle.Rank(IssuePublishLifecycle.IssueCreated)
+                || publish.PublishStatus == "drafted" && (publish.CreatedIssueNumber is not null || publish.CreatedIssueUrl is not null));
+        var publicationFact = publishError is not null
+            ? Unavailable("publication-artifact", "publication-artifact-unreadable", publishError, UnitStatusStates.ReadFailure)
             : publish is null
-                ? Missing("publication-artifact", "publication-artifact-absent", "No publish artifact exists for this unit.") with { Evidence = publishEvidence is null ? [] : [publishEvidence] }
-                : Done("publication-artifact", "publication-artifact-present", "Publish lifecycle is '" + (publish.LifecycleState ?? publish.PublishStatus) + "'.")
-                    with { Evidence = publishEvidence is null ? [] : [publishEvidence with { RecordId = publish.CreatedIssueNumber?.ToString(CultureInfo.InvariantCulture) }] });
+                ? Missing("publication-artifact", "publication-artifact-absent", "No publish artifact exists for this unit.")
+            : lifecycleContradictsStatus || publish.PublishStatus is not ("drafted" or "issue-created" or "published")
+                ? Unavailable("publication-artifact", "publication-status-identity-conflict", "Publish status and lifecycle identity are contradictory or unsupported.", UnitStatusStates.IdentityConflict)
+            : publish.PublishStatus == "published" && issueUrlIsExact
+                ? Done("publication-artifact", "publication-issue-published", "The publish artifact records a published issue with matching repository and issue identity.")
+            : publish.PublishStatus == "published"
+                ? Unavailable("publication-artifact", "publication-identity-unavailable", "Published status lacks a valid created issue URL and number matching the resolved repository and issue.", UnitStatusStates.IdentityConflict)
+            : Missing("publication-artifact", "publication-not-published", "Publish artifact exists, but its status does not record a published issue.");
+        facts.Add(publicationFact with { Evidence = publishPointers });
         runsPath = repo is null ? RuntimeScopedStateResolver.GetLegacyRunLogPath(root) : RuntimeScopedStateResolver.ResolveRunLogPathForRead(root, domain, repo).Path;
         if (File.Exists(runsPath) || Directory.Exists(runsPath))
         {
@@ -811,25 +858,34 @@ internal static class UnitStatusCommand
             };
         }
         facts.Add(issueFact);
-        var linkedPr = publish?.LinkedPrNumber is > 0 || publish?.LinkedPrUrl is not null || queueItem?.LinkedPr is not null;
+        var queuePrLinked = queueItem?.LinkedPr is { } queuePr
+            && repo is not null
+            && pr is > 0
+            && TryParseGithubUrl(queuePr, "pull", out var queuePrRepo, out var queuePrNumber)
+            && string.Equals(queuePrRepo, repo, StringComparison.OrdinalIgnoreCase)
+            && queuePrNumber == pr;
         var linkEvidence = new List<UnitStatusEvidencePointer>();
-        if (linkedPr && publishEvidence is not null) linkEvidence.Add(publishEvidence with { RecordId = publish?.LinkedPrNumber?.ToString(CultureInfo.InvariantCulture), Url = publish?.LinkedPrUrl });
-        if (linkedPr && queueEvidence is not null && queueItem?.LinkedPr is not null) linkEvidence.Add(queueEvidence with { RecordId = unit, Url = queueItem.LinkedPr });
+        if (queuePrLinked && queueEvidence is not null && queueItem?.LinkedPr is not null) linkEvidence.Add(queueEvidence with { RecordId = unit, Url = queueItem.LinkedPr });
         var possibleLinkEvidence = new[] { publishEvidence, queueEvidence }.OfType<UnitStatusEvidencePointer>().ToArray();
-        facts.Add(linkedPr
-            ? Done("host-pr-linkage", "host-pr-linkage-present", "A local publish or queue record links this unit to a PR.") with { Evidence = linkEvidence }
-            : Missing("host-pr-linkage", "host-pr-linkage-absent", "No local publish or queue PR link exists.")
+        facts.Add(queuePrLinked
+            ? Done("host-pr-linkage", "host-pr-linkage-present", "Queue state links this unit to the resolved repository, issue, and PR.") with { Evidence = linkEvidence }
+            : Missing("host-pr-linkage", "queue-pr-link-absent", "No matching queue linked_pr record was read.")
                 with { Evidence = possibleLinkEvidence });
     }
 
-    private static void AddClaimFacts(ICollection<UnitStatusFact> facts, UnitStatusClaimSnapshot claims, string team, string unit)
+    private static void AddClaimFacts(ICollection<UnitStatusFact> facts, UnitStatusClaimSnapshot claims, string? team, string unit)
     {
         UnitStatusEvidencePointer SnapshotEvidence() => new()
         {
             Kind = "local-claim-snapshot",
+            Path = null,
             RecordId = claims.MetadataOid,
             ExecutionUnit = unit,
-            Provenance = "configured-local-claim-snapshot:" + (claims.MetadataRef ?? "(unresolved)"),
+            ClaimTeam = team,
+            Provenance = (claims.Cause == "local-claim-ref-unavailable" && claims.MetadataRef is null
+                ? "local-claim-snapshot-ref-unconfigured:scope=execution-unit:" + unit + "; "
+                : "configured-local-claim-snapshot:scope=execution-unit:" + unit + "; ")
+                + "ref=" + (claims.MetadataRef ?? "(unresolved)") + "; oid=" + (claims.MetadataOid ?? "(unresolved)"),
         };
 
         if (claims.State == UnitStatusStates.Unavailable)
@@ -855,6 +911,9 @@ internal static class UnitStatusCommand
             ClaimEpochClaimedAt = epochClaimedAt ?? row.DisplacedClaimedAt ?? row.ClaimedAt,
             ClaimOperation = row.Operation ?? "acquire",
             ClaimDisposition = row.Operation is null ? "active" : Disposition(row.Operation, role),
+            ClaimActor = row.Actor,
+            ClaimTeam = row.Team,
+            DisplacedClaimedAt = row.DisplacedClaimedAt,
             Provenance = "configured-local-claim-snapshot:" + (claims.MetadataRef ?? "(unresolved)")
                 + "@" + (claims.MetadataOid ?? "(unresolved)"),
         };
@@ -992,9 +1051,13 @@ internal static class UnitStatusCommand
             Pr = item.Record.Pr,
             HeadSha = item.Record.HeadSha,
             RecordedAt = item.Record.RecordedAt,
+            ReviewVerdict = item.Record.Verdict,
+            ReviewState = null,
+            ReviewDisposition = "local-record-not-github",
             Provenance = "digest-validated-local-cross-runtime-review-record",
         }).ToArray();
-        facts.Add((review?.Unreadable.Count > 0 ? Unavailable("recorded-review", "recorded-review-unreadable", string.Join("; ", review.Unreadable.Select(item => item.Error)), UnitStatusStates.ReadFailure)
+        facts.Add((pr is null ? Missing("recorded-review", "pr-not-linked", "A local PR review record cannot be selected until the unit has a linked pull request.")
+            : review?.Unreadable.Count > 0 ? Unavailable("recorded-review", "recorded-review-unreadable", string.Join("; ", review.Unreadable.Select(item => item.Error)), UnitStatusStates.ReadFailure)
             : currentHead is null ? Unavailable("recorded-review", "current-pr-head-unavailable", "Digest-validated records cannot be compared with a current PR head.", UnitStatusStates.ReadFailure)
             : matching.Any(item => string.Equals(item.Record.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase))
                 ? Done("recorded-review", "recorded-review-current-head", "Digest-validated local implementation review evidence matches the observed PR head.")
@@ -1149,7 +1212,7 @@ internal static class UnitStatusCommand
         Reviews = reviews ?? remote?.Reviews ?? [], Checks = remote?.Checks ?? [], GitHubSnapshotState = remote?.State ?? "not-observed",
         GitHubSnapshotCause = remote?.Cause, GitHubSnapshotDetail = remote?.Detail, GitHubHeadBefore = remote?.HeadBefore, GitHubHeadAfter = remote?.HeadAfter,
         MergeCommitSha = remote?.MergeCommitSha, PullRequestMerged = remote?.Merged, IssueLabels = remote?.IssueLabels ?? [], PullRequestLabels = remote?.PullRequestLabels ?? [],
-        Warnings = remote?.Warnings ?? [],
+        Warnings = claims.Warnings.Concat(remote?.Warnings ?? []).Distinct(StringComparer.Ordinal).ToArray(),
     };
 
     private static IReadOnlyList<UnitStatusFact> CompleteFacts(IReadOnlyList<UnitStatusFact> facts,

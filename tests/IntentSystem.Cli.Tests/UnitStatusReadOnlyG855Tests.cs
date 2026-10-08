@@ -2,6 +2,8 @@ using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
+using IntentSystem.Supervisor.Models;
+using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -318,6 +320,317 @@ public sealed class UnitStatusReadOnlyG855Tests
     }
 
     [Fact]
+    public void ExecuteCore_UnconfiguredDefaultClaimSourceIsAProvenanceLimitWhileIndependentEvidenceContinues()
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true);
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest);
+        var adapter = new UnitStatusReadAdapter(github, git);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.ContextWithoutMetadataBranch,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            adapter);
+
+        var after = host.SnapshotAllFilesAndGitMarkers();
+        Assert.Equal(before, after);
+        Assert.Equal(0, git.ForbiddenCalls);
+        Assert.Empty(git.Calls);
+        Assert.Equal(0, github.ForbiddenCalls);
+        Assert.Equal(6, github.Calls.Count);
+        Assert.Equal(0, exit);
+
+        using var report = JsonDocument.Parse(output.ToString());
+        var root = report.RootElement;
+        Assert.Equal("G855", root.GetProperty("execution_unit").GetString());
+        Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
+        Assert.Equal("intent-cli-dev", root.GetProperty("team").GetString());
+        Assert.Equal(_repo, root.GetProperty("identity").GetProperty("repo").GetString());
+        Assert.Equal(_publicIssue, root.GetProperty("identity").GetProperty("issue").GetInt32());
+        Assert.Equal(_pullRequest, root.GetProperty("identity").GetProperty("pr").GetInt32());
+        Assert.Equal("solo-conductor", root.GetProperty("team_mode").GetString());
+        Assert.Equal("current-recorded-entry", root.GetProperty("mode_basis").GetString());
+        Assert.Equal("completed", root.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+        Assert.Equal("done", FindFact(root, "publication-artifact").GetProperty("state").GetString());
+
+        var claimIds = new[]
+        {
+            "design-claim-acquired", "design-claim-release", "implementation-claim-acquired", "implementation-claim-release",
+        };
+        foreach (var id in claimIds)
+        {
+            var fact = FindFact(root, id);
+            Assert.Equal("unavailable", fact.GetProperty("state").GetString());
+            Assert.Equal("local-claim-ref-unavailable", fact.GetProperty("cause").GetString());
+            Assert.Equal("provenance-limit", fact.GetProperty("unavailable_class").GetString());
+            AssertUnconfiguredClaimPointer(fact);
+        }
+
+        Assert.Equal("missing", FindFact(root, "host-pr-linkage").GetProperty("state").GetString());
+        Assert.Equal("missing", FindFact(root, "posted-review").GetProperty("state").GetString());
+        Assert.Contains(root.GetProperty("observation").GetProperty("warnings").EnumerateArray(), warning =>
+            warning.GetString()!.Contains("local-claim-ref-unavailable", StringComparison.Ordinal));
+        Assert.Equal(0, root.GetProperty("summary").GetProperty("observation_exit_code").GetInt32());
+    }
+
+    [Fact]
+    public void ExecuteCore_UnconfiguredClaimSourceWithoutIndependentTeamRetainsItsCauseAndEvidence()
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true);
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest);
+        var adapter = new UnitStatusReadAdapter(github, git);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.ContextWithoutMetadataBranch,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--format", "json"],
+            output,
+            adapter);
+
+        var after = host.SnapshotAllFilesAndGitMarkers();
+        Assert.Equal(before, after);
+        Assert.Equal(0, git.ForbiddenCalls);
+        Assert.Empty(git.Calls);
+        Assert.Equal(0, github.ForbiddenCalls);
+        Assert.Empty(github.Calls);
+        Assert.Equal(1, exit);
+
+        using var report = JsonDocument.Parse(output.ToString());
+        var root = report.RootElement;
+        Assert.Equal("team-unresolved", root.GetProperty("applicability").GetProperty("cause").GetString());
+        Assert.Equal("applicability-unresolved", root.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+        Assert.Equal("not-observed", root.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+        foreach (var id in new[]
+                 {
+                     "design-claim-acquired", "design-claim-release", "implementation-claim-acquired", "implementation-claim-release",
+                 })
+        {
+            var fact = FindFact(root, id);
+            Assert.Equal("unavailable", fact.GetProperty("state").GetString());
+            Assert.Equal("local-claim-ref-unavailable", fact.GetProperty("cause").GetString());
+            Assert.Equal("provenance-limit", fact.GetProperty("unavailable_class").GetString());
+            AssertUnconfiguredClaimPointer(fact);
+        }
+
+        var facts = root.GetProperty("steps").EnumerateArray().SelectMany(step => step.GetProperty("subchecks").EnumerateArray()).ToArray();
+        Assert.Equal(26, facts.Length);
+        Assert.All(facts, fact => Assert.Equal("unavailable", fact.GetProperty("state").GetString()));
+        var preservedClaimIds = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "design-claim-acquired", "design-claim-release", "implementation-claim-acquired", "implementation-claim-release",
+        };
+        Assert.All(facts.Where(fact => !preservedClaimIds.Contains(fact.GetProperty("id").GetString()!)), fact =>
+        {
+            Assert.Equal("team-unresolved", fact.GetProperty("cause").GetString());
+            Assert.Equal("applicability-unresolved", fact.GetProperty("unavailable_class").GetString());
+        });
+        Assert.Equal(26, root.GetProperty("summary").GetProperty("state_counts").GetProperty("unavailable").GetInt32());
+        Assert.Contains(root.GetProperty("observation").GetProperty("warnings").EnumerateArray(), warning =>
+            warning.GetString()!.Contains("local-claim-ref-unavailable", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false, "missing", "issue-pr-created-marker-absent")]
+    [InlineData(true, "done", "intent-pr-created-observed")]
+    public void ExecuteCore_PublishedIssueWithoutPrIsSuccessfulAbsence_AndReadsOnlyTheIssue(bool markerPresent, string expectedMarkerState, string expectedMarkerCause)
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: false);
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest,
+            allowPullRequestEndpoints: false, issueCompletionMarkerPresent: markerPresent);
+        var adapter = new UnitStatusReadAdapter(github, git);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.ContextWithoutMetadataBranch,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            adapter);
+
+        var after = host.SnapshotAllFilesAndGitMarkers();
+        Assert.Equal(before, after);
+        Assert.Equal(0, git.ForbiddenCalls);
+        Assert.Empty(git.Calls);
+        Assert.Equal(0, github.ForbiddenCalls);
+        Assert.Single(github.Calls);
+        Assert.Equal(new[] { "api", "--method", "GET", $"repos/{_repo}/issues/{_publicIssue}" }, github.Calls[0]);
+        Assert.Equal(0, exit);
+
+        using var report = JsonDocument.Parse(output.ToString());
+        var root = report.RootElement;
+        Assert.Equal(_repo, root.GetProperty("identity").GetProperty("repo").GetString());
+        Assert.Equal(_publicIssue, root.GetProperty("identity").GetProperty("issue").GetInt32());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("identity").GetProperty("pr").ValueKind);
+        Assert.Equal("completed", root.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+
+        var marker = FindFact(root, "issue-completion-marker");
+        Assert.Equal(expectedMarkerState, marker.GetProperty("state").GetString());
+        Assert.Equal(expectedMarkerCause, marker.GetProperty("cause").GetString());
+        Assert.Equal("done", FindFact(root, "publication-artifact").GetProperty("state").GetString());
+        Assert.Equal("missing", FindFact(root, "host-pr-linkage").GetProperty("state").GetString());
+        foreach (var id in new[]
+                 {
+                     "recorded-review", "posted-review", "delta-review", "observed-ci", "approved-marker",
+                     "approval-head-receipt", "pr-merged",
+                 })
+        {
+            var fact = FindFact(root, id);
+            Assert.Equal("missing", fact.GetProperty("state").GetString());
+            Assert.Equal("pr-not-linked", fact.GetProperty("cause").GetString());
+        }
+
+        foreach (var id in new[]
+                 {
+                     "design-claim-acquired", "design-claim-release", "implementation-claim-acquired", "implementation-claim-release",
+                 })
+        {
+            var fact = FindFact(root, id);
+            Assert.Equal("unavailable", fact.GetProperty("state").GetString());
+            Assert.Equal("local-claim-ref-unavailable", fact.GetProperty("cause").GetString());
+            Assert.Equal("provenance-limit", fact.GetProperty("unavailable_class").GetString());
+            AssertUnconfiguredClaimPointer(fact);
+        }
+
+        Assert.Equal(0, root.GetProperty("summary").GetProperty("observation_exit_code").GetInt32());
+    }
+
+    [Fact]
+    public void ExecuteCore_PublishOnlyPrUrlDoesNotSatisfyQueuePrLinkage()
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: true);
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
+        Assert.Equal(0, exit);
+        using var report = JsonDocument.Parse(output.ToString());
+        var root = report.RootElement;
+        Assert.Equal("done", FindFact(root, "publication-artifact").GetProperty("state").GetString());
+        var linkage = FindFact(root, "host-pr-linkage");
+        Assert.Equal("missing", linkage.GetProperty("state").GetString());
+        Assert.Equal("queue-pr-link-absent", linkage.GetProperty("cause").GetString());
+    }
+
+    [Fact]
+    public void ExecuteCore_MatchingQueuePrLinkSatisfiesHostPrLinkage()
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: true);
+        host.WriteQueueLinkedPr($"https://github.com/{_repo}/pull/{_pullRequest}", _repo, _publicIssue);
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
+        Assert.Equal(0, exit);
+        using var report = JsonDocument.Parse(output.ToString());
+        var root = report.RootElement;
+        Assert.Equal("done", FindFact(root, "publication-artifact").GetProperty("state").GetString());
+        Assert.Equal("done", FindFact(root, "queue-seed").GetProperty("state").GetString());
+        var linkage = FindFact(root, "host-pr-linkage");
+        Assert.Equal("done", linkage.GetProperty("state").GetString());
+        Assert.Equal("host-pr-linkage-present", linkage.GetProperty("cause").GetString());
+        Assert.Contains(linkage.GetProperty("evidence").EnumerateArray(), evidence =>
+            evidence.GetProperty("kind").GetString() == "queue-state"
+            && evidence.GetProperty("url").GetString() == $"https://github.com/{_repo}/pull/{_pullRequest}");
+    }
+
+    [Fact]
+    public void ExecuteCore_ConflictingQueuePrAndPublishPrRemainAnIdentityConflict()
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: true);
+        host.WriteQueueLinkedPr($"https://github.com/{_repo}/pull/1864", _repo, _publicIssue);
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest);
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(1, exit);
+        Assert.Empty(github.Calls);
+        using var report = JsonDocument.Parse(output.ToString());
+        var root = report.RootElement;
+        Assert.Equal("identity-conflict", root.GetProperty("applicability").GetProperty("cause").GetString());
+        Assert.Equal("identity-conflict", root.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+        Assert.Equal("unavailable", FindFact(root, "host-pr-linkage").GetProperty("state").GetString());
+    }
+
+    [Theory]
+    [InlineData("issue-created", "issue-created", "missing", "publication-not-published", 0)]
+    [InlineData("published", "issue-created", "unavailable", "publication-status-identity-conflict", 1)]
+    public void ExecuteCore_PublicationStatusAndLifecycleMustAgree(
+        string publishStatus,
+        string lifecycleState,
+        string expectedState,
+        string expectedCause,
+        int expectedExit)
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true, includePullRequestLink: false);
+        host.WritePublishArtifact(new IssuePublishArtifact
+        {
+            ExecutionUnit = "G855",
+            PublishStatus = publishStatus,
+            PacketPath = ".intent-cli/issues/G855/packet.yaml",
+            IssueBodyPath = ".intent-cli/issues/G855/github-body.md",
+            CreatedIssueNumber = _publicIssue,
+            CreatedIssueUrl = $"https://github.com/{_repo}/issues/{_publicIssue}",
+            PublishedLabelName = "intent-target",
+            LifecycleState = lifecycleState,
+        });
+        var git = new BoundedGitRunner(_head, _metadataOid);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest,
+            allowPullRequestEndpoints: false);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
+        Assert.Equal(expectedExit, exit);
+        Assert.Single(github.Calls);
+        Assert.Equal($"repos/{_repo}/issues/{_publicIssue}", github.Calls[0][3]);
+        using var report = JsonDocument.Parse(output.ToString());
+        var publication = FindFact(report.RootElement, "publication-artifact");
+        Assert.Equal(expectedState, publication.GetProperty("state").GetString());
+        Assert.Equal(expectedCause, publication.GetProperty("cause").GetString());
+    }
+
+    [Fact]
     public void ProgramMain_HostlessStatusIsStructuredAndHelpIsMetadataFreeWithoutWritingFiles()
     {
         using var host = new HostFixture();
@@ -374,6 +687,16 @@ public sealed class UnitStatusReadOnlyG855Tests
         Assert.Contains("refs/remotes/origin/metadata", pointer.GetProperty("provenance").GetString(), StringComparison.Ordinal);
     }
 
+    private void AssertUnconfiguredClaimPointer(JsonElement fact)
+    {
+        var pointer = Assert.Single(fact.GetProperty("evidence").EnumerateArray());
+        Assert.Equal("local-claim-snapshot", pointer.GetProperty("kind").GetString());
+        Assert.Equal(JsonValueKind.Null, pointer.GetProperty("path").ValueKind);
+        Assert.Equal("G855", pointer.GetProperty("execution_unit").GetString());
+        Assert.Contains("unconfigured", pointer.GetProperty("provenance").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("scope=execution-unit:G855", pointer.GetProperty("provenance").GetString(), StringComparison.Ordinal);
+    }
+
     private void AssertProvenanceLimit(JsonElement fact)
     {
         Assert.Equal("unavailable", fact.GetProperty("state").GetString());
@@ -410,7 +733,20 @@ public sealed class UnitStatusReadOnlyG855Tests
             },
         };
 
-        public void Prepare(bool includeCurrentSoloMode)
+        public CliContext ContextWithoutMetadataBranch => new()
+        {
+            RepoRoot = _root,
+            Config = new CliConfig
+            {
+                Project = new ProjectConfig
+                {
+                    Domain = "intent-cli",
+                    ArtifactRoot = ".intent-cli",
+                },
+            },
+        };
+
+        public void Prepare(bool includeCurrentSoloMode, bool includePullRequestLink = true)
         {
             Directory.CreateDirectory(Path.Combine(_root, ".intent-cli", "issues", "G855"));
             Directory.CreateDirectory(Path.Combine(_root, ".git", "refs", "heads"));
@@ -431,9 +767,9 @@ public sealed class UnitStatusReadOnlyG855Tests
                 CreatedIssueNumber = 1862,
                 CreatedIssueUrl = "https://github.com/J-Tech-Japan/intent-system/issues/1862",
                 PublishedLabelName = "intent-target",
-                LifecycleState = IssuePublishLifecycle.PrCreated,
-                LinkedPrNumber = 1863,
-                LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/1863",
+                LifecycleState = includePullRequestLink ? IssuePublishLifecycle.PrCreated : IssuePublishLifecycle.Published,
+                LinkedPrNumber = includePullRequestLink ? 1863 : null,
+                LinkedPrUrl = includePullRequestLink ? "https://github.com/J-Tech-Japan/intent-system/pull/1863" : null,
             };
             File.WriteAllText(
                 Path.Combine(_root, ".intent-cli", "issues", "G855", "publish.yaml"),
@@ -459,6 +795,50 @@ public sealed class UnitStatusReadOnlyG855Tests
                 };
                 File.WriteAllText(TeamModeStore.ResolvePath(_root), JsonSerializer.Serialize(state));
             }
+        }
+
+        public void WritePublishArtifact(IssuePublishArtifact artifact) =>
+            File.WriteAllText(
+                Path.Combine(_root, ".intent-cli", "issues", "G855", "publish.yaml"),
+                IssuePublishArtifactYaml.Serialize(artifact));
+
+        public void WriteQueueLinkedPr(string linkedPr, string repo, int issueNumber)
+        {
+            File.WriteAllText(
+                Path.Combine(_root, ".intent-cli", "queue-state.json"),
+                QueueStateSerializer.Serialize(new QueueState
+                {
+                    SchemaVersion = "1",
+                    UpdatedAt = DateTimeOffset.Parse("2026-10-07T00:00:00Z"),
+                    Items =
+                    [
+                        new QueueItem
+                        {
+                            ExecutionUnit = "G855",
+                            Title = "G855 queue item",
+                            State = QueueItemState.Active,
+                            Dependencies = [],
+                            BlockedBy = [],
+                            ClarificationReturnPath = string.Empty,
+                            PacketPaths = new PacketPaths
+                            {
+                                Yaml = ".intent-cli/issues/G855/packet.yaml",
+                                Implementation = ".intent-cli/issues/G855/implementation.md",
+                                ReviewContext = ".intent-cli/issues/G855/review-context.md",
+                            },
+                            LinkedIssue = new LinkedIssue
+                            {
+                                Repo = repo,
+                                Number = issueNumber,
+                                Url = $"https://github.com/{repo}/issues/{issueNumber}",
+                            },
+                            LinkedPr = linkedPr,
+                            WorkerRole = "builder",
+                            ReviewRole = "reviewer",
+                            Priority = "normal",
+                        },
+                    ],
+                }));
         }
 
         public void WriteMalformedMode()
@@ -590,14 +970,19 @@ public sealed class UnitStatusReadOnlyG855Tests
         private readonly string _head;
         private readonly int _issue;
         private readonly int _pullRequest;
+        private readonly bool _allowPullRequestEndpoints;
+        private readonly bool _issueCompletionMarkerPresent;
 
-        public BoundedGitHubRunner(string scenario, string repo, string head, int issue, int pullRequest)
+        public BoundedGitHubRunner(string scenario, string repo, string head, int issue, int pullRequest,
+            bool allowPullRequestEndpoints = true, bool issueCompletionMarkerPresent = false)
         {
             _scenario = scenario;
             _repo = repo;
             _head = head;
             _issue = issue;
             _pullRequest = pullRequest;
+            _allowPullRequestEndpoints = allowPullRequestEndpoints;
+            _issueCompletionMarkerPresent = issueCompletionMarkerPresent;
         }
 
         public List<IReadOnlyList<string>> Calls { get; } = [];
@@ -620,7 +1005,9 @@ public sealed class UnitStatusReadOnlyG855Tests
             {
                 return _scenario == "api-503"
                     ? new GitHubCommandResult { ExitCode = 1, StdOut = string.Empty, StdErr = "gh: HTTP 503 Service Unavailable" }
-                    : Json($"{{\"number\":{_issue},\"labels\":[]}}");
+                    : Json(_issueCompletionMarkerPresent
+                        ? $"{{\"number\":{_issue},\"labels\":[{{\"name\":\"intent-pr-created\"}}]}}"
+                        : $"{{\"number\":{_issue},\"labels\":[]}}");
             }
             if (endpoint == $"repos/{_repo}/pulls/{_pullRequest}/reviews?per_page=100&page=1")
             {
@@ -628,7 +1015,7 @@ public sealed class UnitStatusReadOnlyG855Tests
                     ? Json("[{\"id\":74,\"state\":\"COMMENTED\",\"commit_id\":null,\"body\":\"Reviewer: independent subagent review\\nNotes: historical prose without unit/head identity\",\"submitted_at\":\"2026-10-07T00:00:00Z\",\"user\":{\"login\":\"reviewer\"}}]")
                     : Json("[]");
             }
-            if (endpoint == $"repos/{_repo}/commits/{_head}/check-runs?per_page=100&page=1")
+            if (endpoint == $"repos/{_repo}/commits/{_head}/check-runs?per_page=100&page=1&filter=all")
             {
                 return _scenario == "malformed-json"
                     ? Json("{not-json")
@@ -641,11 +1028,12 @@ public sealed class UnitStatusReadOnlyG855Tests
         }
 
         private bool IsAllowedEndpoint(string endpoint) =>
-            endpoint == $"repos/{_repo}/pulls/{_pullRequest}"
-            || endpoint == $"repos/{_repo}/issues/{_issue}"
-            || endpoint == $"repos/{_repo}/pulls/{_pullRequest}/reviews?per_page=100&page=1"
-            || endpoint == $"repos/{_repo}/commits/{_head}/check-runs?per_page=100&page=1"
-            || endpoint == $"repos/{_repo}/commits/{_head}/statuses?per_page=100&page=1";
+            endpoint == $"repos/{_repo}/issues/{_issue}"
+            || _allowPullRequestEndpoints && (
+                endpoint == $"repos/{_repo}/pulls/{_pullRequest}"
+                || endpoint == $"repos/{_repo}/pulls/{_pullRequest}/reviews?per_page=100&page=1"
+                || endpoint == $"repos/{_repo}/commits/{_head}/check-runs?per_page=100&page=1&filter=all"
+                || endpoint == $"repos/{_repo}/commits/{_head}/statuses?per_page=100&page=1");
 
         private GitHubCommandResult Json(string json) => new() { ExitCode = 0, StdOut = json, StdErr = string.Empty };
     }

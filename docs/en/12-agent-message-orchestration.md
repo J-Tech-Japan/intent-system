@@ -144,7 +144,15 @@ re-approval instruction. Missing/unresolved mode and team context fail closed
 without GitHub reads; recorded non-solo mode returns not-applicable. A skipped
 or neutral CI result is `missing`, including a conditional skip after another
 job failed; this read-only inventory does not infer branch-protection
-requirements. Read the state, cause, and unavailable-class counts together.
+requirements. Check-runs include all history (`filter=all`); if a current
+Actions run has advanced beyond attempt 1 and the API cannot associate each
+check with its attempt, the checks remain visible but CI is unavailable with a
+provenance-limit. Pending GitHub reviews are visible but do not satisfy review
+facts. A known issue without a linked PR still permits an issue-label read;
+PR-bound facts are missing with `pr-not-linked`. Claim facts use the configured
+local metadata snapshot only. An unset branch or a source/write topology split
+can limit claim provenance; the observer does not guess a default branch or
+fetch. Read the state, cause, and unavailable-class counts together.
 
 ## Cross-runtime implementation review (G834 — preview-through-1.x)
 

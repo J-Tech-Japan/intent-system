@@ -577,9 +577,24 @@ mode の欠落/default と team unresolved は unavailable、exit 1 で、GitHub
 non-solo mode は solo-conductor phase を not-applicable にして GitHub read を省略します。
 solo-conductor では、API read を local で照合した issue/PR と観測 PR head に結び付けます。pagination は
 20 page まで完全に読み、head が変わった場合の retry は最大 1 回です。report は観測した check-run と
-commit-status を inventory として示しますが、branch protection や required-check rule は評価しません。
-skipped または neutral の check は `missing` として扱います。別 job の失敗後に条件付きで skip された場合も同じです。
-正常に読めたことは成功を意味しません。観測を読むときは state、cause、unavailable class の count を合わせて確認してください。
+commit-status を示します。check-run は GitHub の `filter=all` を使い、古い row や superseded row も保持します。
+API の `run_attempt` は現在の Actions run の attempt であり、個別 check の attempt を示すものではありません。
+2 以上でも check を特定の attempt に結び付けられない場合、raw check を保持し、CI は既知の `provenance-limit` により
+`unavailable` とします。この report は branch protection や required-check rule を評価しません。skipped または neutral の
+check は `missing` として扱います。別 job の失敗後に条件付きで skip された場合も同じです。正常に読めたことは成功を意味しません。
+GitHub の pending review は evidence として保持しますが、posted-review または delta-review を満たしません。観測を読むときは
+state、cause、unavailable class の count を合わせて確認してください。
+
+publication が `done` になるのは、publish record の status が `published` で、created issue identity が解決済みの repository と
+issue に一致する場合だけです。host PR linkage には `queue-state.json` の一致する `linked_pr` が必要です。publish record に
+PR URL があるだけでは足りません。issue が解決済みで PR が link されていない場合、command はその issue の label だけを読み、
+PR に結び付く fact は `pr-not-linked` を cause とする `missing` にします。
+
+claim evidence は、設定済みでローカルに存在する metadata snapshot を使います。metadata branch が未設定なら claim fact は
+既知の provenance limit として示し、canonical/default branch の推測、fetch、ownership 解決は行いません。選択した local ref と
+object ID は読んだ snapshot を特定しますが、remote canonical claim branch の保証ではありません。同一 repository の構成で
+source/write branch が異なる場合や `same_repo_topology = false` の場合、選択 snapshot に別 branch の claim が無いことがあります。
+同じ check context の Actions run が複数あり、各 row を区別できない場合は identity conflict を維持します。
 
 exit 0 は observation が完了したことを示し、evidence の欠落や既知の `provenance-limit` だけで unavailable
 となる場合も含みます。exit 1 は不正な request または provenance 以外の observation failure を示します。

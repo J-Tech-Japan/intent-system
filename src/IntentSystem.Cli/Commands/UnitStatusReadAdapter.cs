@@ -32,6 +32,17 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         string claimPath;
         string historyDirectory;
         string metadataRef;
+        var projectConfig = context.Config.Project;
+        if (string.IsNullOrWhiteSpace(projectConfig.MetadataSourceBranch)
+            && string.IsNullOrWhiteSpace(projectConfig.MetadataBranch)
+            && string.IsNullOrWhiteSpace(projectConfig.MetadataWriteBranch))
+        {
+            return ClaimFailure(
+                "local-claim-ref-unavailable",
+                "local-claim-ref-unavailable: no configured local metadata branch is available; this reader does not infer or fetch a canonical claim branch.",
+                UnitStatusStates.ProvenanceLimit);
+        }
+
         try
         {
             (claimPath, historyDirectory, metadataRef) = ClaimCommand.DescribeLocalReadPaths(
@@ -262,6 +273,86 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         return RemoteFailure("snapshot-unavailable", "GitHub snapshot could not be completed.", UnitStatusStates.ReadFailure);
     }
 
+    public UnitStatusRemoteSnapshot ObserveGitHubIssue(CliContext context, string repo, int issue, string executionUnit)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (!IsSafeRepo(repo) || issue <= 0)
+        {
+            var invalid = UnavailableFact("issue-completion-marker", "github-request-invalid",
+                "Repository or issue identity is invalid.", UnitStatusStates.InvalidRequest);
+            return new UnitStatusRemoteSnapshot
+            {
+                State = UnitStatusStates.Unavailable,
+                Cause = invalid.Cause,
+                Detail = invalid.Detail,
+                Facts = [invalid],
+            };
+        }
+
+        var url = $"https://github.com/{repo}/issues/{issue}";
+        if (!TryReadJson(context, ["api", "--method", "GET", $"repos/{repo}/issues/{issue}"], out var document, out var failure))
+        {
+            var unavailable = UnavailableFact("issue-completion-marker", failure.Cause, failure.Detail, UnitStatusStates.ReadFailure)
+                with { Evidence = [GitHubEvidence("issue-labels", url, executionUnit, repo, null, null)] };
+            return new UnitStatusRemoteSnapshot
+            {
+                State = UnitStatusStates.Unavailable,
+                Cause = failure.Cause,
+                Detail = failure.Detail,
+                Facts = [unavailable],
+                Warnings = [failure.Detail],
+            };
+        }
+
+        using (document)
+        {
+            if (!TryReadNumber(document!.RootElement, "number", out var observedIssue)
+                || observedIssue != issue
+                || !TryReadLabels(document.RootElement, out var labels))
+            {
+                var malformed = UnavailableFact("issue-completion-marker", "github-api-error",
+                    "Issue response is missing its expected number or labels.", UnitStatusStates.ReadFailure)
+                    with { Evidence = [GitHubEvidence("issue-labels", url, executionUnit, repo, null, null)] };
+                return new UnitStatusRemoteSnapshot
+                {
+                    State = UnitStatusStates.Unavailable,
+                    Cause = malformed.Cause,
+                    Detail = malformed.Detail,
+                    Facts = [malformed],
+                    Warnings = [malformed.Detail!],
+                };
+            }
+
+            var fact = labels.Contains("intent-pr-created", StringComparer.Ordinal)
+                ? new UnitStatusFact
+                {
+                    Id = "issue-completion-marker",
+                    State = UnitStatusStates.Done,
+                    Cause = "intent-pr-created-observed",
+                    Detail = "The successful issue response includes label 'intent-pr-created'.",
+                    Evidence = [GitHubEvidence("issue-label", url, executionUnit, repo, null, null)],
+                }
+                : new UnitStatusFact
+                {
+                    Id = "issue-completion-marker",
+                    State = UnitStatusStates.Missing,
+                    Cause = "issue-pr-created-marker-absent",
+                    Detail = "The successful issue response does not include label 'intent-pr-created'.",
+                    Evidence = [GitHubEvidence("issue-labels", url, executionUnit, repo, null, null)],
+                };
+            return new UnitStatusRemoteSnapshot
+            {
+                State = "completed",
+                Detail = "The issue labels were read successfully; no PR identity is linked yet.",
+                Facts = [fact],
+                IssueLabels = labels,
+                Warnings = labels.Contains("intent-pr-created", StringComparer.Ordinal)
+                    ? []
+                    : ["The source issue has no intent-pr-created marker."],
+            };
+        }
+    }
+
     private UnitStatusRemoteSnapshot ObserveGitHubAttempt(
         CliContext context,
         string repo,
@@ -420,7 +511,15 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                     }
                     if (runAttempts.TryGetValue(id, out var knownAttempt))
                     {
-                        check = check! with { RunId = id, Attempt = knownAttempt, AttemptBasis = "actions-run" };
+                        check = check! with
+                        {
+                            RunId = id,
+                            Attempt = knownAttempt == 1 ? 1 : null,
+                            AttemptBasis = knownAttempt == 1
+                                ? "actions-run-initial-attempt"
+                            : "actions-attempt-unattributed",
+                            ReportedRunAttempt = knownAttempt,
+                        };
                     }
                 }
                 checks.Add(check!);
@@ -651,7 +750,8 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         for (var page = 1; page <= MaximumPages; page++)
         {
             var separator = endpoint.Contains('?', StringComparison.Ordinal) ? '&' : '?';
-            var path = $"{endpoint}{separator}per_page={PageSize}&page={page.ToString(CultureInfo.InvariantCulture)}";
+            var filter = endpoint.EndsWith("/check-runs", StringComparison.Ordinal) ? "&filter=all" : "";
+            var path = $"{endpoint}{separator}per_page={PageSize}&page={page.ToString(CultureInfo.InvariantCulture)}{filter}";
             if (!TryReadJson(context, ["api", "--method", "GET", path], out var document, out failure))
             {
                 items = collected;
@@ -811,10 +911,31 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             return false;
         }
 
+        if (!string.Equals(parsed.ExecutionUnit, unit, StringComparison.Ordinal)
+            || !string.Equals(parsed.Kind, CrossRuntimeReviewRecord.KindImplementation, StringComparison.Ordinal))
+        {
+            review = new UnitStatusObservedReview
+            {
+                Source = "github-pr-review",
+                HeadSha = parsed.HeadSha!,
+                Verdict = parsed.Verdict!,
+                ReviewState = state,
+                Reviewer = reviewer,
+                Runtime = parsed.Runtime,
+                Relation = parsed.Relation,
+                At = submittedAt,
+                RecordId = id.ToString(CultureInfo.InvariantCulture),
+                Url = reviewUrl,
+                Qualification = !string.Equals(parsed.ExecutionUnit, unit, StringComparison.Ordinal)
+                    ? "nonqualifying-other-unit-review"
+                    : "nonqualifying-design-review",
+                Dismissed = string.Equals(state, "DISMISSED", StringComparison.OrdinalIgnoreCase),
+            };
+            return true;
+        }
+
         var dismissed = string.Equals(state, "DISMISSED", StringComparison.OrdinalIgnoreCase);
-        var valid = string.Equals(parsed.ExecutionUnit, unit, StringComparison.Ordinal)
-            && string.Equals(parsed.Kind, CrossRuntimeReviewRecord.KindImplementation, StringComparison.Ordinal)
-            && parsed.HeadSha is not null
+        var valid = parsed.HeadSha is not null
             && IsObjectId(parsed.HeadSha)
             && string.Equals(parsed.HeadSha, commitId, StringComparison.OrdinalIgnoreCase)
             && parsed.Verdict is CrossRuntimeReviewVerdict.Approve or CrossRuntimeReviewVerdict.RequestChanges
@@ -850,6 +971,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             RecordId = id.ToString(CultureInfo.InvariantCulture),
             CitedRecordPath = citedRecordPath,
             Url = reviewUrl,
+            Qualification = "implementation-review",
             Dismissed = dismissed,
         };
         return true;
@@ -1170,8 +1292,12 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
 
         if (queryIndex >= 0)
         {
+            var checkRunsEndpoint = parts.Length == 6
+                && parts[3] == "commits"
+                && IsObjectId(parts[4])
+                && parts[5] == "check-runs";
             if (endpoint.IndexOf('?', queryIndex + 1) >= 0
-                || !IsAllowedPaginationQuery(endpoint[(queryIndex + 1)..]))
+                || !IsAllowedPaginationQuery(endpoint[(queryIndex + 1)..], checkRunsEndpoint))
             {
                 return false;
             }
@@ -1190,11 +1316,14 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 && IsPositiveNumber(parts[5]));
     }
 
-    private static bool IsAllowedPaginationQuery(string query)
+    private static bool IsAllowedPaginationQuery(string query, bool checkRunsEndpoint)
     {
         const string prefix = "per_page=100&page=";
         if (!query.StartsWith(prefix, StringComparison.Ordinal)) return false;
-        var pageText = query[prefix.Length..];
+        var suffixIndex = query.IndexOf('&', prefix.Length);
+        var pageText = suffixIndex < 0 ? query[prefix.Length..] : query[prefix.Length..suffixIndex];
+        var suffix = suffixIndex < 0 ? "" : query[suffixIndex..];
+        if (!string.Equals(suffix, checkRunsEndpoint ? "&filter=all" : "", StringComparison.Ordinal)) return false;
         return int.TryParse(pageText, NumberStyles.None, CultureInfo.InvariantCulture, out var page)
             && page is >= 1 and <= MaximumPages
             && string.Equals(page.ToString(CultureInfo.InvariantCulture), pageText, StringComparison.Ordinal);
@@ -1429,7 +1558,8 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         bool namedUnstructured,
         string url)
     {
-        if (reviews.Any(review => !review.Dismissed && string.Equals(review.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase)))
+        if (reviews.Any(review => IsSubmittedReview(review) && IsImplementationReview(review)
+            && string.Equals(review.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase)))
         {
             return new UnitStatusFact
             {
@@ -1437,13 +1567,17 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 State = UnitStatusStates.Done,
                 Cause = "posted-review-current-head",
                 Detail = "At least one structured independent review is attached to the observed PR head; verdict and GitHub review state remain separate.",
-                Evidence = reviews.Select(review => new UnitStatusEvidencePointer
+                Evidence = reviews.Where(review => IsSubmittedReview(review) && IsImplementationReview(review)
+                    && string.Equals(review.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase)).Select(review => new UnitStatusEvidencePointer
                 {
                     Kind = "github-pr-review",
                     Url = review.Url,
                     RecordId = review.RecordId,
                     HeadSha = review.HeadSha,
                     RecordedAt = review.At,
+                    ReviewVerdict = review.Verdict,
+                    ReviewState = review.ReviewState,
+                    ReviewDisposition = review.Qualification,
                     Provenance = "github-rest-review",
                 }).ToArray(),
             };
@@ -1468,7 +1602,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             Id = "posted-review",
             State = UnitStatusStates.Missing,
             Cause = "posted-review-not-recorded-current-head",
-            Detail = "The completed pull-request review list contains no non-dismissed structured independent review bound to this head.",
+            Detail = "The pull-request review list contains no submitted, non-dismissed structured independent review bound to this head.",
             Evidence = reviews.Select(review => new UnitStatusEvidencePointer
             {
                 Kind = "github-pr-review",
@@ -1476,10 +1610,21 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                 RecordId = review.RecordId,
                 HeadSha = review.HeadSha,
                 RecordedAt = review.At,
+                ReviewVerdict = review.Verdict,
+                ReviewState = review.ReviewState,
+                ReviewDisposition = review.Qualification,
                 Provenance = "github-rest-review",
             }).ToArray(),
         };
     }
+
+    private static bool IsSubmittedReview(UnitStatusObservedReview review) =>
+        !review.Dismissed
+        && (review.Source != "github-pr-review"
+            || review.ReviewState is "COMMENTED" or "APPROVED" or "CHANGES_REQUESTED");
+
+    private static bool IsImplementationReview(UnitStatusObservedReview review) =>
+        review.Qualification is null or "implementation-review";
 
     private static UnitStatusFact BuildDeltaFact(
         IReadOnlyList<UnitStatusObservedReview> reviews,
@@ -1497,7 +1642,8 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         }
 
         var currentHeadReviews = reviews
-            .Where(review => !review.Dismissed && string.Equals(review.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase))
+            .Where(review => IsSubmittedReview(review) && IsImplementationReview(review)
+                && string.Equals(review.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (currentHeadReviews.Length > 0)
         {
@@ -1518,6 +1664,9 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                     Pr = pullRequest,
                     HeadSha = review.HeadSha,
                     RecordedAt = review.At,
+                    ReviewVerdict = review.Verdict,
+                    ReviewState = review.ReviewState,
+                    ReviewDisposition = review.Qualification ?? (review.Source == "local-cross-runtime-record" ? "local-record-not-github" : null),
                     Provenance = review.Source == "local-cross-runtime-record"
                         ? "digest-validated-local-cross-runtime-review-record"
                         : "github-rest-review",
@@ -1530,7 +1679,25 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             Id = "delta-review",
             State = UnitStatusStates.Missing,
             Cause = "delta-review-missing",
-            Detail = "No non-dismissed structured review is bound to the current head; earlier-head reviews remain visible but do not satisfy the delta observation.",
+            Detail = "No submitted, non-dismissed structured review is bound to the current head; pending and earlier-head reviews remain visible but do not satisfy the delta observation.",
+            Evidence = reviews.Where(review => review.Source == "github-pr-review" && IsImplementationReview(review)
+                    && string.Equals(review.ReviewState, "PENDING", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(review.HeadSha, currentHead, StringComparison.OrdinalIgnoreCase))
+                .Select(review => new UnitStatusEvidencePointer
+                {
+                    Kind = review.Source,
+                    Url = review.Url,
+                    RecordId = review.RecordId,
+                    ExecutionUnit = executionUnit,
+                    Repo = repo,
+                    Pr = pullRequest,
+                    HeadSha = review.HeadSha,
+                    RecordedAt = review.At,
+                    ReviewVerdict = review.Verdict,
+                    ReviewState = review.ReviewState,
+                    ReviewDisposition = review.Qualification,
+                    Provenance = "github-rest-pending-review-not-submitted",
+                }).ToArray(),
         };
     }
 
@@ -1574,6 +1741,18 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                     HeadSha = check.Sha,
                     Provenance = "github-rest-observed-check",
                 }).ToArray(),
+            };
+        }
+
+        var unattributedActions = checks.Where(check => check.Source == "check-run"
+            && check.RunId is not null && check.Attempt is null).ToArray();
+        if (unattributedActions.Length > 0)
+        {
+            return UnavailableFact("observed-ci", "github-check-attempt-unattributed",
+                "GitHub reports an Actions run after its initial attempt, but the observed check-run rows cannot be linked to specific attempts by the permitted read surface. The run ID and current run attempt are retained as provenance without assigning an attempt to any check.",
+                UnitStatusStates.ProvenanceLimit) with
+            {
+                Evidence = unattributedActions.Select(ToCheckEvidence).ToArray(),
             };
         }
 

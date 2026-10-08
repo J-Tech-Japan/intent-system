@@ -37,7 +37,7 @@ public sealed class UnitStatusReadAdapterG855Tests
         Assert.Equal(2, runner.Calls.Count(call => call[3] == $"repos/{Repo}/pulls/{PullRequest}"));
         Assert.Contains(runner.Calls, call => call[3] == $"repos/{Repo}/issues/{Issue}");
         Assert.Contains(runner.Calls, call => call[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?per_page=100&page=1", StringComparison.Ordinal));
-        Assert.Contains(runner.Calls, call => call[3].StartsWith($"repos/{Repo}/commits/{Head}/check-runs?per_page=100&page=1", StringComparison.Ordinal));
+        Assert.Contains(runner.Calls, call => call[3] == $"repos/{Repo}/commits/{Head}/check-runs?per_page=100&page=1&filter=all");
         Assert.Contains(runner.Calls, call => call[3].StartsWith($"repos/{Repo}/commits/{Head}/statuses?per_page=100&page=1", StringComparison.Ordinal));
         Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "issue-completion-marker").State);
         Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "observed-ci").State);
@@ -96,6 +96,11 @@ public sealed class UnitStatusReadAdapterG855Tests
             ["api", "--method", "GET", $"repos/{Repo}/issues/{Issue}?per_page=100&page=1"],
             ["api", "--method", "GET", $"repos/{Repo}/pulls/{PullRequest}/reviews?per_page=100&page=21"],
             ["api", "--method", "GET", $"repos/{Repo}/pulls/{PullRequest}/reviews?per_page=100&page=1&state=all"],
+            ["api", "--method", "GET", $"repos/{Repo}/commits/{Head}/check-runs?per_page=100&page=1"],
+            ["api", "--method", "GET", $"repos/{Repo}/commits/{Head}/check-runs?per_page=100&page=1&filter=latest"],
+            ["api", "--method", "GET", $"repos/{Repo}/commits/{Head}/check-runs?filter=all&per_page=100&page=1"],
+            ["api", "--method", "GET", $"repos/{Repo}/commits/{Head}/check-runs?per_page=100&page=1&filter=all&state=completed"],
+            ["api", "--method", "GET", $"repos/{Repo}/commits/{Head}/statuses?per_page=100&page=1&filter=all"],
             ["api", "--method", "GET", "graphql", "-f", "query=mutation"],
         ];
 
@@ -464,6 +469,125 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
     }
 
     [Fact]
+    public void PendingReviewIsRetainedButDoesNotSatisfyPostedOrDeltaReview()
+    {
+        using var host = new TempHost();
+        var body = StructuredReviewBody("G855", "implementation", "approve");
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+            ? Json(ReviewRowsWithIds((301, body, Head, "PENDING", null)))
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var pending = Assert.Single(snapshot.Reviews);
+        Assert.Equal("PENDING", pending.ReviewState);
+        Assert.Equal("approve", pending.Verdict);
+        Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "posted-review").State);
+        Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "delta-review").State);
+        var postedEvidence = Assert.Single(snapshot.Facts.Single(fact => fact.Id == "posted-review").Evidence);
+        Assert.Equal("approve", postedEvidence.ReviewVerdict);
+        Assert.Equal("PENDING", postedEvidence.ReviewState);
+        var deltaEvidence = Assert.Single(snapshot.Facts.Single(fact => fact.Id == "delta-review").Evidence);
+        Assert.Equal("PENDING", deltaEvidence.ReviewState);
+        Assert.Equal("github-rest-pending-review-not-submitted", deltaEvidence.Provenance);
+    }
+
+    [Fact]
+    public void PendingReviewAndSubmittedReviewAreBothRetainedButOnlySubmittedSatisfies()
+    {
+        using var host = new TempHost();
+        var body = StructuredReviewBody("G855", "implementation", "request-changes");
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+            ? Json(ReviewRowsWithIds(
+                (302, body, Head, "PENDING", null),
+                (303, body, Head, "CHANGES_REQUESTED", "2026-10-07T00:00:01Z")))
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(new[] { "PENDING", "CHANGES_REQUESTED" }, snapshot.Reviews.Select(review => review.ReviewState));
+        var posted = snapshot.Facts.Single(fact => fact.Id == "posted-review");
+        var delta = snapshot.Facts.Single(fact => fact.Id == "delta-review");
+        Assert.Equal(UnitStatusStates.Done, posted.State);
+        Assert.Equal(UnitStatusStates.Done, delta.State);
+        Assert.Equal("303", Assert.Single(posted.Evidence).RecordId);
+        Assert.Equal("303", Assert.Single(delta.Evidence).RecordId);
+        Assert.Equal("CHANGES_REQUESTED", Assert.Single(posted.Evidence).ReviewState);
+        Assert.Equal("request-changes", Assert.Single(delta.Evidence).ReviewVerdict);
+    }
+
+    [Fact]
+    public void PendingReviewDoesNotHideValidLocalDeltaReview()
+    {
+        using var host = new TempHost();
+        G839CrossRuntimeReviewRecordWriter.WriteImplementationRecord(
+            host.Context.RepoRoot, Repo, PullRequest, "G855", "intent-cli", "intent-cli-dev", "codex", "approve", Head,
+            DateTimeOffset.Parse("2026-10-07T00:00:00Z"));
+        var body = StructuredReviewBody("G855", "implementation", "approve");
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+            ? Json(ReviewRowsWithIds((304, body, Head, "PENDING", null)))
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "posted-review").State);
+        var delta = snapshot.Facts.Single(fact => fact.Id == "delta-review");
+        Assert.Equal(UnitStatusStates.Done, delta.State);
+        var evidence = Assert.Single(delta.Evidence);
+        Assert.Equal("local-cross-runtime-record", evidence.Kind);
+        Assert.Equal("approve", evidence.ReviewVerdict);
+        Assert.Null(evidence.ReviewState);
+        Assert.Equal("local-record-not-github", evidence.ReviewDisposition);
+    }
+
+    [Fact]
+    public void NonqualifyingDesignAndOtherUnitReviewsDoNotPoisonMatchingImplementationReview()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+            ? Json(ReviewRowsWithIds(
+                (305, StructuredReviewBody("G855", "design", "approve"), Head, "COMMENTED", "2026-10-07T00:00:00Z"),
+                (306, StructuredReviewBody("G999", "implementation", "approve"), Head, "COMMENTED", "2026-10-07T00:00:01Z"),
+                (307, StructuredReviewBody("G855", "implementation", "approve"), Head, "COMMENTED", "2026-10-07T00:00:02Z")))
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(3, snapshot.Reviews.Count);
+        Assert.Contains(snapshot.Reviews, review => review.Qualification == "nonqualifying-design-review");
+        Assert.Contains(snapshot.Reviews, review => review.Qualification == "nonqualifying-other-unit-review");
+        var posted = snapshot.Facts.Single(fact => fact.Id == "posted-review");
+        Assert.Equal(UnitStatusStates.Done, posted.State);
+        Assert.Equal("307", Assert.Single(posted.Evidence).RecordId);
+        Assert.Equal(UnitStatusStates.Done, snapshot.Facts.Single(fact => fact.Id == "delta-review").State);
+    }
+
+    [Fact]
+    public void TargetImplementationReviewWithCommitMismatchStillConflictsAlongsideGoodReview()
+    {
+        using var host = new TempHost();
+        var badBody = StructuredReviewBody("G855", "implementation", "approve");
+        var goodBody = StructuredReviewBody("G855", "implementation", "request-changes");
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+            ? Json(ReviewRowsWithIds(
+                (308, badBody, Head2, "COMMENTED", "2026-10-07T00:00:00Z"),
+                (309, goodBody, Head, "COMMENTED", "2026-10-07T00:00:01Z")))
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var posted = snapshot.Facts.Single(fact => fact.Id == "posted-review");
+        Assert.Equal(UnitStatusStates.Unavailable, posted.State);
+        Assert.Equal("review-identity-conflict", posted.Cause);
+        Assert.Equal(UnitStatusStates.IdentityConflict, posted.UnavailableClass);
+    }
+
+    [Fact]
     public void NamedUnstructuredReviewIsProvenanceLimitAndDismissedReviewDoesNotSatisfy()
     {
         using var host = new TempHost();
@@ -484,7 +608,7 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
     }
 
     [Fact]
-    public void ActionsAttemptAndSkippedExternalCheckRemainInCompleteInventory()
+    public void ActionsInitialAttemptAndSkippedExternalCheckRemainInCompleteInventory()
     {
         using var host = new TempHost();
         var runner = new FakeGitHub((arguments, _) => arguments[3] switch
@@ -495,7 +619,7 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
                   {"id":12,"name":"lint","status":"completed","conclusion":"skipped","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","app":{"slug":"external-ci"},"details_url":null}
                 ]}
                 """),
-            $"repos/{Repo}/actions/runs/77" => Json("""{"id":77,"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","run_attempt":2}"""),
+            $"repos/{Repo}/actions/runs/77" => Json("""{"id":77,"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","run_attempt":1}"""),
             _ => DefaultResponse(arguments),
         });
         var adapter = new UnitStatusReadAdapter(runner, new FakeGit());
@@ -506,12 +630,112 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
         Assert.Equal(2, snapshot.Checks.Count);
         var actions = snapshot.Checks.Single(check => check.Identity == "github-actions/build");
         Assert.Equal(77, actions.RunId);
-        Assert.Equal(2, actions.Attempt);
+        Assert.Equal(1, actions.Attempt);
+        Assert.Equal(1, actions.ReportedRunAttempt);
+        Assert.Equal("actions-run-initial-attempt", actions.AttemptBasis);
         var external = snapshot.Checks.Single(check => check.Identity == "external-ci/lint");
         Assert.Null(external.RunId);
         Assert.Null(external.Attempt);
         Assert.Equal("not-actions", external.AttemptBasis);
         Assert.Equal(UnitStatusStates.Missing, snapshot.Facts.Single(fact => fact.Id == "observed-ci").State);
+    }
+
+    [Fact]
+    public void ActionsRerunKeepsSupersededRowsButLeavesPerCheckAttemptUnattributed()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] switch
+        {
+            var endpoint when endpoint.StartsWith($"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal) => Json($$"""
+                {"total_count":3,"check_runs":[
+                  {"id":111,"name":"build","status":"completed","conclusion":"success","head_sha":"{{Head}}","app":{"slug":"github-actions"},"details_url":"https://github.com/{{Repo}}/actions/runs/77"},
+                  {"id":112,"name":"build","status":"completed","conclusion":"failure","head_sha":"{{Head}}","app":{"slug":"github-actions"},"details_url":"https://github.com/{{Repo}}/actions/runs/77"},
+                  {"id":113,"name":"lint","status":"completed","conclusion":"skipped","head_sha":"{{Head}}","app":{"slug":"external-ci"},"details_url":null}
+                ]}
+                """),
+            $"repos/{Repo}/actions/runs/77" => Json($$"""{"id":77,"head_sha":"{{Head}}","run_attempt":2}"""),
+            _ => DefaultResponse(arguments),
+        });
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal("completed", snapshot.State);
+        var actionRows = snapshot.Checks.Where(check => check.RunId == 77).OrderBy(check => check.RecordId).ToArray();
+        Assert.Equal(new[] { "111", "112" }, actionRows.Select(check => check.RecordId));
+        Assert.Equal(new[] { "success", "failure" }, actionRows.Select(check => check.Conclusion));
+        Assert.All(actionRows, check =>
+        {
+            Assert.Null(check.Attempt);
+            Assert.Equal(2, check.ReportedRunAttempt);
+            Assert.Equal("actions-attempt-unattributed", check.AttemptBasis);
+        });
+        var external = snapshot.Checks.Single(check => check.Identity == "external-ci/lint");
+        Assert.Null(external.RunId);
+        Assert.Null(external.Attempt);
+        Assert.Null(external.ReportedRunAttempt);
+        Assert.Equal("not-actions", external.AttemptBasis);
+
+        var ci = snapshot.Facts.Single(fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.Unavailable, ci.State);
+        Assert.Equal("github-check-attempt-unattributed", ci.Cause);
+        Assert.Equal(UnitStatusStates.ProvenanceLimit, ci.UnavailableClass);
+        Assert.Equal(2, ci.Evidence.Count);
+        Assert.Contains(runner.Calls, call => call[3] == $"repos/{Repo}/commits/{Head}/check-runs?per_page=100&page=1&filter=all");
+    }
+
+    [Fact]
+    public void ActionsRunMetadataFailureRemainsReadFailure()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] switch
+        {
+            var endpoint when endpoint.StartsWith($"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal) => Json($$"""
+                {"total_count":1,"check_runs":[{"id":114,"name":"build","status":"completed","conclusion":"success","head_sha":"{{Head}}","app":{"slug":"github-actions"},"details_url":"https://github.com/{{Repo}}/actions/runs/77"}]}
+                """),
+            $"repos/{Repo}/actions/runs/77" => new GitHubCommandResult { ExitCode = 1, StdOut = "", StdErr = "HTTP 503 unavailable" },
+            _ => DefaultResponse(arguments),
+        });
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(UnitStatusStates.Unavailable, snapshot.State);
+        var check = Assert.Single(snapshot.Checks);
+        Assert.Equal(77, check.RunId);
+        Assert.Null(check.Attempt);
+        var ci = snapshot.Facts.Single(fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.Unavailable, ci.State);
+        Assert.Equal(UnitStatusStates.ReadFailure, ci.UnavailableClass);
+        Assert.Equal("github-read-failed", ci.Cause);
+    }
+
+    [Fact]
+    public void ActionsDistinctRunContextConflictTakesPrecedenceOverUnattributedAttemptLimit()
+    {
+        using var host = new TempHost();
+        var runner = new FakeGitHub((arguments, _) => arguments[3] switch
+        {
+            var endpoint when endpoint.StartsWith($"repos/{Repo}/commits/{Head}/check-runs?", StringComparison.Ordinal) => Json($$"""
+                {"total_count":2,"check_runs":[
+                  {"id":115,"name":"build","status":"completed","conclusion":"success","head_sha":"{{Head}}","app":{"slug":"github-actions"},"details_url":"https://github.com/{{Repo}}/actions/runs/70"},
+                  {"id":116,"name":"build","status":"completed","conclusion":"failure","head_sha":"{{Head}}","app":{"slug":"github-actions"},"details_url":"https://github.com/{{Repo}}/actions/runs/71"}
+                ]}
+                """),
+            $"repos/{Repo}/actions/runs/70" => Json($$"""{"id":70,"head_sha":"{{Head}}","run_attempt":2}"""),
+            $"repos/{Repo}/actions/runs/71" => Json($$"""{"id":71,"head_sha":"{{Head}}","run_attempt":2}"""),
+            _ => DefaultResponse(arguments),
+        });
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        Assert.Equal(2, snapshot.Checks.Count(check => check.RunId is not null));
+        Assert.All(snapshot.Checks.Where(check => check.RunId is not null), check => Assert.Null(check.Attempt));
+        var ci = snapshot.Facts.Single(fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.Unavailable, ci.State);
+        Assert.Equal("github-check-run-identity-conflict", ci.Cause);
+        Assert.Equal(UnitStatusStates.IdentityConflict, ci.UnavailableClass);
     }
 
     [Fact]
@@ -526,7 +750,7 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
                   {"id":102,"name":"build","status":"completed","conclusion":"failure","head_sha":"{{Head}}","app":{"slug":"github-actions"},"details_url":"https://github.com/{{Repo}}/actions/runs/71"}
                 ]}
                 """),
-            $"repos/{Repo}/actions/runs/70" => Json($$"""{"id":70,"head_sha":"{{Head}}","run_attempt":3}"""),
+            $"repos/{Repo}/actions/runs/70" => Json($$"""{"id":70,"head_sha":"{{Head}}","run_attempt":1}"""),
             $"repos/{Repo}/actions/runs/71" => Json($$"""{"id":71,"head_sha":"{{Head}}","run_attempt":1}"""),
             _ => DefaultResponse(arguments),
         });
@@ -539,7 +763,7 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
         Assert.Equal(UnitStatusStates.IdentityConflict, ci.UnavailableClass);
         Assert.Equal("github-check-run-identity-conflict", ci.Cause);
         Assert.Equal(new long?[] { 70, 71 }, snapshot.Checks.Select(check => check.RunId).OrderBy(id => id).ToArray());
-        Assert.Equal(new int?[] { 1, 3 }, snapshot.Checks.Select(check => check.Attempt).OrderBy(attempt => attempt).ToArray());
+        Assert.Equal(new int?[] { 1, 1 }, snapshot.Checks.Select(check => check.Attempt).OrderBy(attempt => attempt).ToArray());
         Assert.Equal(2, ci.Evidence.Count);
     }
 
@@ -720,9 +944,21 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
             row.Body,
             row.CommitId,
             row.State,
-            $"2026-10-07T00:00:{index:D2}Z")).ToArray());
+            (string?)$"2026-10-07T00:00:{index:D2}Z")).ToArray());
 
-    private static string ReviewRowsWithIds(params (int Id, string Body, string? CommitId, string State, string SubmittedAt)[] rows) =>
+    private static string StructuredReviewBody(string unit, string kind, string verdict) => $$"""
+## Independent same-runtime subagent review: {{verdict}}
+- reviewer: independent same-runtime subagent review
+- runtime: codex
+- runtime version: codex-test
+- conductor runtime: codex
+- head SHA: {{Head}}
+- kind: {{kind}}
+- execution unit: {{unit}}
+- verdict: {{verdict}}
+""";
+
+    private static string ReviewRowsWithIds(params (int Id, string Body, string? CommitId, string State, string? SubmittedAt)[] rows) =>
         JsonSerializer.Serialize(rows.Select(row => new
         {
             id = row.Id,

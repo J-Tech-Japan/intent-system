@@ -71,6 +71,12 @@ internal sealed record UnitStatusEvidencePointer
     public DateTimeOffset? ClaimEpochClaimedAt { get; init; }
     public string? ClaimOperation { get; init; }
     public string? ClaimDisposition { get; init; }
+    public string? ClaimActor { get; init; }
+    public string? ClaimTeam { get; init; }
+    public DateTimeOffset? DisplacedClaimedAt { get; init; }
+    public string? ReviewVerdict { get; init; }
+    public string? ReviewState { get; init; }
+    public string? ReviewDisposition { get; init; }
     public required string Provenance { get; init; }
 }
 
@@ -87,6 +93,7 @@ internal sealed record UnitStatusObservedReview
     public string? RecordId { get; init; }
     public string? CitedRecordPath { get; init; }
     public string? Url { get; init; }
+    public string? Qualification { get; init; }
     public bool Dismissed { get; init; }
 }
 
@@ -101,6 +108,7 @@ internal sealed record UnitStatusObservedCheck
     public long? RunId { get; init; }
     public int? Attempt { get; init; }
     public string? AttemptBasis { get; init; }
+    public int? ReportedRunAttempt { get; init; }
     public string? Url { get; init; }
 }
 

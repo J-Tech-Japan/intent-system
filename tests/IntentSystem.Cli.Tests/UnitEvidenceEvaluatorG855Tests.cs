@@ -157,6 +157,74 @@ public sealed class UnitEvidenceEvaluatorG855Tests
         Assert.DoesNotContain("ready_to_merge", json.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void EvidenceDetailFieldsAreRetainedInJsonAndMarkdown()
+    {
+        var epoch = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var pointer = new UnitStatusEvidencePointer
+        {
+            Kind = "claim-record",
+            Path = ".intent-cli/claims/example.json",
+            RecordId = "takeover",
+            ExecutionUnit = "G855",
+            ClaimEpochClaimedAt = epoch,
+            ClaimOperation = "takeover",
+            ClaimDisposition = "takeover",
+            ClaimActor = "builder",
+            ClaimTeam = "intent-cli-dev",
+            DisplacedClaimedAt = DateTimeOffset.Parse("2026-09-30T00:00:00Z"),
+            ReviewVerdict = "request-changes",
+            ReviewState = "COMMENTED",
+            ReviewDisposition = "implementation-review",
+            Provenance = "fixture",
+        };
+        var input = Snapshot([Fact("design-claim-acquired", UnitStatusStates.Done) with { Evidence = [pointer] }]) with
+        {
+            Reviews =
+            [
+                new UnitStatusObservedReview
+                {
+                    Source = "github-pr-review", HeadSha = new string('a', 40), Verdict = "request-changes",
+                    ReviewState = "COMMENTED", RecordId = "review-901", Qualification = "implementation-review",
+                },
+            ],
+            Checks =
+            [
+                new UnitStatusObservedCheck
+                {
+                    Source = "check-run", Identity = "github-actions/build", RecordId = "check-901",
+                    Sha = new string('a', 40), Status = "completed", Conclusion = "success", RunId = 901,
+                    Attempt = 1, ReportedRunAttempt = 1, AttemptBasis = "actions-run-initial-attempt",
+                },
+            ],
+        };
+        var report = UnitEvidenceEvaluator.Evaluate(input);
+        using var json = new StringWriter();
+        using var markdown = new StringWriter();
+        UnitStatusRenderer.Write(json, report, "json");
+        UnitStatusRenderer.Write(markdown, report, "markdown");
+
+        using var parsed = JsonDocument.Parse(json.ToString());
+        var evidence = parsed.RootElement.GetProperty("steps").EnumerateArray()
+            .SelectMany(step => step.GetProperty("subchecks").EnumerateArray())
+            .Single(fact => fact.GetProperty("id").GetString() == "design-claim-acquired")
+            .GetProperty("evidence").EnumerateArray().Single();
+        Assert.Equal("builder", evidence.GetProperty("claim_actor").GetString());
+        Assert.Equal("intent-cli-dev", evidence.GetProperty("claim_team").GetString());
+        Assert.Equal("takeover", evidence.GetProperty("claim_operation").GetString());
+        Assert.Equal("COMMENTED", evidence.GetProperty("review_state").GetString());
+        Assert.Equal("request-changes", evidence.GetProperty("review_verdict").GetString());
+        Assert.Equal("implementation-review", evidence.GetProperty("review_disposition").GetString());
+        Assert.Contains($"claim_epoch_claimed_at=`{epoch:O}`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claim_disposition=`takeover`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claim_actor=`builder`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claim_team=`intent-cli-dev`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("review_verdict=`request-changes`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("review_state=`COMMENTED`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("review_disposition=`implementation-review`", markdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("record_id=`check-901`", markdown.ToString(), StringComparison.Ordinal);
+    }
+
     private static UnitStatusEvidenceSnapshot Snapshot(
         IReadOnlyList<UnitStatusFact> facts,
         string? applicability = UnitStatusStates.Done,

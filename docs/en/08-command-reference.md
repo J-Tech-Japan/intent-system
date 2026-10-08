@@ -622,11 +622,34 @@ the solo-conductor phases not applicable and skips GitHub reads. For
 solo-conductor, API reads are bound to the locally corroborated issue/PR and
 the observed PR head, with complete pagination within a 20-page bound and at
 most one retry if the head changes. The report inventories observed
-check-runs and commit statuses; it does not evaluate branch protection or
-required-check rules. A skipped or neutral check is `missing`, including a
-check conditionally skipped after another job failed; successful reading does
-not establish success. Read the state, cause, and unavailable-class counts
-together when assessing the observation.
+check-runs and commit statuses; check-runs use GitHub's `filter=all` so older
+and superseded rows remain visible. The API's `run_attempt` describes the
+current Actions run, not each check's attempt: when it is greater than one and
+the check cannot be tied to a specific attempt, the raw check is retained and
+CI is `unavailable` with a known `provenance-limit`. This report does not
+evaluate branch protection or required-check rules. A skipped or neutral check
+is `missing`, including a check conditionally skipped after another job failed;
+successful reading does not establish success. Pending GitHub reviews remain
+visible as evidence but do not satisfy posted-review or delta-review. Read the
+state, cause, and unavailable-class counts together when assessing the
+observation.
+
+Publication is `done` only when the publish record says `published` and its
+created issue identity matches the resolved repository and issue. Host PR
+linkage requires a matching `queue-state.json` `linked_pr`; a PR URL in the
+publish record alone is not enough. When the issue is known but no PR is linked,
+the command reads only that issue's labels and reports PR-bound facts as
+`missing` with `pr-not-linked`.
+
+Claim evidence comes from the configured metadata snapshot that is already
+available locally. An unset metadata branch is reported as a known provenance
+limit for claim facts; the command does not guess a canonical/default branch,
+fetch, or resolve ownership. A selected local ref and its object ID identify
+the snapshot read, not a guarantee that it is the remote canonical claim
+branch. In same-repository layouts, a source/write branch split or
+`same_repo_topology = false` can mean the selected snapshot does not contain a
+claim recorded elsewhere. Multiple Actions runs with the same check context
+remain an identity conflict when their rows cannot be distinguished.
 
 Exit 0 means observation completed, including when evidence is missing or the
 only unavailable facts are known `provenance-limit` cases. Exit 1 means an

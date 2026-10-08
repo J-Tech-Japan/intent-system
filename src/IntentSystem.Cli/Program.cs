@@ -32,9 +32,24 @@ internal static class Program
                 return UpdateCommand.Execute(args[1..], Console.Out);
             }
 
+            // G368: CI-packed private-preview artifacts expire 14 days
+            // after their build timestamp (G367 metadata). Once the
+            // expiry passes, fail closed BEFORE any workflow command or
+            // host-state lookup so operators see a single, clear
+            // "download a newer artifact" message regardless of the
+            // current working directory. `--version` and `update` are
+            // intentionally exempt (handled above) so the operator can inspect
+            // the embedded build/expiry trailer. Source builds
+            // (no PrivatePreview AssemblyMetadata) pass through.
+            if (PrivatePreviewExpiryGate.Check(Console.Out) == PrivatePreviewExpiryDecision.Expired)
+            {
+                return PrivatePreviewExpiryGate.ExpiredExitCode;
+            }
+
             // G855: unit status is a read-only historical observation. It
             // must not inherit CreateBootstrapContext's fallback domain when
-            // invoked from a metadata-free child checkout.
+            // invoked from a metadata-free child checkout, and remains behind
+            // the private-preview expiry gate above.
             if (UnitStatusCommand.IsStatusCommand(args))
             {
                 var statusCwd = Directory.GetCurrentDirectory();
@@ -49,6 +64,7 @@ internal static class Program
                     return UnitStatusCommand.ExecuteMetadataFree(args, statusCwd, Console.Out);
                 }
 
+                CliContext statusContext;
                 try
                 {
                     var statusConfigPath = CliRuntimeContracts.GetConfigPath(statusRoot);
@@ -58,32 +74,19 @@ internal static class Program
                             $"Configured host root '{statusRoot}' has no readable config at '{statusConfigPath}'.", Console.Out);
                     }
 
-                    var statusContext = new CliContext
+                    statusContext = new CliContext
                     {
                         RepoRoot = statusRoot,
                         Config = CliConfigLoader.LoadFromFile(statusConfigPath),
                     };
-                    return CommandRouter.Execute(args, statusContext, Console.Out);
                 }
                 catch (Exception exception) when (exception is DirectoryNotFoundException or FileNotFoundException
                     or InvalidOperationException or IOException or System.Text.Json.JsonException or Tomlyn.TomlException)
                 {
                     return UnitStatusCommand.ExecuteHostRefusal(args, exception.Message, Console.Out);
                 }
-            }
 
-            // G368: CI-packed private-preview artifacts expire 14 days
-            // after their build timestamp (G367 metadata). Once the
-            // expiry passes, fail closed BEFORE any workflow command or
-            // host-state lookup so operators see a single, clear
-            // "download a newer artifact" message regardless of the
-            // current working directory. `--version` is intentionally
-            // exempt (handled above) so the operator can still inspect
-            // the embedded build/expiry trailer. Source builds
-            // (no PrivatePreview AssemblyMetadata) pass through.
-            if (PrivatePreviewExpiryGate.Check(Console.Out) == PrivatePreviewExpiryDecision.Expired)
-            {
-                return PrivatePreviewExpiryGate.ExpiredExitCode;
+                return CommandRouter.Execute(args, statusContext, Console.Out);
             }
 
             var currentDirectory = Directory.GetCurrentDirectory();

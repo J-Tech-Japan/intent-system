@@ -13,6 +13,12 @@ internal interface IUnitStatusSnapshotReader
         string executionUnit,
         string domain,
         string team);
+
+    UnitStatusRemoteSnapshot ObserveGitHubIssue(
+        CliContext context,
+        string repo,
+        int issue,
+        string executionUnit);
 }
 
 internal sealed record UnitStatusClaimSnapshot

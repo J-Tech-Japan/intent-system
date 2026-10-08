@@ -130,7 +130,12 @@ intent-cli unit status --execution-unit <unit> --domain <domain> --team <team> -
 再承認を指示しません。mode/team の欠落や未解決時は GitHub read を行わず、
 記録済み non-solo mode は not-applicable を返します。
 skipped または neutral の CI 結果は `missing` です。他 job の失敗後に条件付きで実行対象外となった場合も同じで、
-この inventory は branch-protection の必須 check を推定しません。state、cause、unavailable class の count を合わせて確認してください。
+この inventory は branch-protection の必須 check を推定しません。check-run は過去の row も含めて読みます（`filter=all`）。
+Actions run が attempt 1 より進んでいて、API から個々の check の attempt を識別できない場合、check を保持したまま CI を
+provenance-limit による unavailable とします。GitHub pending review は表示しますが review fact を満たしません。issue は既知でも
+PR が未 link の場合、issue label は読めますが PR-bound fact は `pr-not-linked` を cause とする missing です。claim fact は設定済みの
+local metadata snapshot のみを使います。branch 未設定や source/write topology の差は claim provenance を制限し、default branch の
+推測や fetch は行いません。state、cause、unavailable class の count を合わせて確認してください。
 
 ## cross-runtime implementation review（G834 — preview-through-1.x）
 
