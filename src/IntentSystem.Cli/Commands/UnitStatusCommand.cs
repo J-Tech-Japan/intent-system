@@ -60,6 +60,7 @@ internal static class UnitStatusCommand
         var packetRoot = Path.GetFullPath(Path.Combine(root, ".intent-cli", "issues"));
         if (!Contained(packetRoot, packetDir)) return Empty(unit, "unit-invalid", "Unit path escaped packet root.", UnitStatusStates.InvalidRequest);
         var packetYaml = ReadText(GuideReachabilityRecord.ResolvePacketPath(root, unit), out var packetError);
+        var packetFileMissing = packetYaml is null && packetError is null;
         PacketYamlDocument? packet = null;
         if (packetYaml is not null && !PacketYamlDocument.TryParse(packetYaml, out packet, out var parseError)) packetError = parseError;
         var declaredDomain = packet?.Fields.GetValueOrDefault("implementation_issue_packet.domain")
@@ -263,7 +264,7 @@ internal static class UnitStatusCommand
                 UnitStatusStates.NotApplicable, "recorded-non-solo-mode", "All solo-conductor phases are not applicable.", null, mode);
         }
 
-        AddPacketFacts(facts, unit, root, packetDir, packetYaml, packetError, packet);
+        AddPacketFacts(facts, unit, root, packetDir, packetYaml, packetError, packetFileMissing, packet);
         AddQueueAndPublishFacts(facts, root, unit, domain, repo, issue, pr, publish, publishError,
             out var queueItem, out var queuePath, out var runEvents, out var runsPath, out var queueReadError, out var runsReadError);
         if (queueScanError is not null)
@@ -282,7 +283,7 @@ internal static class UnitStatusCommand
             && string.Equals(remote.HeadBefore, remote.HeadAfter, StringComparison.OrdinalIgnoreCase)
                 ? remote.HeadSha
                 : null;
-        var localReviews = AddCloseoutFacts(facts, root, unit, repo, pr, domain, team, packetYaml,
+        var localReviews = AddCloseoutFacts(facts, root, unit, repo, pr, domain, team, packetYaml, packetFileMissing,
             runEvents, runsPath, runsReadError, stableHead);
         facts.Add(new UnitStatusFact
         {
@@ -423,7 +424,7 @@ internal static class UnitStatusCommand
                     if (run.Pr is > 0) prs.Add(run.Pr.Value);
                     if (!string.IsNullOrWhiteSpace(run.LinkedIssue))
                     {
-                        if (TryParseGithubUrl(run.LinkedIssue, "issues", out var linkedRepo, out var linkedIssue))
+                        if (TryParseRunLinkedIssue(run.LinkedIssue, out var linkedRepo, out var linkedIssue))
                         { repos.Add(linkedRepo); issues.Add(linkedIssue); }
                         else invalid = true;
                     }
@@ -460,7 +461,7 @@ internal static class UnitStatusCommand
         IReadOnlyList<int> PullRequests,
         bool InvalidIdentity);
 
-    private static void AddPacketFacts(ICollection<UnitStatusFact> facts, string unit, string root, string directory, string? yaml, string? readError, PacketYamlDocument? packet)
+    private static void AddPacketFacts(ICollection<UnitStatusFact> facts, string unit, string root, string directory, string? yaml, string? readError, bool packetFileMissing, PacketYamlDocument? packet)
     {
         var packetPath = Path.Combine(".intent-cli", "issues", unit, "packet.yaml").Replace('\\', '/');
         var implementationPath = Path.Combine(directory, "implementation.md");
@@ -509,12 +510,12 @@ internal static class UnitStatusCommand
         }
         if (yaml is null)
         {
-            facts.Add(readError is null ? Missing("packet-current-validation", "packet-yaml-missing", "Current packet validation needs packet.yaml.")
-                : Unavailable("packet-current-validation", "packet-yaml-unreadable", readError, UnitStatusStates.ReadFailure));
-            facts.Add(Unavailable("guide-declaration", "guide-declaration-unreadable", "Current packet declaration cannot be read.", UnitStatusStates.ReadFailure));
-            facts.Add(readError is null
-                ? Missing("bug-chain-or-ruling", "source-links-not-recorded", "No packet was present to declare a source or ruling reference.")
-                : Unavailable("bug-chain-or-ruling", "packet-unreadable", readError, UnitStatusStates.ReadFailure));
+            facts.Add(packetFileMissing ? Missing("packet-current-validation", "packet-file-missing", "Current packet validation needs packet.yaml.")
+                : Unavailable("packet-current-validation", "packet-yaml-unreadable", readError ?? "packet.yaml could not be read.", UnitStatusStates.ReadFailure));
+            facts.Add(packetFileMissing
+                ? Missing("guide-declaration", "packet-declaration-absent", "No packet was present to declare guide reachability.")
+                : Unavailable("guide-declaration", "guide-declaration-unreadable", "Current packet declaration cannot be read.", UnitStatusStates.ReadFailure));
+            AddSourceArtifactFact(facts, root, unit, packetPath, packet, packetFileMissing);
             return;
         }
         var validation = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
@@ -543,15 +544,17 @@ internal static class UnitStatusCommand
         }
         catch (Exception exception) when (IsReadException(exception))
         { facts.Add(Unavailable("guide-declaration", "guide-declaration-unreadable", exception.Message, UnitStatusStates.ReadFailure)); }
-        AddSourceArtifactFact(facts, root, unit, packetPath, packet);
+        AddSourceArtifactFact(facts, root, unit, packetPath, packet, packetFileMissing);
     }
 
     private static void AddSourceArtifactFact(ICollection<UnitStatusFact> facts, string root, string unit,
-        string packetPath, PacketYamlDocument? packet)
+        string packetPath, PacketYamlDocument? packet, bool packetFileMissing = false)
     {
         if (packet is null)
         {
-            facts.Add(Unavailable("bug-chain-or-ruling", "packet-unparseable", "The packet source declaration could not be read from an unparseable packet.", UnitStatusStates.ReadFailure));
+            facts.Add(packetFileMissing
+                ? Missing("bug-chain-or-ruling", "packet-file-missing", "No packet was present to declare a source or ruling reference.")
+                : Unavailable("bug-chain-or-ruling", "packet-unparseable", "The packet source declaration could not be read from an unparseable packet.", UnitStatusStates.ReadFailure));
             return;
         }
         var sourceReference = packet?.Fields.GetValueOrDefault("implementation_issue_packet.source_artifact")
@@ -601,6 +604,25 @@ internal static class UnitStatusCommand
             return;
         }
 
+        UnitStatusFact SourceReportReadFailure(string path, string error)
+        {
+            var relativePath = Path.GetRelativePath(root, Path.GetFullPath(path)).Replace('\\', '/');
+            var sourceDescriptor = sourceUrl ?? source;
+            return Unavailable("bug-chain-or-ruling", "source-report-unreadable",
+                $"{error} Source reference '{sourceDescriptor}' could not be read from canonical report path '{relativePath}'.",
+                UnitStatusStates.ReadFailure) with
+            {
+                Evidence = [new UnitStatusEvidencePointer
+                {
+                    Kind = "bug-report-artifact",
+                    Path = relativePath,
+                    Url = sourceUrl,
+                    ExecutionUnit = unit,
+                    Provenance = "attempted-canonical-source-inventory-read",
+                }],
+            };
+        }
+
         var bugsRootPath = Path.GetFullPath(Path.Combine(root, ".intent-cli", "bugs"));
         if (explicitReportPath is null && !Directory.Exists(bugsRootPath))
         {
@@ -625,7 +647,7 @@ internal static class UnitStatusCommand
         }
         catch (Exception exception) when (IsReadException(exception))
         {
-            facts.Add(Unavailable("bug-chain-or-ruling", "source-inventory-unreadable", exception.Message, UnitStatusStates.ReadFailure));
+            facts.Add(SourceReportReadFailure(bugsRootPath, exception.Message));
             return;
         }
         if (reportPaths.Length > 500)
@@ -648,7 +670,7 @@ internal static class UnitStatusCommand
             var yaml = ReadText(fullPath, out var readError);
             if (yaml is null)
             {
-                facts.Add(Unavailable("bug-chain-or-ruling", "source-report-unreadable", readError ?? "A canonical bug report disappeared during observation.", UnitStatusStates.ReadFailure));
+                facts.Add(SourceReportReadFailure(fullPath, readError ?? "A canonical bug report disappeared during observation."));
                 return;
             }
 
@@ -656,7 +678,7 @@ internal static class UnitStatusCommand
             try { report = BugReportArtifactYaml.Deserialize(yaml); }
             catch (Exception exception) when (IsReadException(exception))
             {
-                facts.Add(Unavailable("bug-chain-or-ruling", "source-report-unreadable", exception.Message, UnitStatusStates.ReadFailure));
+                facts.Add(SourceReportReadFailure(fullPath, exception.Message));
                 return;
             }
             var canonicalReportRef = BugReportArtifactPathResolver.Resolve(report.BugId);
@@ -842,6 +864,10 @@ internal static class UnitStatusCommand
                 ? Missing("publication-artifact", "publication-artifact-absent", "No publish artifact exists for this unit.")
             : lifecycleContradictsStatus || publish.PublishStatus is not ("drafted" or "issue-created" or "published")
                 ? Unavailable("publication-artifact", "publication-status-identity-conflict", "Publish status and lifecycle identity are contradictory or unsupported.", UnitStatusStates.IdentityConflict)
+            : publish.PublishStatus == "issue-created"
+                && (publish.LifecycleState is null or IssuePublishLifecycle.IssueCreated)
+                && issueUrlIsExact
+                ? Done("publication-artifact", "issue-created-observed", "The publish artifact records a newly created issue with matching repository and issue identity.")
             : publish.PublishStatus == "published" && issueUrlIsExact
                 ? Done("publication-artifact", "publication-issue-published", "The publish artifact records a published issue with matching repository and issue identity.")
             : publish.PublishStatus == "published"
@@ -855,19 +881,26 @@ internal static class UnitStatusCommand
             catch (Exception exception) when (IsReadException(exception)) { runsError = exception.Message; }
         }
         var runsEvidence = LocalFileEvidence(root, runsPath, "runs-jsonl", unit, "runs-log-read");
-        var issueEvents = runs.Where(item => item.Event == "issue-published").ToArray();
-        var matchingIssueEvent = issue is > 0 && repo is not null
-            ? issueEvents.FirstOrDefault(item => MatchesPublishedIssue(item, repo, issue.Value))
+        var issueEvents = runs.Where(item => item.Event is "issue-created" or "issue-published").ToArray();
+        var issueCreatedEvents = issueEvents.Where(item => item.Event == "issue-created").ToArray();
+        var issuePublishedEvents = issueEvents.Where(item => item.Event == "issue-published").ToArray();
+        var matchingCreatedEvent = issue is > 0 && repo is not null
+            ? issueCreatedEvents.FirstOrDefault(item => MatchesPublishedIssue(item, repo, issue.Value))
+            : null;
+        var matchingPublishedEvent = issue is > 0 && repo is not null
+            ? issuePublishedEvents.FirstOrDefault(item => MatchesPublishedIssue(item, repo, issue.Value))
             : null;
         var issueFact = runsError is not null
             ? Unavailable("issue-published-run", "runs-unreadable", runsError, UnitStatusStates.ReadFailure)
             : issueEvents.Length == 0
-                ? Missing("issue-published-run", "issue-published-run-absent", "No matching issue-published run event exists.")
-                : matchingIssueEvent is not null
+                ? Missing("issue-published-run", "issue-published-run-absent", "No matching issue-created or issue-published run event exists.")
+                : matchingPublishedEvent is not null
                     ? Done("issue-published-run", "issue-published-run-recorded", "A matching issue-published run event exists.")
-                    : issueEvents.Any(item => string.IsNullOrWhiteSpace(item.LinkedIssue))
-                        ? Unavailable("issue-published-run", "run-identity-unrecorded", "An issue-published event lacks the issue URL needed for exact identity.", UnitStatusStates.ProvenanceLimit)
-                        : Unavailable("issue-published-run", "run-identity-conflict", "Issue-published event identity disagrees with the resolved issue/repository.", UnitStatusStates.IdentityConflict);
+                : matchingCreatedEvent is not null
+                    ? Done("issue-published-run", "issue-created-run-recorded", "A matching canonical issue-created run event exists.")
+                : issueEvents.Any(item => string.IsNullOrWhiteSpace(item.LinkedIssue))
+                        ? Unavailable("issue-published-run", "run-identity-unrecorded", "An issue lifecycle event lacks the issue descriptor needed for exact identity.", UnitStatusStates.ProvenanceLimit)
+                        : Unavailable("issue-published-run", "run-identity-conflict", "Issue lifecycle event identity disagrees with the resolved issue/repository.", UnitStatusStates.IdentityConflict);
         if (runsEvidence is not null)
         {
             issueFact = issueFact with
@@ -1050,7 +1083,7 @@ internal static class UnitStatusCommand
     }
 
     private static IReadOnlyList<UnitStatusObservedReview> AddCloseoutFacts(ICollection<UnitStatusFact> facts, string root, string unit, string? repo, int? pr,
-        string domain, string team, string? yaml, IReadOnlyList<RunEvent> runs, string runsPath, string? runsReadError, string? currentHead)
+        string domain, string team, string? yaml, bool packetFileMissing, IReadOnlyList<RunEvent> runs, string runsPath, string? runsReadError, string? currentHead)
     {
         CrossRuntimeReviewReadResult? review = repo is not null && pr is > 0 ? CrossRuntimeReviewStore.Read(root, repo, pr.Value) : null;
         var matching = review?.Records.Where(item => item.Record.ExecutionUnit == unit && item.Record.Domain == domain && item.Record.Team == team
@@ -1100,7 +1133,9 @@ internal static class UnitStatusCommand
         if (yaml is null)
         {
             foreach (var id in new[] { "architect-knowledge-writeback", "orchestrator-knowledge-writeback", "guide-reachability" })
-                facts.Add(Unavailable(id, "packet-unavailable", "Packet declaration is unavailable.", UnitStatusStates.ReadFailure));
+                facts.Add(packetFileMissing
+                    ? Missing(id, "packet-file-missing", "Packet declaration is absent because packet.yaml is missing.")
+                    : Unavailable(id, "packet-unavailable", "Packet declaration is unavailable.", UnitStatusStates.ReadFailure));
             return orderedLocalReviews;
         }
         KnowledgeWriteBackDeclaration declaration;
@@ -1340,6 +1375,28 @@ internal static class UnitStatusCommand
         repo = parts[0] + "/" + parts[1]; return true;
     }
 
+    private static bool TryParseRunLinkedIssue(string? value, out string repo, out int number)
+    {
+        if (TryParseGithubUrl(value, "issues", out repo, out number) && SafeRepo(repo)) return true;
+
+        repo = "";
+        number = 0;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var separator = value.LastIndexOf('#');
+        if (separator <= 0 || separator != value.IndexOf('#')) return false;
+        var parsedRepo = value[..separator];
+        if (!SafeRepo(parsedRepo)
+            || !int.TryParse(value[(separator + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out number)
+            || number <= 0)
+        {
+            number = 0;
+            return false;
+        }
+
+        repo = parsedRepo;
+        return true;
+    }
+
     private static bool SafeRepo(string value) => value.Split('/') is { Length: 2 } parts
         && parts.All(part => part.Length > 0 && !part.Contains("..", StringComparison.Ordinal)
             && part.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'));
@@ -1426,7 +1483,7 @@ internal static class UnitStatusCommand
 
     private static bool MatchesPublishedIssue(RunEvent run, string repo, int issue)
     {
-        if (!TryParseGithubUrl(run.LinkedIssue, "issues", out var linkedRepo, out var linkedIssue)
+        if (!TryParseRunLinkedIssue(run.LinkedIssue, out var linkedRepo, out var linkedIssue)
             || !string.Equals(linkedRepo, repo, StringComparison.OrdinalIgnoreCase)
             || linkedIssue != issue)
         {

@@ -81,6 +81,56 @@ public sealed class UnitStatusReadAdapterG855Tests
         Assert.Equal(UnitStatusStates.ReadFailure, wrongSha.Facts.Single(fact => fact.Id == "observed-ci").UnavailableClass);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CommitStatusTiedHighestIdWithConflictingDispositionIsUnavailableRegardlessOfResponseOrder(bool reverse)
+    {
+        using var host = new TempHost();
+        var rows = reverse
+            ? new[] { (Id: 900, State: "failure"), (Id: 800, State: "success"), (Id: 900, State: "success") }
+            : new[] { (Id: 900, State: "success"), (Id: 800, State: "success"), (Id: 900, State: "failure") };
+        var statusJson = JsonSerializer.Serialize(rows.Select(row => new { id = row.Id, context = "ci/unit", state = row.State }));
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith($"repos/{Repo}/commits/{Head}/statuses?", StringComparison.Ordinal)
+            ? Json(statusJson)
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var ci = snapshot.Facts.Single(fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.Unavailable, ci.State);
+        Assert.Equal("github-status-identity-conflict", ci.Cause);
+        Assert.Equal(UnitStatusStates.IdentityConflict, ci.UnavailableClass);
+        Assert.Equal(3, snapshot.Checks.Count);
+        Assert.Equal(new[] { "900", "900" }, ci.Evidence.Select(item => item.RecordId).OrderBy(id => id, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
+    public void CommitStatusIdenticalDuplicateAtHighestIdIsAcceptedAndSupersedesOlderDifferentId()
+    {
+        using var host = new TempHost();
+        var statusJson = JsonSerializer.Serialize(new[]
+        {
+            new { id = 800, context = "ci/unit", state = "failure" },
+            new { id = 900, context = "ci/unit", state = "success" },
+            new { id = 900, context = "ci/unit", state = "success" },
+        });
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith($"repos/{Repo}/commits/{Head}/statuses?", StringComparison.Ordinal)
+            ? Json(statusJson)
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var ci = snapshot.Facts.Single(fact => fact.Id == "observed-ci");
+        Assert.Equal(UnitStatusStates.Done, ci.State);
+        Assert.Equal("observed-ci-success", ci.Cause);
+        Assert.Single(ci.Evidence);
+        Assert.Equal("900", Assert.Single(ci.Evidence).RecordId);
+        Assert.Equal(3, snapshot.Checks.Count);
+    }
+
     [Fact]
     public void ReadAdapterRejectsUnlistedGithubRequestsBeforeRunner()
     {
@@ -958,6 +1008,67 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
         Assert.Equal("request-changes", Assert.Single(delta.Evidence).ReviewVerdict);
     }
 
+    [Theory]
+    [InlineData("submitted-missing-user")]
+    [InlineData("submitted-null-user")]
+    [InlineData("submitted-string-user")]
+    [InlineData("submitted-missing-login")]
+    [InlineData("submitted-blank-login")]
+    [InlineData("submitted-wrong-user-kind")]
+    [InlineData("submitted-missing-time")]
+    [InlineData("submitted-null-time")]
+    [InlineData("submitted-malformed-time")]
+    [InlineData("submitted-wrong-time-kind")]
+    [InlineData("submitted-object-time")]
+    [InlineData("submitted-array-time")]
+    [InlineData("pending-wrong-time-kind")]
+    public void MalformedSubmittedReviewIdentityOrTimeMakesReviewFactsUnavailableEvenWithValidSibling(string variant)
+    {
+        using var host = new TempHost();
+        var body = StructuredReviewBody("G855", "implementation", "approve");
+        var state = variant.StartsWith("pending-", StringComparison.Ordinal) ? "PENDING" : "APPROVED";
+        var submittedAt = variant switch
+        {
+            "submitted-missing-time" => null,
+            "submitted-null-time" => "null",
+            "submitted-malformed-time" => JsonSerializer.Serialize("not-a-timestamp"),
+            "submitted-wrong-time-kind" or "pending-wrong-time-kind" => "true",
+            "submitted-object-time" => "{}",
+            "submitted-array-time" => "[]",
+            _ => JsonSerializer.Serialize("2026-10-07T00:00:01Z"),
+        };
+        var user = variant switch
+        {
+            "submitted-missing-user" => null,
+            "submitted-null-user" => "null",
+            "submitted-string-user" => JsonSerializer.Serialize("reviewer"),
+            "submitted-missing-login" => "{}",
+            "submitted-blank-login" => JsonSerializer.Serialize(new { login = "" }),
+            "submitted-wrong-user-kind" => JsonSerializer.Serialize(new { login = 41 }),
+            _ => JsonSerializer.Serialize(new { login = "reviewer" }),
+        };
+        var malformed = ReviewRowWithOptionalFields(401, body, state, submittedAt, user);
+        var validSibling = ReviewRowWithOptionalFields(
+            402, body, "COMMENTED", JsonSerializer.Serialize("2026-10-07T00:00:02Z"), JsonSerializer.Serialize(new { login = "other-reviewer" }));
+        var runner = new FakeGitHub((arguments, _) => arguments[3].StartsWith($"repos/{Repo}/pulls/{PullRequest}/reviews?", StringComparison.Ordinal)
+            ? Json($"[{malformed},{validSibling}]")
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var posted = snapshot.Facts.Single(fact => fact.Id == "posted-review");
+        var delta = snapshot.Facts.Single(fact => fact.Id == "delta-review");
+        Assert.Equal(UnitStatusStates.Unavailable, posted.State);
+        Assert.Equal("github-review-invalid", posted.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, posted.UnavailableClass);
+        Assert.Equal(UnitStatusStates.Unavailable, delta.State);
+        Assert.Equal("github-review-invalid", delta.Cause);
+        Assert.Equal(UnitStatusStates.ReadFailure, delta.UnavailableClass);
+        Assert.Contains(snapshot.Reviews, review => review.RecordId == "402");
+        Assert.DoesNotContain(snapshot.Reviews, review => review.RecordId == "401");
+    }
+
     [Fact]
     public void PendingReviewDoesNotHideValidLocalDeltaReview()
     {
@@ -1045,6 +1156,34 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
         Assert.Equal("legacy-review-identity-unrecorded", posted.Cause);
         Assert.Equal(UnitStatusStates.ProvenanceLimit, posted.UnavailableClass);
         Assert.Equal(UnitStatusStates.Unavailable, snapshot.Facts.Single(fact => fact.Id == "delta-review").State);
+    }
+
+    [Fact]
+    public void CurrentStructuredReviewRemainsSufficientWhenNamedLegacyReviewIsAlsoObserved()
+    {
+        using var host = new TempHost();
+        var legacy = "Independent subagent review: LGTM\nNotes: historical prose without exact unit identity";
+        var current = StructuredReviewBody("G855", "implementation", "request-changes");
+        var runner = new FakeGitHub((arguments, _) => arguments[3].EndsWith("/reviews?per_page=100&page=1", StringComparison.Ordinal)
+            ? Json(ReviewRowsWithIds(
+                (320, current, Head, "CHANGES_REQUESTED", "2026-10-07T00:00:00Z"),
+                (321, legacy, Head, "COMMENTED", "2026-10-07T00:00:01Z")))
+            : DefaultResponse(arguments));
+
+        var snapshot = new UnitStatusReadAdapter(runner, new FakeGit()).ObserveGitHub(
+            host.Context, Repo, Issue, PullRequest, "G855", "intent-cli", "intent-cli-dev");
+
+        var posted = snapshot.Facts.Single(fact => fact.Id == "posted-review");
+        Assert.Equal(UnitStatusStates.Done, posted.State);
+        Assert.Contains(posted.Evidence, evidence => evidence.RecordId == "320" && evidence.HeadSha == Head);
+        Assert.Contains(posted.Evidence, evidence => evidence.RecordId == "321"
+            && evidence.ReviewDisposition == "legacy-review-identity-unrecorded");
+        var delta = snapshot.Facts.Single(fact => fact.Id == "delta-review");
+        Assert.Equal(UnitStatusStates.Done, delta.State);
+        Assert.Equal("delta-review-current-head", delta.Cause);
+        Assert.Contains(delta.Evidence, evidence => evidence.RecordId == "321"
+            && evidence.ReviewDisposition == "legacy-review-identity-unrecorded");
+        Assert.Contains(snapshot.Warnings, warning => warning.Contains("legacy review", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -1417,6 +1556,20 @@ Recorded as `{{citedRecord}}` by `intent-cli review cross-runtime record`.
             submitted_at = row.SubmittedAt,
             user = new { login = "reviewer" },
         }));
+
+    private static string ReviewRowWithOptionalFields(int id, string body, string state, string? submittedAtJson, string? userJson)
+    {
+        var fields = new List<string>
+        {
+            $"\"id\":{id}",
+            $"\"state\":{JsonSerializer.Serialize(state)}",
+            $"\"commit_id\":{JsonSerializer.Serialize(Head)}",
+            $"\"body\":{JsonSerializer.Serialize(body)}",
+        };
+        if (submittedAtJson is not null) fields.Add($"\"submitted_at\":{submittedAtJson}");
+        if (userJson is not null) fields.Add($"\"user\":{userJson}");
+        return "{" + string.Join(',', fields) + "}";
+    }
 
     private static GitHubCommandResult Json(string json) => new() { ExitCode = 0, StdOut = json, StdErr = "" };
 

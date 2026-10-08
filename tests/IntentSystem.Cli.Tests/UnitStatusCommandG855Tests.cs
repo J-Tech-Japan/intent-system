@@ -560,6 +560,41 @@ public sealed class UnitStatusCommandG855Tests
     }
 
     [Fact]
+    public void UnrelatedMalformedReportMakesSourceInventoryUnavailableWithPathAndProvenance()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        const string sourceUrl = "https://github.com/J-Tech-Japan/intent-system/issues/1861";
+        host.WritePacketAndPublishArtifact(sourceArtifact: sourceUrl);
+        host.WriteBugSourceChain("BUG-1861", sourceUrl);
+        var malformedPath = Path.Combine(host.Context.RepoRoot, ".intent-cli", "bugs", "UNRELATED.report.yaml");
+        File.WriteAllText(malformedPath, "bug_id: unrelated\n");
+        var reader = new FixedReader(new UnitStatusRemoteSnapshot
+        {
+            State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha, Facts = [],
+        });
+        using var writer = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"], writer, reader);
+
+        Assert.Equal(1, exit);
+        using var report = JsonDocument.Parse(writer.ToString());
+        var source = TempHost.FindSubcheck(report.RootElement, "bug-chain-or-ruling");
+        Assert.Equal("unavailable", source.GetProperty("state").GetString());
+        Assert.Equal("source-report-unreadable", source.GetProperty("cause").GetString());
+        Assert.Equal("read-failure", source.GetProperty("unavailable_class").GetString());
+        Assert.Contains(sourceUrl, source.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains(".intent-cli/bugs/UNRELATED.report.yaml", source.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        var attempted = Assert.Single(source.GetProperty("evidence").EnumerateArray());
+        Assert.Equal("bug-report-artifact", attempted.GetProperty("kind").GetString());
+        Assert.Equal(".intent-cli/bugs/UNRELATED.report.yaml", attempted.GetProperty("path").GetString());
+        Assert.Equal(sourceUrl, attempted.GetProperty("url").GetString());
+        Assert.Equal("attempted-canonical-source-inventory-read", attempted.GetProperty("provenance").GetString());
+        Assert.Equal("done", TempHost.FindSubcheck(report.RootElement, "publication-artifact").GetProperty("state").GetString());
+    }
+
+    [Fact]
     public void ExplicitUnsupportedRulingReferenceRemainsProvenanceLimited()
     {
         using var host = new TempHost();

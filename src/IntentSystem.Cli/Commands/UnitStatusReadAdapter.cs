@@ -37,10 +37,25 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             && string.IsNullOrWhiteSpace(projectConfig.MetadataBranch)
             && string.IsNullOrWhiteSpace(projectConfig.MetadataWriteBranch))
         {
+            var unconfiguredHeadSha = ReadGitText(context.RepoRoot, ["rev-parse", "--verify", "HEAD"], out var headError);
+            var unconfiguredHeadRef = ReadGitText(context.RepoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], out var headRefError);
+            var detachedHead = string.Equals(unconfiguredHeadRef, "HEAD", StringComparison.Ordinal);
+            if (detachedHead) unconfiguredHeadRef = null;
+            var freshnessErrors = new List<string>();
+            if (headError is not null) freshnessErrors.Add(headError);
+            else if (!IsObjectId(unconfiguredHeadSha ?? string.Empty)) freshnessErrors.Add("Local HEAD did not return a valid object ID.");
+            if (headRefError is not null) freshnessErrors.Add(headRefError);
+            else if (!detachedHead && string.IsNullOrWhiteSpace(unconfiguredHeadRef)) freshnessErrors.Add("The current local branch name was empty.");
+            var validLocalHeadSha = IsObjectId(unconfiguredHeadSha ?? string.Empty) ? unconfiguredHeadSha : null;
+            var detail = "local-claim-ref-unavailable: no configured local metadata branch is available; this reader does not infer or fetch a canonical claim branch.";
+            if (freshnessErrors.Count > 0)
+                detail += " Local HEAD/ref freshness read failure: " + string.Join(" ", freshnessErrors);
             return ClaimFailure(
                 "local-claim-ref-unavailable",
-                "local-claim-ref-unavailable: no configured local metadata branch is available; this reader does not infer or fetch a canonical claim branch.",
-                UnitStatusStates.ProvenanceLimit);
+                detail,
+                freshnessErrors.Count == 0 ? UnitStatusStates.ProvenanceLimit : UnitStatusStates.ReadFailure,
+                localHeadSha: validLocalHeadSha,
+                localHeadRef: unconfiguredHeadRef);
         }
 
         try
@@ -438,6 +453,7 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             out var reviewItems,
             out var reviewFailure);
         var reviewRows = new List<UnitStatusObservedReview>();
+        var legacyReviewEvidence = new List<UnitStatusEvidencePointer>();
         var reviewIdentityFailure = false;
         var reviewNamedUnstructured = false;
         var reviewReadFailure = false;
@@ -455,6 +471,12 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
                     reviewReadFailure |= failureKind == ReviewParseFailure.Malformed;
                     if (failureKind is ReviewParseFailure.Malformed or ReviewParseFailure.IdentityConflict)
                         reviewFailureDetail = parseDetail;
+                    if (failureKind == ReviewParseFailure.ProvenanceLimit)
+                    {
+                        var legacyEvidence = LegacyReviewEvidence(item, repo, pullRequest);
+                        legacyReviewEvidence.Add(legacyEvidence);
+                        warnings.Add($"GitHub review {legacyEvidence.RecordId ?? "(unknown)"} is a named legacy review without complete identity; it is retained as provenance only.");
+                    }
                     continue;
                 }
 
@@ -474,14 +496,17 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         reviewRows = orderedReviewRows.ToList();
 
         var reviewInventoryReadable = reviewReadOk && !reviewReadFailure;
-        facts.Add(reviewInventoryReadable && reviewIdentityFailure
+        var postedReviewFact = reviewInventoryReadable && reviewIdentityFailure
             ? UnavailableFact("posted-review", "review-identity-conflict",
                 "A structured named review has mismatched or invalid identity. " + reviewFailureDetail, UnitStatusStates.IdentityConflict)
             : reviewReadOk && reviewReadFailure
                 ? UnavailableFact("posted-review", "github-review-invalid", reviewFailureDetail, UnitStatusStates.ReadFailure)
             : reviewReadOk
             ? ReviewFact(reviewRows, headBefore, reviewNamedUnstructured, $"https://github.com/{repo}/pull/{pullRequest}")
-            : UnavailableFact("posted-review", reviewFailure.Cause, reviewFailure.Detail, UnitStatusStates.ReadFailure));
+            : UnavailableFact("posted-review", reviewFailure.Cause, reviewFailure.Detail, UnitStatusStates.ReadFailure);
+        if (legacyReviewEvidence.Count > 0)
+            postedReviewFact = postedReviewFact with { Evidence = postedReviewFact.Evidence.Concat(legacyReviewEvidence).ToArray() };
+        facts.Add(postedReviewFact);
 
         var checks = new List<UnitStatusObservedCheck>();
         var ciFailures = new List<UnitStatusReadFailure>();
@@ -616,24 +641,30 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
         var deltaOrderingValid = UnitEvidenceEvaluator.TryOrderReviewRows(deltaReviewRows, out var orderedDeltaReviewRows, out var deltaOrderingError);
         var deltaIdentityConflict = reviewIdentityFailure || !deltaOrderingValid;
         var deltaLocalReadFailure = localReviews.Unreadable.Count > 0;
+        var hasCurrentDeltaEvidence = orderedDeltaReviewRows.Any(review => IsSubmittedReview(review) && IsImplementationReview(review)
+            && string.Equals(review.HeadSha, headBefore, StringComparison.OrdinalIgnoreCase));
         var deltaReviewFailure = deltaIdentityConflict
             ? new UnitStatusReadFailure(
                 "review-identity-conflict",
                 !deltaOrderingValid ? deltaOrderingError : "Review history contains invalid identity.")
             : deltaLocalReadFailure
                 ? new UnitStatusReadFailure("review-history-unavailable", "One or more local review records could not be read or validated.")
-            : reviewNamedUnstructured
+            : reviewNamedUnstructured && !hasCurrentDeltaEvidence
                 ? new UnitStatusReadFailure("legacy-review-identity-unrecorded", "A named independent review lacks exact unit/head identity.")
-                : deltaFailure;
+            : deltaFailure;
         var deltaUnavailableClass = deltaIdentityConflict
             ? UnitStatusStates.IdentityConflict
             : deltaLocalReadFailure || !reviewInventoryReadable
                 ? UnitStatusStates.ReadFailure
-            : reviewNamedUnstructured ? UnitStatusStates.ProvenanceLimit : UnitStatusStates.ReadFailure;
-        facts.Add(BuildDeltaFact(orderedDeltaReviewRows, headBefore, executionUnit, repo, pullRequest,
-            reviewInventoryReadable && !reviewIdentityFailure && !reviewNamedUnstructured && !deltaLocalReadFailure && deltaOrderingValid,
+            : reviewNamedUnstructured && !hasCurrentDeltaEvidence ? UnitStatusStates.ProvenanceLimit : UnitStatusStates.ReadFailure;
+        var deltaReviewFact = BuildDeltaFact(orderedDeltaReviewRows, headBefore, executionUnit, repo, pullRequest,
+            reviewInventoryReadable && !reviewIdentityFailure && !deltaLocalReadFailure && deltaOrderingValid
+                && (!reviewNamedUnstructured || hasCurrentDeltaEvidence),
             deltaReviewFailure,
-            deltaUnavailableClass));
+            deltaUnavailableClass);
+        if (legacyReviewEvidence.Count > 0)
+            deltaReviewFact = deltaReviewFact with { Evidence = deltaReviewFact.Evidence.Concat(legacyReviewEvidence).ToArray() };
+        facts.Add(deltaReviewFact);
         var stableHead = string.Equals(headBefore, headAfter, StringComparison.OrdinalIgnoreCase);
         var blockingReadFailure = facts.FirstOrDefault(fact => fact.State == UnitStatusStates.Unavailable
             && fact.UnavailableClass != UnitStatusStates.ProvenanceLimit);
@@ -892,7 +923,19 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
 
         var reviewUrl = TryReadNullableString(item, "html_url", out var htmlUrl) ? htmlUrl : null;
         var reviewer = item.TryGetProperty("user", out var user) && TryReadString(user, "login", out var login) ? login : null;
-        var submittedAt = TryReadNullableDateTime(item, "submitted_at", out var at) ? at : null;
+        if (!TryReadNullableDateTime(item, "submitted_at", out var submittedAt))
+        {
+            failureKind = ReviewParseFailure.Malformed;
+            failureDetail = "Pull-request review response has an invalid submitted_at field.";
+            return false;
+        }
+        if (state is "COMMENTED" or "APPROVED" or "CHANGES_REQUESTED" or "DISMISSED"
+            && (string.IsNullOrWhiteSpace(reviewer) || submittedAt is null))
+        {
+            failureKind = ReviewParseFailure.Malformed;
+            failureDetail = "A submitted pull-request review is missing its reviewer login or valid submitted_at timestamp.";
+            return false;
+        }
         if (string.IsNullOrWhiteSpace(body)) return false;
 
         var parsed = ParseReviewBody(body);
@@ -976,6 +1019,22 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             Dismissed = dismissed,
         };
         return true;
+    }
+
+    private static UnitStatusEvidencePointer LegacyReviewEvidence(JsonElement item, string repo, int pullRequest)
+    {
+        var recordId = TryReadLong(item, "id", out var id) ? id.ToString(CultureInfo.InvariantCulture) : null;
+        var url = TryReadNullableString(item, "html_url", out var parsedUrl) ? parsedUrl : null;
+        return new UnitStatusEvidencePointer
+        {
+            Kind = "github-pr-review",
+            Url = url ?? $"https://github.com/{repo}/pull/{pullRequest}",
+            RecordId = recordId,
+            Repo = repo,
+            Pr = pullRequest,
+            ReviewDisposition = "legacy-review-identity-unrecorded",
+            Provenance = "named-unstructured-github-pr-review",
+        };
     }
 
     private static bool TryValidateCitedReviewRecord(
@@ -1802,8 +1861,17 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             }
             else if (group.Key.StartsWith("commit-status\0", StringComparison.Ordinal))
             {
-                authoritative.Add(group.OrderByDescending(check =>
-                    long.TryParse(check.RecordId, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0).First());
+                var latestRecordId = group.Max(check =>
+                    long.TryParse(check.RecordId, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0);
+                var latestRows = group.Where(check =>
+                    (long.TryParse(check.RecordId, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0) == latestRecordId).ToArray();
+                if (latestRows.Select(check => check.Status).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+                {
+                    return UnavailableFact("observed-ci", "github-status-identity-conflict",
+                        "The highest record ID for one commit-status context has conflicting dispositions.", UnitStatusStates.IdentityConflict)
+                        with { Evidence = latestRows.Select(ToCheckEvidence).ToArray() };
+                }
+                authoritative.Add(latestRows[0]);
             }
             else
             {
