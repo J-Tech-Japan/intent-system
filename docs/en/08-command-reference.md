@@ -732,8 +732,66 @@ refuses conservatively. The established claim resolver can perform its existing
 `git fetch`, updating remote-tracking refs, `FETCH_HEAD` and fetched objects;
 refusal still leaves labels and CI wait unchanged. The command reads the head
 before reviews and immediately before labels; GitHub does not offer an atomic
-label/SHA compare, so merge with `--match-head-commit`. There is no override,
-approval receipt, or completion/release gate; the gate assumes an honest seat.
+label/SHA compare, so merge with `--match-head-commit`. G856 adds no override or
+approval receipt; G857 separately gates eligible implementation claim releases.
+
+### Solo-conductor implementation claim release (G857 — preview-through-1.x)
+
+This gate applies only to `claim release` for an `execution-unit:<unit>` when
+the actor normalizes to builder (`implementation`/`builder`) and the complete
+actor/team pair is the current holder. Existing exact holder checks remain in
+force. The gate activates only when the explicit domain in the canonical unit
+packet resolves the held team to a recorded solo-conductor mode. Missing or
+ambiguous applicability evidence on a host with a solo entry refuses
+conservatively; a missing mode or resolved non-solo team keeps the old claim
+behavior.
+
+Each write attempt evaluates a fresh ff-only clone of the canonical claim
+branch: configured `metadata_write_branch` when present, otherwise the
+resolved origin default branch. Evaluation happens after holder verification
+and before writing history, deleting the claim, staging, committing, or
+pushing. A retry re-reads the new canonical snapshot. Candidate previews use
+one bounded temporary clone to report the same evidence decision, then clean
+it up; they may read the canonical remote during clone and pull, but do not
+fetch in the invoking checkout or run the stale-transaction root sweep. All
+preview writes stay in the owned temporary clone. Only evidence already
+published on the canonical branch counts. On a mixed host, any canonical solo
+entry plus a missing packet/domain refuses, even when the held team has no
+matching solo entry; the gate does not infer an exemption by scanning other
+domains or caller defaults.
+
+Required closeout evidence is one completed queue item for the unit with a
+safe linked PR in the packet's `target_repo`, plus matching canonical
+`pr-merged` and `closeout-recorded` events for that repository and PR. Required
+knowledge write-back needs one attributed architect and one attributed
+orchestrator record. Accepted role aliases normalize to those roles; targets
+are optional, and recorded target lists are reported without path-coverage
+checks. An explicit all-false declaration is `not-applicable` only when the
+existing G855 predicate finds the declaration key in
+`knowledge_updates.*.required` or `closeout_learning.write_back_required`;
+absence is missing and malformed declarations are unavailable. A declared
+guide route needs one record attributed to architect; `record.roles` describes
+recipients and cannot replace recorder attribution. Explicit
+`no_role_facing_surface: true` is `not-applicable`.
+
+```bash
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason <text> --format json
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason <text> --write --format json
+```
+
+An incomplete or unreadable duty returns `completion-blocked`, exit 1,
+`push_succeeded: false`, and a `solo_conductor_completion` snapshot with the
+canonical OID/ref, duty states, evidence paths, and recovery guidance. The
+active claim and holder/team remain unchanged. Record missing receipts with
+the supported local writers, stage only the exact owned receipt and still
+unpublished closeout paths, commit, and plain-push to the reported canonical
+target ref. Retry release after verifying canonical visibility. `--reason`
+does not override this gate. Unreadable, conflicting, duplicate, or immutable
+evidence includes `repair_unavailable_reason` when the existing writer cannot
+repair it by retry alone. No lifecycle, queue, run-log, or PR-transition writer
+is added by this release check.
 
 ### Pasted-evidence gate (G785)
 
