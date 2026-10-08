@@ -379,6 +379,39 @@ transition.
 claim-release behavior. Update every host binary that can release these claims
 before relying on the completion gate.
 
+## Solo-conductor stalled-work adoption window (G858 — preview-through-1.x)
+
+The read-only `automation stalled-work` start window applies only to existing
+knowledge-writeback debt (including recorded-uncommitted records) and
+guide-reachability debt. For a currently recorded `solo-conductor` mode, the
+implicit cutoff is the first transition into solo in that resolved domain/team
+entry. Same-mode sets and later delivery/solo toggles do not move it. The
+authority is the invoking host checkout's TeamModeStore resolution; the report
+does not fetch a different snapshot or infer a team from topology.
+
+Starts use the earliest exact-unit, repository-corroborated `issue-created` or
+`issue-published` event, active claim `claimed_at`, or displaced history
+`displaced_claimed_at`. A corroborated closeout before the cutoff proves
+historical existence, while a later closeout by itself leaves the start
+unknown. Team-scoped adoption also needs matching claim-team provenance;
+missing/conflicting provenance stays visible as unknown and a proven foreign
+team stays visible as foreign. Domain-wide mode needs exact domain/repository
+identity. Explicit `--since <ISO-8601>` is a query-wide override available in
+any mode, without team attribution, while retaining exact unit/repository
+corroboration.
+
+The existing `--knowledge-writeback-since` and
+`--guide-reachability-since` continue to mean closeout-time cutoffs. When
+combined with an active start window they intersect; absent explicit lane flags,
+the start window replaces those lanes' fixed August floors. With no start
+window the old floors and report shape remain. The index reads the same legacy
+`context.GetRunLogPath()` population as the existing collectors plus current
+active/history claim files; scoped runtime logs remain outside this debt
+population, and no migration or durable write is introduced. `debt_window`
+provenance appears only when a window is active/requested, and the Markdown and
+JSON surfaces report the same cutoff, scope, evidence, unknowns, and distinct
+unit counts.
+
 ## Cross-runtime design review and model selection (G835 — preview-through-1.x)
 
 G835 extends the declared-team cross-runtime review surface in two ways:

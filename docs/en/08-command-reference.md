@@ -793,6 +793,38 @@ evidence includes `repair_unavailable_reason` when the existing writer cannot
 repair it by retry alone. No lifecycle, queue, run-log, or PR-transition writer
 is added by this release check.
 
+### Solo-conductor stalled-work adoption window (G858 — preview-through-1.x)
+
+`automation stalled-work` can scope only existing knowledge-writeback debt
+(including recorded-uncommitted knowledge) and guide-reachability debt to the
+recorded first transition into `solo-conductor` for the resolved team entry.
+It does not filter live CI, claims, operator attention, review/repair,
+delegation, or backlog findings.
+
+```bash
+intent-cli automation stalled-work --domain <domain> --repo <owner/repo> \
+  [--team <team>] --format json
+intent-cli automation stalled-work --domain <domain> --repo <owner/repo> \
+  [--team <team>] --since <ISO-8601> --format json
+```
+
+The earliest corroborated `issue-created`/`issue-published` or active/history
+claim acquisition timestamp is the start. A matching closeout before the
+cutoff proves the unit already existed; a later closeout alone cannot prove a
+start. `--since` opts any mode into an explicit, query-wide debt window and
+overrides the adoption cutoff. The existing lane flags remain closeout-time
+filters and intersect with an active start window. Without an active start
+window, the fixed August cutoffs and legacy result shape remain unchanged.
+
+The read uses the invoking checkout's existing legacy debt run log and claim
+files. It does not migrate scoped runtime logs or write state. Malformed,
+conflicting, or missing relevant identity/team evidence keeps pending debt
+visible with an explicit unknown/foreign diagnostic; later closeout activity
+cannot turn that unit into a clean historical exclusion. Window provenance is
+omitted when inactive and otherwise appears in JSON and Markdown as
+`debt_window`, including distinct-unit counts and evidence for historical
+exclusions.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by

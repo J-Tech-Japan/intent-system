@@ -305,6 +305,14 @@ retry ごとに history 書込みや claim 削除より前に fresh canonical br
 
 **前方互換性。** G857 を含まない intent-cli は従来の claim-release 動作を保ちます。この completion gate に依存する前に、対象 claim を release できるすべての host binary を更新してください。
 
+## solo-conductor stalled-work adoption window（G858 — preview-through-1.x）
+
+read-only の `automation stalled-work` start window が対象とするのは、既存の knowledge-writeback debt（recorded-uncommitted record を含む）と guide-reachability debt だけです。現在記録済みの `solo-conductor` mode では、暗黙 cutoff は解決された domain/team entry が最初に solo へ遷移した時刻です。同じ mode の再設定や、その後の delivery/solo toggle で cutoff は移動しません。正本は、呼び出し元 host checkout の TeamModeStore による解決結果です。別 snapshot を取得したり topology から team を推測したりしません。
+
+開始時刻には、正確な unit と repository を確認した最も早い `issue-created` / `issue-published` event、active claim の `claimed_at`、または displaced history の `displaced_claimed_at` を使います。cutoff より前の一致する closeout は historical existence の証拠ですが、後の closeout だけでは開始時刻は unknown です。team-scoped adoption には一致する claim-team provenance も必要です。provenance の欠落/conflict は unknown として、確実に別 team のものは foreign として表示します。domain-wide mode では domain/repository identity を正確に確認します。明示 `--since <ISO-8601>` は任意の mode で使える query-wide override で、team attribution は不要ですが、unit/repository の正確な corroboration は必要です。
+
+既存の `--knowledge-writeback-since` と `--guide-reachability-since` は引き続き closeout-time cutoff です。active start window と併用すると intersection になり、lane flag がなければ start window が固定 August floor に置き換わります。start window がなければ従来 floor と result shape を維持します。index は既存 collector と同じ legacy `context.GetRunLogPath()` population と active/history claim file を読みます。scoped runtime log は debt population 外のままで、移行や永続状態への書き込みは追加しません。`debt_window` は window が active/requested の場合だけ表示し、Markdown と JSON で cutoff、scope、evidence、unknown、distinct-unit count を一致させます。
+
 ## cross-runtime design review と model 選択（G835 — preview-through-1.x）
 
 G835 は宣言済み team の cross-runtime review を次の 2 点で拡張します。

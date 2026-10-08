@@ -679,6 +679,30 @@ intent-cli claim release --scope execution-unit:<unit> --actor implementation \
 
 duty が未完了または読めない場合、`completion-blocked`、exit 1、`push_succeeded: false` と、canonical OID/ref、duty state、evidence path、recovery guidance を含む `solo_conductor_completion` snapshot を返します。active claim と holder/team は保持されます。missing receipt は対応する local writer で記録し、厳密な owned receipt path と未公開の closeout path だけを stage、commit し、表示された canonical target ref に plain push します。canonical 上の公開を確認してから release を retry します。既存 writer が retry で修復できない unreadable、conflicting、duplicate、immutable evidence では `repair_unavailable_reason` を返します。`--reason` は gate の override になりません。この release check は lifecycle、queue、run-log、PR-transition writer を追加しません。
 
+### solo-conductor stalled-work adoption window（G858 — preview-through-1.x）
+
+`automation stalled-work` は、既存の knowledge-writeback debt（recorded-uncommitted knowledge を含む）と
+guide-reachability debt だけを、解決済み team entry の `solo-conductor` への最初の記録済み遷移に基づいて絞ります。
+live CI、claims、operator attention、review/repair、delegation、backlog は絞りません。
+
+```bash
+intent-cli automation stalled-work --domain <domain> --repo <owner/repo> \
+  [--team <team>] --format json
+intent-cli automation stalled-work --domain <domain> --repo <owner/repo> \
+  [--team <team>] --since <ISO-8601> --format json
+```
+
+開始時刻は、正確な identity が確認された最も早い `issue-created` / `issue-published`、または active/history claim の取得時刻です。
+cutoff より前の一致する closeout は unit が既に存在した証拠になりますが、後の closeout だけでは開始を証明できません。
+`--since` はどの mode でも明示的な query-wide debt window を有効化し、adoption cutoff を上書きします。
+既存 lane flag は closeout-time filter のままなので、active な start window と交差します。start window がなければ、固定 August cutoff と
+legacy result shape を維持します。
+
+read は invoking checkout の既存 legacy debt run log と claim file を使います。scoped runtime log へ移行せず、state も書きません。
+関連する identity/team evidence が欠落、malformed、conflicting の場合は pending debt を unknown/foreign diagnostic とともに表示します。
+後の closeout activity だけで unit を clean な historical exclusion にはしません。inactive 時は `debt_window` を省略し、active 時は
+distinct-unit count と historical exclusion evidence を JSON / Markdown の両方に表示します。
+
 ### 貼り付け evidence gate（G785）
 
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`

@@ -48,6 +48,178 @@ public sealed class SharedStaticSeamSerializationMetaTests
                 typeof(AutomationIssueBlockCommandTests),
                 typeof(AutomationStalledWorkCommandTests)),
             new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationKnowledgeWriteBackRecordCommand.UtcNowFactory",
+                typeof(KnowledgeWriteBackG564Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationKnowledgeWriteBackRecordCommand.UtcNowFactory",
+                typeof(RoleScopedCloseoutG698Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(AutomationHeartbeatCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(AutomationHeartbeatDecisionG597Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(AutomationStalledWorkCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(AutomationStalledWorkG805Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(AutomationStalledWorkG806Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(BranchLaneDecisionG669Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(ClaimCommandG679Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(ClarifyOpenScaffoldedPacketDetectionTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(G833SoloConductorStalledWorkTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(G841DegradeSiteStalledWorkTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(GuideReachabilityG645Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(HerdrTrialFindingsG582Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(KnowledgeWriteBackG564Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(LogicalRoleNormalizerG795Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(OperatorAttentionG596Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(OperatorMergeG678Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(RoleScopedCloseoutG698Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(StalledWorkAdoptionWindowG858Tests),
+                typeof(StalledWorkQuotaG673Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.CandidateListerFactory",
+                typeof(StalledWorkAdoptionWindowG858Tests),
+                typeof(TeamModeG692Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.GitCommandRunnerFactory",
+                typeof(AutomationStalledWorkCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.GitCommandRunnerFactory",
+                typeof(AutomationStalledWorkG805Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.GitCommandRunnerFactory",
+                typeof(AutomationStalledWorkG806Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.GitCommandRunnerFactory",
+                typeof(G833SoloConductorStalledWorkTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(AutomationHeartbeatCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(AutomationHeartbeatDecisionG597Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(AutomationStalledWorkCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(AutomationStalledWorkG805Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(AutomationStalledWorkG806Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(BranchLaneDecisionG669Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(ClaimCommandG679Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(ClarifyOpenScaffoldedPacketDetectionTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(G833SoloConductorStalledWorkTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(G841DegradeSiteStalledWorkTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(GuideReachabilityG645Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(HerdrTrialFindingsG582Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(KnowledgeWriteBackG564Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(LogicalRoleNormalizerG795Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(OperatorAttentionG596Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(OperatorMergeG678Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(RoleScopedCloseoutG698Tests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.AutomationStalledWorkCommand.UtcNowFactory",
+                typeof(StalledWorkAdoptionWindowG858Tests),
+                typeof(StalledWorkQuotaG673Tests)),
+            new SplitCollectionCase(
                 "IntentSystem.Cli.Commands.ClarifyOpenCommand.TimestampFactory",
                 typeof(AutomationStalledWorkCommandTests),
                 typeof(ClarifyOpenCommandTests)),
@@ -71,6 +243,62 @@ public sealed class SharedStaticSeamSerializationMetaTests
                 "IntentSystem.Cli.Commands.IssueBodyFileStager.FileWriteOverride",
                 typeof(G835PublishFlowTests),
                 typeof(G845TransmissionPrimitiveTests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueCreateCommand.GitCommandRunnerFactory",
+                typeof(CommandRouterTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueCreateCommand.GitCommandRunnerFactory",
+                typeof(G847IssueBodyGateTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueCreateCommand.GitCommandRunnerFactory",
+                typeof(IssueCreateCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueCreateCommand.PublisherFactory",
+                typeof(CommandRouterTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueCreateCommand.PublisherFactory",
+                typeof(G847IssueBodyGateTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueCreateCommand.PublisherFactory",
+                typeof(IssueCreateCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueCreateCommand.TimestampFactory",
+                typeof(CommandRouterTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssueCreateCommand.TimestampFactory",
+                typeof(IssueCreateCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssuePublishCommand.GitCommandRunnerFactory",
+                typeof(CommandRouterTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssuePublishCommand.GitCommandRunnerFactory",
+                typeof(IssuePublishCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssuePublishCommand.PublisherFactory",
+                typeof(CommandRouterTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssuePublishCommand.PublisherFactory",
+                typeof(IssuePublishCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssuePublishCommand.TimestampFactory",
+                typeof(CommandRouterTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
+            new SplitCollectionCase(
+                "IntentSystem.Cli.Commands.IssuePublishCommand.TimestampFactory",
+                typeof(IssuePublishCommandTests),
+                typeof(StalledWorkAdoptionWindowG858Tests)),
             new SplitCollectionCase(
                 "IntentSystem.Cli.Commands.PacketFileReader.ReadAllBytes",
                 typeof(G841Ac15Tests),
