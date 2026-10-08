@@ -33,3 +33,12 @@ src/IntentSystem.Cli/Commands/ScopedModelResolutionReaders.cs	ScopedModelResolut
 src/IntentSystem.Cli/Commands/ScopedModelResolutionRecord.cs	ScopedModelResolutionObservationResult	2
 src/IntentSystem.Cli/Commands/ScopedModelResolutionRecord.cs	ScopedModelResolutionObservedEvidence	2
 src/IntentSystem.Cli/Commands/ScopedModelResolutionRecord.cs	ScopedModelResolutionTargetObserver	1
+src/IntentSystem.Cli/Commands/UnitStatusCommand.cs	UnitStatusReadAdapter	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	ClaimCommand	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	ClaimHistoryRecord	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	ClaimRecord	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	GhCommandRunner	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	GitRemoteCommandRunner	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	IGitHubCommandRunner	2
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	IGitRemoteCommandRunner	2
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	UnitStatusReadAdapter	2

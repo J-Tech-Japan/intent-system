@@ -234,6 +234,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "unit",
+            Role = RoleChildImplementation,
+            Classification = ClassificationPrimary,
+            Mutability = MutabilityReadOnly,
+            RecommendedCaller = CallerChatAgent,
+            Purpose = "Read-only per-unit lifecycle evidence: `unit status` composes current local receipts and a bounded exact-head GitHub review/CI observation; unavailable provenance remains explicit and the result is never merge readiness."
+        },
+        new CommandGroupEntry
+        {
             Name = "queue",
             Role = RoleRecoveryDiagnostics,
             Classification = ClassificationSupport,

@@ -3,6 +3,8 @@
 - `MANIFEST.sha256` lists every file in this directory and the committed `base/` golden tree except `MANIFEST.sha256` itself. Verify it from this directory with `shasum -a 256 -c MANIFEST.sha256`.
 - `base/` is the byte-identity tree captured from merge base `a24cf8abfb88a323b2f0efe04fe2481c746d9e9f`; its README records the generator command, normalization, and OpenCode capture exclusions.
 - The no-launch source-guard tables are measured at merge base `a24cf8abfb88a323b2f0efe04fe2481c746d9e9f` and carry the abbreviated commit in each filename. There are no retained pre-G842 tables; the guard has no consumer for them.
+- G855 adds only the bounded `UnitStatusReadAdapter.cs` launch-token/type-reference/surface rows and its declared-type entry to these pinned tables; existing unrelated rows and the base C# path table are preserved. The pins cover the injected read runners, the required claim-path facade/record DTOs, and the adapter type declaration; its optional-argument constructor owns the default runners.
+- The G855 table edits do not change any `base/` golden artifact. `MANIFEST.sha256` is regenerated after the source-guard table and note updates.
 - **Scrub rule** (from 2026-09-17). A live capture is scrubbed before it is copied here.
   - Every occurrence of the operator email is replaced with `<operator-email>`.
   - Every occurrence of `/Users/tomohisa` is replaced with `<home>`.

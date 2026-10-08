@@ -133,6 +133,27 @@ must not use the model).
 affects every team on that host because the whole file fails to load. Refresh
 every intent-cli that reads the host before recording the mode.
 
+Use `intent-cli unit status --execution-unit <unit> --domain <domain> --team <team> --format json`
+to inspect the evidence for the ten-step unit loop described by this guide.
+It reads existing local records and a bounded, read-only GitHub snapshot. Its
+four states distinguish positive evidence, missing evidence, inapplicable
+phases, and unavailable evidence. Exit 0 means the observation completed; it
+does not mean the unit is complete or ready to merge. A stable
+`provenance-limit` finding is informational and is not a retry or
+re-approval instruction. Missing/unresolved mode and team context fail closed
+without GitHub reads; recorded non-solo mode returns not-applicable. A skipped
+or neutral CI result is `missing`, including a conditional skip after another
+job failed; this read-only inventory does not infer branch-protection
+requirements. Check-runs include all history (`filter=all`); if a current
+Actions run has advanced beyond attempt 1 and the API cannot associate each
+check with its attempt, the checks remain visible but CI is unavailable with a
+provenance-limit. Pending GitHub reviews are visible but do not satisfy review
+facts. A known issue without a linked PR still permits an issue-label read;
+PR-bound facts are missing with `pr-not-linked`. Claim facts use the configured
+local metadata snapshot only. An unset branch or a source/write topology split
+can limit claim provenance; the observer does not guess a default branch or
+fetch. Read the state, cause, and unavailable-class counts together.
+
 ## Cross-runtime implementation review (G834 — preview-through-1.x)
 
 A team can require that each implementation PR is also reviewed by a reviewer on

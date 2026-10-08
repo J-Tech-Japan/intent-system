@@ -44,6 +44,28 @@ public sealed class GitHubApiReadG674Tests : IDisposable
     }
 
     [Fact]
+    public void UnitStatusInventory_NamesEveryBoundedRestEndpointAndConsumedField()
+    {
+        var reads = GitHubApiReadInventory.UnitStatusRestReads;
+        Assert.Equal(6, reads.Count);
+        Assert.Contains(reads, read => read.Endpoint == "GET /repos/{owner}/{repo}/pulls/{pull_number} (read before and after the snapshot)"
+            && read.ConsumedFields.SequenceEqual(["number", "head.sha", "merged", "merge_commit_sha", "labels[].name"]));
+        Assert.Contains(reads, read => read.Endpoint == "GET /repos/{owner}/{repo}/issues/{issue_number}"
+            && read.ConsumedFields.SequenceEqual(["number", "labels[].name"]));
+        Assert.Contains(reads, read => read.Endpoint.Contains("/pulls/{pull_number}/reviews?per_page=100&page={n}", StringComparison.Ordinal)
+            && read.ConsumedFields.SequenceEqual(["id", "state", "commit_id", "body", "html_url", "user.login", "submitted_at"]));
+        Assert.Contains(reads, read => read.Endpoint.Contains("/commits/{sha}/check-runs?per_page=100&page={n}&filter=all", StringComparison.Ordinal)
+            && read.ConsumedFields.Contains("check_runs[].head_sha")
+            && read.ConsumedFields.Contains("check_runs[].app.slug")
+            && read.Bound.Contains("all-attempt", StringComparison.Ordinal));
+        Assert.Contains(reads, read => read.Endpoint.Contains("/commits/{sha}/statuses?per_page=100&page={n}", StringComparison.Ordinal)
+            && read.ConsumedFields.SequenceEqual(["request path {sha}", "id", "context", "state", "target_url"]));
+        Assert.Contains(reads, read => read.Endpoint.EndsWith("/actions/runs/{run_id}", StringComparison.Ordinal)
+            && read.ConsumedFields.SequenceEqual(["id", "head_sha", "run_attempt"]));
+        Assert.All(reads, read => Assert.False(string.IsNullOrWhiteSpace(read.Bound)));
+    }
+
+    [Fact]
     public void RestIssueArguments_UseReadOnlyIssuesEndpointAndPreserveLabelFilter()
     {
         var args = GhCliGitHubAutomationCandidateLister.BuildRestIssueListArguments(

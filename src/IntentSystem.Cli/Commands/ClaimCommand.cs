@@ -1858,6 +1858,44 @@ internal static class ClaimCommand
         return $"{ClaimsDirectory}/{digest}.json";
     }
 
+    /// <summary>
+    /// G855: describe the already-local claim snapshot paths without reading
+    /// files, consulting a remote default, or performing a fetch. The unit
+    /// status reader uses the configured tracking ref as an immutable local
+    /// snapshot and reports an absent configuration as unavailable.
+    /// </summary>
+    internal static (string ClaimPath, string HistoryDirectory, string MetadataRef) DescribeLocalReadPaths(
+        CliContext context,
+        string scope)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (!TryValidateScope(scope, out var scopeError)
+            || !scope.StartsWith("execution-unit:", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                string.IsNullOrEmpty(scopeError) ? "local claim snapshot requires execution-unit:<unit> scope." : scopeError,
+                nameof(scope));
+        }
+
+        var claimPath = ClaimPath(scope);
+        var claimName = Path.GetFileNameWithoutExtension(claimPath);
+        var historyDirectory = $"{ClaimsDirectory}/history/{claimName}";
+        var branch = ResolveConfiguredMetadataBranch(context);
+        if (string.IsNullOrWhiteSpace(branch))
+        {
+            throw new InvalidOperationException(
+                "local-claim-ref-unavailable: no configured metadata source branch is available for a local snapshot.");
+        }
+
+        if (!IsSafeRemoteBranch(branch))
+        {
+            throw new InvalidOperationException(
+                $"local-claim-ref-unavailable: configured metadata branch '{branch}' is not a safe branch name.");
+        }
+
+        return (claimPath, historyDirectory, RemoteTrackingRef(branch));
+    }
+
     private static ClaimTransactionResult Held(
         ClaimRequest request,
         string path,

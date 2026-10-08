@@ -11,8 +11,13 @@ namespace IntentSystem.Cli.Tests;
 [Collection(RunSubmitCommandCollection.Name)]
 public sealed class IssuePublishCommandTests
 {
-    [Fact]
-    public void Execute_GivenIssueCreatedArtifact_AppliesIntentTargetAndAdvancesPublishArtifact()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("issue-created")]
+    [InlineData("published")]
+    [InlineData("pr-created")]
+    [InlineData("closed-out")]
+    public void Execute_GivenIssueCreatedArtifact_AppliesIntentTargetAndPreservesLifecycle(string? lifecycleState)
     {
         using var tempDirectory = new TemporaryDirectory();
         var repoRoot = tempDirectory.CreateDirectory("repo");
@@ -22,7 +27,7 @@ public sealed class IssuePublishCommandTests
             CreatePacketYaml());
         tempDirectory.CreateFile(
             Path.Combine("repo", ".intent-cli", "issues", "G13", "publish.yaml"),
-            CreateIssueCreatedPublishYaml());
+            CreateIssueCreatedPublishYaml(lifecycleState));
         using var writer = new StringWriter();
         var publisher = new CapturingPublisher();
         var gitRunner = new CapturingGitCommandRunner();
@@ -47,6 +52,12 @@ public sealed class IssuePublishCommandTests
             Assert.Equal(73, artifact.CreatedIssueNumber);
             Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/73", artifact.CreatedIssueUrl);
             Assert.Equal("intent-target", artifact.PublishedLabelName);
+            Assert.Equal(lifecycleState, artifact.LifecycleState);
+            Assert.Equal(lifecycleState is "pr-created" or "closed-out" ? 86 : null, artifact.LinkedPrNumber);
+            Assert.Equal(lifecycleState is "pr-created" or "closed-out"
+                ? "https://github.com/J-Tech-Japan/intent-system/pull/86"
+                : null, artifact.LinkedPrUrl);
+            Assert.Equal(lifecycleState == "closed-out" ? "2026-04-22T00:00:00Z" : null, artifact.ClosedOutAt);
 
             var runEvents = RunLogSerializer.DeserializeAll(
                 File.ReadAllText(Path.Combine(repoRoot, ".intent-cli", "runs.jsonl")));
@@ -152,9 +163,9 @@ public sealed class IssuePublishCommandTests
             """;
     }
 
-    private static string CreateIssueCreatedPublishYaml()
+    private static string CreateIssueCreatedPublishYaml(string? lifecycleState = null)
     {
-        return
+        var artifact = IssuePublishArtifactYaml.Deserialize(
             """
             execution_unit: G13
             publish_status: issue-created
@@ -163,7 +174,16 @@ public sealed class IssuePublishCommandTests
             created_issue_number: 73
             created_issue_url: "https://github.com/J-Tech-Japan/intent-system/issues/73"
             published_label_name: null
-            """;
+            """);
+        return IssuePublishArtifactYaml.Serialize(artifact with
+        {
+            LifecycleState = lifecycleState,
+            LinkedPrNumber = lifecycleState is "pr-created" or "closed-out" ? 86 : null,
+            LinkedPrUrl = lifecycleState is "pr-created" or "closed-out"
+                ? "https://github.com/J-Tech-Japan/intent-system/pull/86"
+                : null,
+            ClosedOutAt = lifecycleState == "closed-out" ? "2026-04-22T00:00:00Z" : null,
+        });
     }
 
     private sealed class CapturingPublisher : IQueueDispatchPublisher

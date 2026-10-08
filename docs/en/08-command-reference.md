@@ -601,6 +601,76 @@ Operator-dogfooding prompt templates that wire these loops entirely through the
 deterministic worker/metadata commands live under
 [`docs/automation-templates/`](../automation-templates/README.md).
 
+### Per-unit evidence status (G855 — preview-through-1.x)
+
+```bash
+intent-cli unit status --execution-unit <unit> [--domain <domain>] [--team <team>] --format json|markdown
+```
+
+This read-only report brings together the existing local packet, queue,
+publish, runs, claim/history, closeout, and review records with a bounded
+read-only GitHub snapshot. JSON uses `schema_version: 1`; both formats show the
+ten solo-conductor phases, their subchecks, evidence pointers, causes, repair
+availability, freshness, and counts. The fixed states are `done`, `missing`,
+`not-applicable`, and `unavailable`. A missing fact is different from a read
+failure or unsupported historical provenance.
+
+Applicability uses only an exact current domain/team entry in
+`.intent-cli/team-mode.json`. Missing/default mode and unresolved team are
+unavailable, exit 1, and make no GitHub calls. A recorded non-solo mode marks
+the solo-conductor phases not applicable and skips GitHub reads. For
+solo-conductor, API reads are bound to the locally corroborated issue/PR and
+the observed PR head, with complete pagination within a 20-page bound and at
+most one retry if the head changes. The report inventories observed
+check-runs and commit statuses; check-runs use GitHub's `filter=all` so older
+and superseded rows remain visible. The API's `run_attempt` describes the
+current Actions run, not each check's attempt: when it is greater than one and
+the check cannot be tied to a specific attempt, the raw check is retained and
+CI is `unavailable` with a known `provenance-limit`. This report does not
+evaluate branch protection or required-check rules. A skipped or neutral check
+is `missing`, including a check conditionally skipped after another job failed;
+successful reading does not establish success. Pending GitHub reviews remain
+visible as evidence but do not satisfy posted-review or delta-review. Read the
+state, cause, and unavailable-class counts together when assessing the
+observation.
+
+Publication is `done` when `execution_unit` matches the requested unit, the
+created issue URL and number match the resolved repository and issue,
+`publish_status` is `issue-created` or `published`, and
+`lifecycle_state` is null/absent (the legacy baseline) or one of the canonical
+states at or after issue creation: `issue-created`, `published`, `pr-created`,
+or `closed-out`. The cause follows `publish_status`:
+`issue-created-observed` or `publication-issue-published`, respectively.
+Unsupported lifecycle values remain unavailable. Lifecycle state does not
+establish PR linkage or run/closeout evidence. The separate
+`issue-published-run` fact is
+`done` only for a matching unit/repository/issue lifecycle event: a canonical
+`issue-created` event yields `issue-created-run-recorded`, and `issue-published` yields
+`issue-published-run-recorded`. A matching issue artifact alone does not
+establish a run event. These observations do not prove that the automation
+`issue-publish` command ran or that `intent-target` was applied. Host PR linkage
+requires a matching `queue-state.json` `linked_pr`; a PR URL in the publish
+record alone is not enough. When the issue is known but no PR is linked, the
+command reads only that issue's labels and reports PR-bound facts as `missing`
+with `pr-not-linked`.
+
+Claim evidence comes from the configured metadata snapshot that is already
+available locally. An unset metadata branch is reported as a known provenance
+limit for claim facts; the command does not guess a canonical/default branch,
+fetch, or resolve ownership. A selected local ref and its object ID identify
+the snapshot read, not a guarantee that it is the remote canonical claim
+branch. In same-repository layouts, a source/write branch split or
+`same_repo_topology = false` can mean the selected snapshot does not contain a
+claim recorded elsewhere. Multiple Actions runs with the same check context
+remain an identity conflict when their rows cannot be distinguished.
+
+Exit 0 means observation completed, including when evidence is missing or the
+only unavailable facts are known `provenance-limit` cases. Exit 1 means an
+invalid request or a non-provenance observation failure. Neither exit code
+judges completion or merge readiness. Stable provenance limits, including a
+missing historical exact-head approval receipt or worker-completion receipt,
+are not retry or re-approval instructions.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by

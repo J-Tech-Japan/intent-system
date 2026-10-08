@@ -46,6 +46,50 @@ internal static class Program
                 return PrivatePreviewExpiryGate.ExpiredExitCode;
             }
 
+            // G855: unit status is a read-only historical observation. It
+            // must not inherit CreateBootstrapContext's fallback domain when
+            // invoked from a metadata-free child checkout, and remains behind
+            // the private-preview expiry gate above.
+            if (UnitStatusCommand.IsStatusCommand(args))
+            {
+                var statusCwd = Directory.GetCurrentDirectory();
+                if (UnitStatusCommand.IsHelpRequest(args))
+                {
+                    return UnitStatusCommand.ExecuteMetadataFree(args, statusCwd, Console.Out);
+                }
+
+                var statusRoot = RepoRootResolver.Resolve(statusCwd);
+                if (statusRoot is null)
+                {
+                    return UnitStatusCommand.ExecuteMetadataFree(args, statusCwd, Console.Out);
+                }
+
+                CliContext statusContext;
+                try
+                {
+                    var statusConfigPath = CliRuntimeContracts.GetConfigPath(statusRoot);
+                    if (!File.Exists(statusConfigPath))
+                    {
+                        return UnitStatusCommand.ExecuteHostRefusal(args,
+                            $"Configured host root '{statusRoot}' has no readable config at '{statusConfigPath}'.", Console.Out);
+                    }
+
+                    statusContext = new CliContext
+                    {
+                        RepoRoot = statusRoot,
+                        Config = CliConfigLoader.LoadFromFile(statusConfigPath),
+                    };
+                }
+                catch (Exception exception) when (exception is DirectoryNotFoundException or FileNotFoundException
+                    or InvalidOperationException or IOException or UnauthorizedAccessException
+                    or System.Text.Json.JsonException or Tomlyn.TomlException)
+                {
+                    return UnitStatusCommand.ExecuteHostRefusal(args, exception.Message, Console.Out);
+                }
+
+                return CommandRouter.Execute(args, statusContext, Console.Out);
+            }
+
             var currentDirectory = Directory.GetCurrentDirectory();
             if (IsIntentInitCommand(args)
                 || IsAutomationWorktreeCommand(args)

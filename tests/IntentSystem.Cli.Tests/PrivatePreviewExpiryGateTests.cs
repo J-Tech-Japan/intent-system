@@ -1,4 +1,5 @@
 using IntentSystem.Cli.Infrastructure;
+using IntentSystem.Cli;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -10,6 +11,7 @@ namespace IntentSystem.Cli.Tests;
 /// production read-from-running-assembly contract for subsequent
 /// tests.
 /// </summary>
+[Collection("WorkerNextActionSharedState")]
 public sealed class PrivatePreviewExpiryGateTests : IDisposable
 {
     public PrivatePreviewExpiryGateTests()
@@ -126,6 +128,40 @@ public sealed class PrivatePreviewExpiryGateTests : IDisposable
         var result = PrivatePreviewExpiryGate.Check(writer);
 
         Assert.Equal(PrivatePreviewExpiryDecision.Expired, result);
+    }
+
+    [Fact]
+    public void ProgramMain_UnitStatusHelpRemainsBehindPrivatePreviewExpiryGate()
+    {
+        var cwd = Directory.GetCurrentDirectory();
+        var temp = Directory.CreateTempSubdirectory("unit-status-expiry-");
+        var consoleOut = Console.Out;
+        using var output = new StringWriter();
+        try
+        {
+            PrivatePreviewExpiryGate.OverrideMetadata = new PrivatePreviewMetadata
+            {
+                Channel = PrivatePreviewMetadata.ChannelPrivatePreview,
+                BuildTimestamp = new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero),
+                ExpiresAt = new DateTimeOffset(2026, 5, 15, 12, 0, 0, TimeSpan.Zero),
+                SourceCommit = "g855-expired-test",
+            };
+            PrivatePreviewExpiryGate.OverrideNow = new DateTimeOffset(2026, 5, 19, 12, 0, 0, TimeSpan.Zero);
+            Directory.SetCurrentDirectory(temp.FullName);
+            Console.SetOut(output);
+
+            var exit = Program.Main(["unit", "status", "--help"]);
+
+            Assert.Equal(PrivatePreviewExpiryGate.ExpiredExitCode, exit);
+            Assert.Contains("private-preview artifact expired", output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Usage: intent-cli unit status", output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Console.SetOut(consoleOut);
+            Directory.SetCurrentDirectory(cwd);
+            if (Directory.Exists(temp.FullName)) Directory.Delete(temp.FullName, recursive: true);
+        }
     }
 
     [Fact]

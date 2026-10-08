@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Diagnostics;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 
@@ -127,6 +129,176 @@ public sealed class ProgramTests
             Assert.Contains("Host repo cwd: _unresolved_", stdout, StringComparison.Ordinal);
             Assert.Contains("Child implementation repo cwd:", stdout, StringComparison.Ordinal);
             Assert.Equal(string.Empty, consoleScope.Error.ToString());
+        }
+    }
+
+    [Fact]
+    public void Main_UnitStatusUsesRecordedNonSoloHostEntryAndDoesNotObserveGithub()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var repoRoot = tempDirectory.CreateDirectory("repo");
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+            tempDirectory.CreateFile(
+                Path.Combine("repo", ".intent-cli", "config.toml"),
+                """
+                [project]
+                domain = "intent-cli"
+                artifact_root = ".intent-cli"
+                metadata_source_branch = "metadata"
+                """);
+            InitializeReadOnlyMetadataRef(repoRoot);
+            var timestamp = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+            var modeState = new TeamModeState
+            {
+                SchemaVersion = TeamModeStore.SchemaVersion,
+                Entries =
+                [
+                    new TeamModeEntry
+                    {
+                        Domain = "intent-cli",
+                        Team = "intent-cli-dev",
+                        Mode = TeamMode.Delivery,
+                        UpdatedAt = timestamp,
+                        Transitions = [new TeamModeTransition { From = TeamMode.Default, To = TeamMode.Delivery, At = timestamp }],
+                    },
+                ],
+            };
+            File.WriteAllText(TeamModeStore.ResolvePath(repoRoot), JsonSerializer.Serialize(modeState));
+            var packetDirectory = Directory.CreateDirectory(Path.Combine(repoRoot, ".intent-cli", "issues", "G855"));
+            File.WriteAllText(Path.Combine(packetDirectory.FullName, "packet.yaml"),
+                "schema_version: 1\ndomain: intent-cli\nexecution_unit: G855\nimplementation_issue_packet:\n  target_repo: J-Tech-Japan/intent-system\n");
+            var publish = new IssuePublishArtifact
+            {
+                ExecutionUnit = "G855",
+                PublishStatus = "published",
+                PacketPath = ".intent-cli/issues/G855/packet.yaml",
+                IssueBodyPath = ".intent-cli/issues/G855/github-body.md",
+                CreatedIssueNumber = 1862,
+                CreatedIssueUrl = "https://github.com/J-Tech-Japan/intent-system/issues/1862",
+                PublishedLabelName = "intent-target",
+                LifecycleState = "pr-created",
+                LinkedPrNumber = 1863,
+                LinkedPrUrl = "https://github.com/J-Tech-Japan/intent-system/pull/1863",
+            };
+            File.WriteAllText(Path.Combine(packetDirectory.FullName, "publish.yaml"), IssuePublishArtifactYaml.Serialize(publish));
+            var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            var headBefore = RunGit(repoRoot, "rev-parse", "HEAD");
+            var metadataBefore = RunGit(repoRoot, "rev-parse", "refs/remotes/origin/metadata");
+            var indexBefore = File.ReadAllBytes(Path.Combine(repoRoot, ".git", "index"));
+            using var consoleScope = new ConsoleScope();
+            using var currentDirectoryScope = new CurrentDirectoryScope(workingDirectory);
+
+            var exitCode = Program.Main(
+                ["unit", "status", "--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"]);
+
+            Assert.Equal(0, exitCode);
+            using var report = JsonDocument.Parse(consoleScope.Out.ToString());
+            var root = report.RootElement;
+            Assert.Equal("delivery", root.GetProperty("team_mode").GetString());
+            Assert.Equal("current-recorded-entry", root.GetProperty("mode_basis").GetString());
+            Assert.Equal("not-observed", root.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+            Assert.All(root.GetProperty("steps").EnumerateArray(), step => Assert.Equal("not-applicable", step.GetProperty("state").GetString()));
+            Assert.Equal(headBefore, RunGit(repoRoot, "rev-parse", "HEAD"));
+            Assert.Equal(metadataBefore, RunGit(repoRoot, "rev-parse", "refs/remotes/origin/metadata"));
+            Assert.Equal(indexBefore, File.ReadAllBytes(Path.Combine(repoRoot, ".git", "index")));
+        }
+    }
+
+    private static string RunGit(string repoRoot, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = repoRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start git fixture command.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(string.Empty, stderr);
+        return stdout.Trim();
+    }
+
+    private static void InitializeReadOnlyMetadataRef(string repoRoot)
+    {
+        _ = RunGit(repoRoot, "init", "--quiet", "--initial-branch=main");
+        _ = RunGit(repoRoot, "config", "user.name", "intent-cli-g855-test");
+        _ = RunGit(repoRoot, "config", "user.email", "intent-cli-g855@example.invalid");
+        File.WriteAllText(Path.Combine(repoRoot, "README.md"), "G855 status fixture\n");
+        _ = RunGit(repoRoot, "add", "--", "README.md");
+        _ = RunGit(repoRoot, "commit", "--quiet", "-m", "seed G855 readonly status fixture");
+        var head = RunGit(repoRoot, "rev-parse", "HEAD");
+        _ = RunGit(repoRoot, "update-ref", "refs/remotes/origin/metadata", head);
+    }
+
+    [Fact]
+    public void Main_UnitStatusMalformedHostConfigReturnsStructuredRefusal()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+            tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "config.toml"), "[project\nmalformed");
+            var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            using var consoleScope = new ConsoleScope();
+            using var currentDirectoryScope = new CurrentDirectoryScope(workingDirectory);
+
+            var exitCode = Program.Main(
+                ["unit", "status", "--execution-unit", "G855", "--format", "json"]);
+
+            Assert.Equal(1, exitCode);
+            using var report = JsonDocument.Parse(consoleScope.Out.ToString());
+            Assert.Equal("host-config-unreadable", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+            Assert.Equal("read-failure", report.RootElement.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+            Assert.Equal("not-observed", report.RootElement.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+            var facts = report.RootElement.GetProperty("steps").EnumerateArray()
+                .SelectMany(step => step.GetProperty("subchecks").EnumerateArray()).ToArray();
+            Assert.Equal(26, facts.Length);
+            Assert.All(facts.Where(fact => fact.GetProperty("repair_commands").GetArrayLength() == 0), fact =>
+                Assert.False(string.IsNullOrWhiteSpace(fact.GetProperty("repair_unavailable_reason").GetString())));
+        }
+    }
+
+    [Fact]
+    public void Main_UnitStatusUnreadableHostConfigPermissionReturnsStructuredRefusal()
+    {
+        lock (ProcessStateLock)
+        {
+            if (OperatingSystem.IsWindows() || string.Equals(Environment.UserName, "root", StringComparison.OrdinalIgnoreCase))
+                throw Xunit.Sdk.SkipException.ForSkip("Unix permission enforcement is unavailable under this test identity.");
+
+            using var tempDirectory = new TemporaryDirectory();
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+            var configPath = tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "config.toml"), "default_domain = \"intent-cli\"\n");
+            var originalMode = File.GetUnixFileMode(configPath);
+            File.SetUnixFileMode(configPath, UnixFileMode.None);
+            try
+            {
+                if (Record.Exception(() => File.ReadAllText(configPath)) is not UnauthorizedAccessException)
+                    throw Xunit.Sdk.SkipException.ForSkip("The operating system did not reject a direct read of the mode-000 config fixture.");
+
+                var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+                using var consoleScope = new ConsoleScope();
+                using var currentDirectoryScope = new CurrentDirectoryScope(workingDirectory);
+
+                var exitCode = Program.Main(["unit", "status", "--execution-unit", "G855", "--format", "json"]);
+
+                Assert.Equal(1, exitCode);
+                using var report = JsonDocument.Parse(consoleScope.Out.ToString());
+                Assert.Equal("host-config-unreadable", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+                Assert.Equal("read-failure", report.RootElement.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+                Assert.Equal("not-observed", report.RootElement.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+            }
+            finally
+            {
+                File.SetUnixFileMode(configPath, originalMode);
+            }
         }
     }
 
