@@ -86,12 +86,17 @@ internal static class SoloConductorClaimReleaseGate
                 "packet-unavailable", exception.Message, packetRelative);
         }
 
-        if (!TryReadPacketField(packet!, "implementation_issue_packet.domain", "domain", out var rawDomain, out var domainConflict))
+        if (!TryReadPacketIdentityAssertions(packetYaml, out var packetIdentity, out var identityParseError))
         {
             return ApplicabilityRefusal(root, executionUnit, team, snapshotOid, canonicalTargetRef,
-                "packet-identity-conflict", domainConflict!, packetRelative);
+                "packet-unavailable", identityParseError!, packetRelative);
         }
-        var domain = rawDomain?.Trim();
+        if (packetIdentity!.Domain.Error is not null)
+        {
+            return ApplicabilityRefusal(root, executionUnit, team, snapshotOid, canonicalTargetRef,
+                "packet-identity-conflict", packetIdentity.Domain.Error, packetRelative);
+        }
+        var domain = packetIdentity.Domain.Value;
         if (!IsSafeIdentifier(domain))
         {
             return ApplicabilityRefusal(root, executionUnit, team, snapshotOid, canonicalTargetRef,
@@ -99,10 +104,18 @@ internal static class SoloConductorClaimReleaseGate
                 packetRelative);
         }
 
-        if (!TryValidatePacketExecutionUnitAssertion(packetYaml, executionUnit, out var unitConflict))
+        if (packetIdentity.SourceExecutionUnit.Error is not null)
         {
             return ApplicabilityRefusal(root, executionUnit, team, snapshotOid, canonicalTargetRef,
-                "packet-identity-conflict", unitConflict!, packetRelative, domain);
+                "packet-identity-conflict", packetIdentity.SourceExecutionUnit.Error, packetRelative, domain);
+        }
+        if (packetIdentity.SourceExecutionUnit.Present
+            && !string.Equals(packetIdentity.SourceExecutionUnit.Value, executionUnit, StringComparison.Ordinal))
+        {
+            return ApplicabilityRefusal(root, executionUnit, team, snapshotOid, canonicalTargetRef,
+                "packet-identity-conflict",
+                $"Packet source_execution_unit '{packetIdentity.SourceExecutionUnit.Value}' does not match held scope unit '{executionUnit}'.",
+                packetRelative, domain);
         }
 
         TeamModeResolution resolution;
@@ -122,16 +135,16 @@ internal static class SoloConductorClaimReleaseGate
         }
 
         var modeSource = resolution.Entry?.Team is null ? "domain" : "team";
-        if (!TryReadPacketField(packet!, "implementation_issue_packet.target_repo", "target_repo", out var rawTargetRepo, out var targetRepoConflict))
+        if (packetIdentity.TargetRepo.Error is not null)
         {
             var identityDuty = ApplicabilityDuty(root, "target-repo", "target-repo-identity-conflict",
-                targetRepoConflict!, packetRelative, canonicalTargetRef,
-                "The packet contains conflicting target_repo assertions; correct the canonical packet before release.");
+                packetIdentity.TargetRepo.Error, packetRelative, canonicalTargetRef,
+                "The packet contains malformed or conflicting actual target_repo assertions; correct the canonical packet before release.");
             return ApplicableResult(executionUnit, team, domain!, snapshotOid, canonicalTargetRef,
                 "recorded-solo-conductor", "The current held team resolves to a recorded solo-conductor mode.",
                 resolution.Entry?.Team is null ? "domain" : "team", [Relative(root, modePath), Relative(root, packetRelative)], [identityDuty], null, null);
         }
-        var targetRepo = rawTargetRepo?.Trim();
+        var targetRepo = packetIdentity.TargetRepo.Value;
         if (!IsSafeRepo(targetRepo))
         {
             var duty = ApplicabilityDuty(root, "target-repo", "target-repo-unavailable",
@@ -181,14 +194,21 @@ internal static class SoloConductorClaimReleaseGate
         evidencePaths.Add(Relative(root, queuePath));
 
         int? currentPr = queueResult.PullRequest;
-        var closeoutCommand = currentPr is > 0
-            ? $"intent-cli closeout pr --pr {currentPr} --repo {targetRepo} --domain {domain} --pr-merged true --write --format json"
+        var queueCloseoutPr = currentPr?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "<actual-merged-pr>";
+        var closeoutCommand = queueResult.State == "missing"
+            ? $"intent-cli closeout pr --pr {queueCloseoutPr} --repo {targetRepo} --domain {domain} --pr-merged true --write --format json"
             : null;
+        var queueDetail = queueResult.State == "missing"
+            ? queueResult.Detail + " Run the command only after the normal host workflow independently confirms the actual PR is merged."
+            : queueResult.Detail;
+        var queueRepairUnavailableReason = queueResult.State == "unavailable"
+            ? BuildQueueRepairUnavailableReason(root, queuePath, queueResult.RepairUnavailableReason ?? queueResult.Detail, target)
+            : queueResult.RepairUnavailableReason;
         duties.Add(BuildDuty(
             "closeout-queue",
             queueResult.State,
             queueResult.Cause,
-            queueResult.Detail,
+            queueDetail,
             queueResult.Path is null ? [] : [Evidence(root, queueResult.Path, queueResult.Item)],
             queueResult.State == "missing" && closeoutCommand is not null
                 ? [closeoutCommand]
@@ -196,7 +216,7 @@ internal static class SoloConductorClaimReleaseGate
             queueResult.State == "missing" && closeoutCommand is not null
                 ? PublicationStep(target)
                 : null,
-            queueResult.RepairUnavailableReason));
+            queueRepairUnavailableReason));
 
         var runsRead = ReadRuns(root, unit, targetRepo, currentPr, runsPath);
         evidencePaths.Add(Relative(root, runsPath));
@@ -216,13 +236,20 @@ internal static class SoloConductorClaimReleaseGate
             var detail = runsRead.State == "unavailable"
                 ? runsRead.Detail
                 : currentPr is null
-                    ? "A current linked PR identity is required before matching run receipts can be evaluated."
+                    ? $"A current linked PR identity is required before matching run receipts can be evaluated; resolve it through the closeout-queue recovery command and publish the canonical queue/runs artifacts to {target}."
                     : found
                         ? $"Canonical {eventName} event matches unit '{unit}', repo '{targetRepo}', and PR #{currentPr}."
                         : $"No canonical {eventName} event matches unit '{unit}', repo '{targetRepo}', and PR #{currentPr}.";
             var repairFlag = queueResult.State == "satisfied" ? " --repair-runs" : string.Empty;
             var command = currentPr is null ? null
                 : $"intent-cli closeout pr --pr {currentPr} --repo {targetRepo} --domain {domain} --pr-merged true{repairFlag} --write --format json";
+            var runRepairUnavailableReason = runsRead.State == "unavailable"
+                ? BuildRunLogRepairUnavailableReason(root, runsPath, target)
+                : queueResult.State == "unavailable"
+                    ? BuildQueueRepairUnavailableReason(root, queuePath, queueResult.RepairUnavailableReason ?? queueResult.Detail, target)
+                    : currentPr is null
+                        ? $"Run evidence cannot be matched until the queue owner resolves the actual PR identity. Use the closeout-queue recovery command with the actual merged PR, publish the canonical queue/runs artifacts to {target}, then retry; do not infer a PR from missing evidence."
+                        : null;
             duties.Add(BuildDuty(
                 eventName,
                 state,
@@ -231,7 +258,7 @@ internal static class SoloConductorClaimReleaseGate
                 runsRead.Path is null ? [] : [Evidence(root, runsRead.Path)],
                 state == "missing" && command is not null ? [command] : [],
                 state == "missing" && command is not null ? PublicationStep(target) : null,
-                currentPr is null ? "The queue item does not expose one current linked PR; no safe closeout command can be formed." : null));
+                runRepairUnavailableReason));
         }
 
         KnowledgeWriteBackDeclaration? knowledge = null;
@@ -433,24 +460,28 @@ internal static class SoloConductorClaimReleaseGate
             && !string.Equals(issue.Repo, repo, StringComparison.OrdinalIgnoreCase))
         {
             return new QueueReadResult("unavailable", "queue-repo-conflict",
-                $"Queue linked_issue repo '{issue.Repo}' conflicts with packet target_repo '{repo}'.", path, item, null, null);
+                $"Queue linked_issue repo '{issue.Repo}' conflicts with packet target_repo '{repo}'.", path, item, null,
+                "The canonical queue contains contradictory linked issue ownership; the responsible host/queue owner must correct this artifact.");
         }
         if (item.LinkedIssue?.Url is { Length: > 0 } issueUrl)
         {
             if (!TryReadGitHubIdentity(issueUrl, "issues", out var issueRepo, out var issueNumber))
             {
                 return new QueueReadResult("unavailable", "queue-issue-identity-invalid",
-                    $"Queue linked_issue URL '{issueUrl}' is not a canonical GitHub issue identity.", path, item, null, null);
+                    $"Queue linked_issue URL '{issueUrl}' is not a canonical GitHub issue identity.", path, item, null,
+                    "The canonical queue contains a malformed linked issue identity; the responsible host/queue owner must correct this artifact.");
             }
             if (!string.Equals(issueRepo, repo, StringComparison.OrdinalIgnoreCase))
             {
                 return new QueueReadResult("unavailable", "queue-issue-repo-conflict",
-                    $"Queue linked_issue URL repo '{issueRepo}' conflicts with packet target_repo '{repo}'.", path, item, null, null);
+                    $"Queue linked_issue URL repo '{issueRepo}' conflicts with packet target_repo '{repo}'.", path, item, null,
+                    "The canonical queue contains contradictory repository ownership; the responsible host/queue owner must correct this artifact.");
             }
             if (item.LinkedIssue.Number is not null && item.LinkedIssue.Number != issueNumber)
             {
                 return new QueueReadResult("unavailable", "queue-issue-identity-conflict",
-                    $"Queue linked_issue number {item.LinkedIssue.Number} conflicts with URL issue #{issueNumber}.", path, item, null, null);
+                    $"Queue linked_issue number {item.LinkedIssue.Number} conflicts with URL issue #{issueNumber}.", path, item, null,
+                    "The canonical queue contains contradictory linked issue numbers; the responsible host/queue owner must correct this artifact.");
             }
         }
 
@@ -464,14 +495,12 @@ internal static class SoloConductorClaimReleaseGate
         if (item.State != QueueItemState.Completed)
         {
             return new QueueReadResult("missing", "queue-not-completed",
-                $"Canonical queue item state is '{item.State}', not Completed.", path, item, pr,
-                pr is null ? "The queue item does not provide one safe PR identity; no closeout command can be formed." : null);
+                $"Canonical queue item state is '{item.State}', not Completed.", path, item, pr, null);
         }
         if (pr is null)
         {
             return new QueueReadResult("missing", "linked-pr-missing",
-                "The completed queue item does not identify one PR for the packet target repository.", path, item, null,
-                "The canonical queue item has no valid linked PR; resolve its identity through the supported host closeout workflow before retrying.");
+                "The completed queue item does not identify one PR for the packet target repository.", path, item, null, null);
         }
         return new QueueReadResult("satisfied", "completed-queue-item-present",
             $"Exactly one completed queue item identifies '{unit}' and PR #{pr} in '{repo}'.", path, item, pr, null);
@@ -657,22 +686,58 @@ internal static class SoloConductorClaimReleaseGate
         }
         if (!string.IsNullOrWhiteSpace(run.LinkedPr))
         {
-            if (!TryReadGitHubIdentity(run.LinkedPr, "pull", out var linkedRepo, out var linkedPr))
+            if (!TryReadRunReference(run.LinkedPr, "pull", out var linkedRepo, out var linkedPr))
+            {
                 error = $"Run event '{run.Event}' carries invalid linked_pr '{run.LinkedPr}'.";
-            else if (repo is not null && !string.Equals(repo, linkedRepo, StringComparison.OrdinalIgnoreCase)
+                return false;
+            }
+            if (linkedRepo is not null && repo is not null
+                && !string.Equals(repo, linkedRepo, StringComparison.OrdinalIgnoreCase)
                 || pr is not null && pr != linkedPr)
+            {
                 error = $"Run event '{run.Event}' has contradictory repo/PR identity fields.";
-            else { repo ??= linkedRepo; pr ??= linkedPr; }
+                return false;
+            }
+            repo ??= linkedRepo;
+            pr ??= linkedPr;
         }
         if (!string.IsNullOrWhiteSpace(run.LinkedIssue))
         {
-            if (!TryReadGitHubIdentity(run.LinkedIssue, "issues", out var issueRepo, out _))
+            if (!TryReadRunReference(run.LinkedIssue, "issues", out var issueRepo, out _))
+            {
                 error = $"Run event '{run.Event}' carries invalid linked_issue '{run.LinkedIssue}'.";
-            else if (repo is not null && !string.Equals(repo, issueRepo, StringComparison.OrdinalIgnoreCase))
+                return false;
+            }
+            if (issueRepo is not null && repo is not null
+                && !string.Equals(repo, issueRepo, StringComparison.OrdinalIgnoreCase))
+            {
                 error = $"Run event '{run.Event}' has contradictory repo and linked_issue identity fields.";
-            else repo ??= issueRepo;
+                return false;
+            }
+            repo ??= issueRepo;
+            // An issue number is independent of a pull-request number.
         }
-        return error is null && (repo is not null || pr is not null);
+        return repo is not null && pr is not null;
+    }
+
+    private static bool TryReadRunReference(string value, string kind, out string? repo, out int number)
+    {
+        if (TryReadGitHubIdentity(value, kind, out var urlRepo, out number))
+        {
+            repo = urlRepo;
+            return true;
+        }
+
+        repo = null;
+        return TryReadLegacyRunNumber(value, out number);
+    }
+
+    private static bool TryReadLegacyRunNumber(string value, out int number)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.StartsWith('#')) trimmed = trimmed[1..];
+        return int.TryParse(trimmed, System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out number) && number > 0;
     }
 
     private static KnowledgeReadResult ReadKnowledgeReceipts(string root, string unit)
@@ -797,11 +862,12 @@ internal static class SoloConductorClaimReleaseGate
         catch (YamlDotNet.Core.YamlException) { return false; }
     }
 
-    private static bool TryValidatePacketExecutionUnitAssertion(
+    private static bool TryReadPacketIdentityAssertions(
         string yaml,
-        string expectedUnit,
+        out PacketIdentityAssertions? assertions,
         out string? error)
     {
+        assertions = null;
         error = null;
         try
         {
@@ -810,65 +876,79 @@ internal static class SoloConductorClaimReleaseGate
             stream.Load(reader);
             if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode root)
             {
-                error = "Packet YAML has no mapping root for source_execution_unit identity validation.";
+                error = "Packet YAML has no mapping root for identity validation.";
                 return false;
             }
 
-            var assertions = new List<(string Path, YamlNode Value)>();
-            if (root.Children.TryGetValue(new YamlScalarNode("source_execution_unit"), out var rootAssertion))
+            YamlMappingNode? implementation = null;
+            if (root.Children.TryGetValue(new YamlScalarNode("implementation_issue_packet"), out var implementationNode))
             {
-                assertions.Add(("source_execution_unit", rootAssertion));
-            }
-            if (root.Children.TryGetValue(new YamlScalarNode("implementation_issue_packet"), out var implementationNode)
-                && implementationNode is YamlMappingNode implementation
-                && implementation.Children.TryGetValue(new YamlScalarNode("source_execution_unit"), out var nestedAssertion))
-            {
-                assertions.Add(("implementation_issue_packet.source_execution_unit", nestedAssertion));
-            }
-
-            foreach (var (path, value) in assertions)
-            {
-                if (value is not YamlScalarNode scalar || string.IsNullOrWhiteSpace(scalar.Value))
+                if (implementationNode is not YamlMappingNode mapping)
                 {
-                    error = $"Packet '{path}' must be a nonempty scalar execution-unit identity when present.";
+                    error = "Packet implementation_issue_packet identity container must be a mapping.";
                     return false;
                 }
-
-                var assertedUnit = scalar.Value.Trim();
-                if (!string.Equals(assertedUnit, expectedUnit, StringComparison.Ordinal))
-                {
-                    error = $"Packet '{path}' value '{assertedUnit}' does not match held scope unit '{expectedUnit}'.";
-                    return false;
-                }
+                implementation = mapping;
             }
 
+            assertions = new PacketIdentityAssertions(
+                ReadPacketIdentityField(root, implementation, "domain"),
+                ReadPacketIdentityField(root, implementation, "source_execution_unit"),
+                ReadPacketIdentityField(root, implementation, "target_repo"));
             return true;
         }
         catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidOperationException)
         {
-            error = "Packet source_execution_unit identity could not be parsed: " + exception.Message;
+            error = "Packet identity assertions could not be parsed: " + exception.Message;
             return false;
         }
     }
 
-    private static bool TryReadPacketField(
-        PacketYamlDocument packet,
-        string nestedName,
-        string bareName,
-        out string? value,
-        out string? error)
+    private static PacketIdentityField ReadPacketIdentityField(
+        YamlMappingNode root,
+        YamlMappingNode? implementation,
+        string name)
     {
-        packet.Fields.TryGetValue(nestedName, out var nested);
-        packet.Fields.TryGetValue(bareName, out var bare);
-        if (nested is not null && bare is not null
-            && !string.Equals(nested.Trim(), bare.Trim(), StringComparison.Ordinal))
+        var rootPath = name;
+        var nestedPath = $"implementation_issue_packet.{name}";
+        var rootPresent = root.Children.TryGetValue(new YamlScalarNode(name), out var rootNode);
+        YamlNode? nestedNode = null;
+        var nestedPresent = implementation is not null
+            && implementation.Children.TryGetValue(new YamlScalarNode(name), out nestedNode);
+
+        string? rootValue = null;
+        string? nestedValue = null;
+        if (rootPresent && !TryGetPacketIdentityScalar(rootNode!, rootPath, out rootValue, out var rootError))
         {
-            value = null;
-            error = $"Packet has conflicting '{nestedName}' and '{bareName}' identity values.";
+            return new PacketIdentityField(true, null, rootError);
+        }
+        if (nestedPresent && !TryGetPacketIdentityScalar(nestedNode!, nestedPath, out nestedValue, out var nestedError))
+        {
+            return new PacketIdentityField(true, null, nestedError);
+        }
+        if (rootPresent && nestedPresent
+            && !string.Equals(rootValue, nestedValue, StringComparison.Ordinal))
+        {
+            return new PacketIdentityField(true, null,
+                $"Packet has conflicting actual '{rootPath}' and '{nestedPath}' identity values.");
+        }
+
+        return new PacketIdentityField(rootPresent || nestedPresent, nestedValue ?? rootValue, null);
+    }
+
+    private static bool TryGetPacketIdentityScalar(YamlNode node, string path, out string? value, out string? error)
+    {
+        value = null;
+        error = null;
+        if (node is not YamlScalarNode scalar || string.IsNullOrWhiteSpace(scalar.Value)
+            || scalar.Style == YamlDotNet.Core.ScalarStyle.Plain
+                && scalar.Value.Trim() is "~" or "null" or "Null" or "NULL")
+        {
+            error = $"Packet '{path}' must be a nonempty scalar identity when present.";
             return false;
         }
-        value = nested ?? bare;
-        error = null;
+
+        value = scalar.Value.Trim();
         return true;
     }
 
@@ -1094,6 +1174,12 @@ internal static class SoloConductorClaimReleaseGate
     private static string PublicationStep(string targetRef) =>
         $"After recording locally, stage only exact owned evidence paths, commit, and plain-push to {targetRef}; then retry claim release. Example: git -C <canonical-host-checkout> add -- <exact-owned-artifact-paths> && git -C <canonical-host-checkout> commit -m <receipt-publication-message> && git -C <canonical-host-checkout> push origin HEAD:{targetRef}. Never stage the whole dirty repository; if already published, verify canonical visibility without an empty commit.";
 
+    private static string BuildQueueRepairUnavailableReason(string root, string path, string detail, string targetRef) =>
+        $"Canonical queue artifact '{Relative(root, path)}' is unavailable: {detail} Return the exact owned path to the responsible host/queue-owner workflow for correction, publish that change to {targetRef}, then retry claim release.";
+
+    private static string BuildRunLogRepairUnavailableReason(string root, string path, string targetRef) =>
+        $"Canonical run log '{Relative(root, path)}' is malformed, contradictory, or unreadable. `intent-cli closeout pr --repair-runs` only appends missing receipts and cannot correct this artifact. Return the exact path to the responsible host/architect workflow for correction, publish the owned change to {targetRef}, then retry claim release.";
+
     private static string PublicationStep(string root, string targetRef) => PublicationStep(targetRef);
 
     private static bool IsReadFailure(Exception exception) => exception is IOException
@@ -1111,6 +1197,11 @@ internal static class SoloConductorClaimReleaseGate
 
     private enum PathKind { Missing, Present, Unavailable }
     private readonly record struct PathInspection(PathKind Kind, string? Detail);
+    private sealed record PacketIdentityField(bool Present, string? Value, string? Error);
+    private sealed record PacketIdentityAssertions(
+        PacketIdentityField Domain,
+        PacketIdentityField SourceExecutionUnit,
+        PacketIdentityField TargetRepo);
     private sealed record QueueReadResult(string State, string Cause, string Detail, string? Path, QueueItem? Item, int? PullRequest, string? RepairUnavailableReason);
     private sealed record RunsReadResult(string State, string Cause, string Detail, string? Path, IReadOnlyList<RunEvent>? Events);
     private sealed record KnowledgeReceipt(string Path, KnowledgeWriteBackRecord Record);

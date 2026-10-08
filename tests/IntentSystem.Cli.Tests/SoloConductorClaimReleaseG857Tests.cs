@@ -8,7 +8,7 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
-[Collection(AutomationStalledWorkSharedStateCollection.Name)]
+[Collection("WorkerNextActionSharedState")]
 public sealed class SoloConductorClaimReleaseG857Tests
 {
     private const string Unit = "G857";
@@ -155,6 +155,32 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal(Team, result.HolderTeam);
         Assert.Equal("refused", result.SoloConductorCompletion?.Decision);
         Assert.Equal(expectedState, Duty(result, dutyId).State);
+        if (dutyId == "closeout-queue")
+        {
+            var duty = Duty(result, dutyId);
+            var command = Assert.Single(duty.RecoveryCommands);
+            Assert.Contains("intent-cli closeout pr --pr", command, StringComparison.Ordinal);
+            Assert.Contains($"--repo {Repo}", command, StringComparison.Ordinal);
+            Assert.Contains($"--domain {Domain}", command, StringComparison.Ordinal);
+            Assert.Contains("--pr-merged true", command, StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", duty.PublicationStep!, StringComparison.Ordinal);
+            if (omitted == "queue-absent")
+                Assert.Contains("<actual-merged-pr>", command, StringComparison.Ordinal);
+            else
+                Assert.Contains($"--pr {PullRequest}", command, StringComparison.Ordinal);
+            Assert.DoesNotContain("--repair-runs", command, StringComparison.Ordinal);
+            Assert.Null(duty.RepairUnavailableReason);
+        }
+        else if (dutyId is "pr-merged" or "closeout-recorded")
+        {
+            var duty = Duty(result, dutyId);
+            var command = Assert.Single(duty.RecoveryCommands);
+            Assert.Contains("intent-cli closeout pr --pr 1873", command, StringComparison.Ordinal);
+            Assert.Contains($"--repo {Repo}", command, StringComparison.Ordinal);
+            Assert.Contains($"--domain {Domain}", command, StringComparison.Ordinal);
+            Assert.Contains("--repair-runs", command, StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", duty.PublicationStep!, StringComparison.Ordinal);
+        }
         foreach (var otherDuty in result.SoloConductorCompletion!.Duties.Where(duty => duty.Id != dutyId))
         {
             var expectedOther = omitted == "queue-absent" && otherDuty.Id is "pr-merged" or "closeout-recorded"
@@ -1127,6 +1153,260 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.DoesNotContain(result.Completion!.Duties, duty => duty.Id == "applicability");
     }
 
+    [Fact]
+    public void MissingActualDomainCannotBeFilledByMetadataAliasOnWriteOrPreview_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: PacketMissingDomainWithMetadataAliasYaml);
+        Acquire(repos.Writer);
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimRelative = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBytes = File.ReadAllBytes(Path.Combine(repos.CloneForInspection(), claimRelative));
+        var historyBefore = ClaimHistory(repos.CloneForInspection()).ToArray();
+
+        foreach (var write in new[] { false, true })
+        {
+            var result = Release(repos.Reader, write: write);
+
+            Assert.Equal("completion-blocked", result.Status);
+            Assert.False(result.PushSucceeded);
+            Assert.Equal("packet-domain-missing", Duty(result, "applicability").Cause);
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            var inspection = repos.CloneForInspection();
+            Assert.Equal(claimBytes, File.ReadAllBytes(Path.Combine(inspection, claimRelative)));
+            Assert.Equal(historyBefore, ClaimHistory(inspection));
+        }
+    }
+
+    [Fact]
+    public void IncompleteQueueWithoutLinkedPrUsesVerifiedPlaceholderRecovery_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Active, runEvents: []);
+        var queuePath = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+        var queue = JsonNode.Parse(File.ReadAllText(queuePath))!.AsObject();
+        queue["items"]!.AsArray()[0]!["linked_pr"] = null;
+        File.WriteAllText(queuePath, queue.ToJsonString());
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Acquire(repos.Writer);
+
+        var result = Release(repos.Reader);
+
+        var queueDuty = Duty(result, "closeout-queue");
+        Assert.Equal("missing", queueDuty.State);
+        var command = Assert.Single(queueDuty.RecoveryCommands);
+        Assert.Contains("--pr <actual-merged-pr>", command, StringComparison.Ordinal);
+        Assert.Contains($"--repo {Repo}", command, StringComparison.Ordinal);
+        Assert.Contains($"--domain {Domain}", command, StringComparison.Ordinal);
+        Assert.Contains("--pr-merged true", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("--repair-runs", command, StringComparison.Ordinal);
+        Assert.Contains("refs/heads/main", queueDuty.PublicationStep!, StringComparison.Ordinal);
+        Assert.Null(queueDuty.RepairUnavailableReason);
+        foreach (var id in new[] { "pr-merged", "closeout-recorded" })
+        {
+            var duty = Duty(result, id);
+            Assert.Equal("unavailable", duty.State);
+            Assert.Empty(duty.RecoveryCommands);
+            Assert.Contains("actual PR identity", duty.RepairUnavailableReason!, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Theory]
+    [InlineData("nested-before-metadata")]
+    [InlineData("nested-after-metadata")]
+    [InlineData("root-only")]
+    [InlineData("matching-root-and-nested")]
+    public void ActualPacketIdentityIgnoresUnrelatedMetadataAliases_G857(string shape)
+    {
+        using var repos = new ClaimRepositories();
+        var packet = shape switch
+        {
+            "nested-after-metadata" => PacketIdentityWithMetadataAfterYaml,
+            "root-only" => PacketWithRootOnlyActualIdentity(),
+            "matching-root-and-nested" => PacketWithMatchingRootIdentity(),
+            _ => PacketWithUnrelatedIdentityAliasesYaml,
+        };
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: packet);
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("satisfied", result.Completion?.Decision);
+        Assert.Equal(Domain, result.Completion?.Domain);
+        Assert.Equal(Repo, result.Completion?.TargetRepo);
+    }
+
+    [Fact]
+    public void UnboundLegacyNumericRunsAreHistoricalThenRepairAppendsCanonicalPair_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: [], packetYaml: ExplicitNoDutyPacketYaml);
+        var runsPath = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        var relativeRunsPath = Path.GetRelativePath(repos.Writer, runsPath);
+        var now = DateTimeOffset.UtcNow;
+        File.WriteAllLines(runsPath, new[]
+        {
+            RunLogSerializer.SerializeLine(new RunEvent
+            {
+                Ts = now,
+                ExecutionUnit = Unit,
+                Event = "pr-merged",
+                By = "legacy closeout",
+                LinkedPr = PullRequest.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                LinkedIssue = "456",
+            }),
+            RunLogSerializer.SerializeLine(new RunEvent
+            {
+                Ts = now,
+                ExecutionUnit = Unit,
+                Event = "closeout-recorded",
+                By = "legacy closeout",
+                LinkedPr = $"#{PullRequest}",
+                LinkedIssue = "#456",
+            }),
+        });
+        var legacyPrefix = File.ReadAllText(runsPath);
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Acquire(repos.Writer);
+
+        var blocked = Release(repos.Reader);
+
+        foreach (var id in new[] { "pr-merged", "closeout-recorded" })
+        {
+            var duty = Duty(blocked, id);
+            Assert.Equal("missing", duty.State);
+            Assert.Equal("current-closeout-run-missing", duty.Cause);
+            Assert.Contains("--repair-runs", Assert.Single(duty.RecoveryCommands), StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", duty.PublicationStep!, StringComparison.Ordinal);
+            Assert.Null(duty.RepairUnavailableReason);
+        }
+
+        PullCanonicalHead(repos.Writer);
+        using var output = new StringWriter();
+        var closeoutExit = CloseoutPrCommand.Execute(Context(repos.Writer),
+            ["--pr", PullRequest.ToString(System.Globalization.CultureInfo.InvariantCulture),
+             "--repo", Repo, "--domain", Domain, "--pr-merged", "true", "--repair-runs", "--write", "--format", "json"], output);
+        Assert.Equal(0, closeoutExit);
+        using (var closeoutResult = JsonDocument.Parse(output.ToString()))
+            Assert.True(closeoutResult.RootElement.GetProperty("runs_appended").GetBoolean());
+        Assert.StartsWith(legacyPrefix, File.ReadAllText(runsPath), StringComparison.Ordinal);
+
+        Git(repos.Writer, "add", "--", relativeRunsPath);
+        Git(repos.Writer, "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+            "commit", "--quiet", "-m", "publish repaired G857 run receipts");
+        Git(repos.Writer, "push", "origin", "HEAD:refs/heads/main");
+
+        var released = Release(repos.Reader);
+
+        Assert.Equal("released", released.Status);
+        Assert.True(released.PushSucceeded);
+        Assert.Equal("satisfied", Duty(released, "pr-merged").State);
+        Assert.Equal("satisfied", Duty(released, "closeout-recorded").State);
+    }
+
+    [Fact]
+    public void IndependentRepoAllowsLegacyNumericPullRequestButIssueNumberDoesNotReplaceIt_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: [], packetYaml: ExplicitNoDutyPacketYaml);
+        var path = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        var now = DateTimeOffset.UtcNow;
+        File.WriteAllLines(path, new[] { "pr-merged", "closeout-recorded" }.Select(eventName =>
+            RunLogSerializer.SerializeLine(new RunEvent
+            {
+                Ts = now,
+                ExecutionUnit = Unit,
+                Event = eventName,
+                By = "legacy closeout",
+                Repo = Repo,
+                LinkedPr = $"#{PullRequest}",
+                LinkedIssue = "456",
+            })));
+        repos.PublishIntentChanges(repos.Writer, "main");
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.Equal("satisfied", result.Completion?.Decision);
+        Assert.Equal("satisfied", Duty(result.Completion!, "pr-merged").State);
+        Assert.Equal("satisfied", Duty(result.Completion!, "closeout-recorded").State);
+    }
+
+    [Fact]
+    public void ContradictoryLegacyNumericRunIdentityIsUnavailableEvenWithModernPair_G857()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: ["pr-merged", "closeout-recorded"]);
+        var path = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        File.AppendAllText(path, RunLogSerializer.SerializeLine(new RunEvent
+        {
+            Ts = DateTimeOffset.UtcNow,
+            ExecutionUnit = Unit,
+            Event = "pr-merged",
+            By = "contradictory legacy closeout",
+            Repo = Repo,
+            Pr = PullRequest,
+            LinkedPr = $"#{PullRequest + 1}",
+            LinkedIssue = "456",
+        }) + Environment.NewLine);
+        repos.PublishIntentChanges(repos.Writer, "main");
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.Equal("unavailable", Duty(result.Completion!, "pr-merged").State);
+        Assert.Equal("run-identity-conflict", Duty(result.Completion!, "pr-merged").Cause);
+        Assert.Equal("unavailable", Duty(result.Completion!, "closeout-recorded").State);
+    }
+
+    [Theory]
+    [InlineData("domain-root-sequence", "packet-identity-conflict", "applicability")]
+    [InlineData("domain-root-empty", "packet-identity-conflict", "applicability")]
+    [InlineData("domain-root-conflict", "packet-identity-conflict", "applicability")]
+    [InlineData("domain-nested-map", "packet-identity-conflict", "applicability")]
+    [InlineData("domain-nested-null", "packet-identity-conflict", "applicability")]
+    [InlineData("domain-metadata-only", "packet-domain-missing", "applicability")]
+    [InlineData("target-root-map", "target-repo-identity-conflict", "target-repo")]
+    [InlineData("target-root-null", "target-repo-identity-conflict", "target-repo")]
+    [InlineData("target-root-conflict", "target-repo-identity-conflict", "target-repo")]
+    [InlineData("target-nested-sequence", "target-repo-identity-conflict", "target-repo")]
+    [InlineData("target-nested-empty", "target-repo-identity-conflict", "target-repo")]
+    [InlineData("target-metadata-only", "target-repo-unavailable", "target-repo")]
+    public void PacketIdentityUsesOnlyActualRootAndNestedScalarNodes_G857(string shape, string cause, string dutyId)
+    {
+        using var repos = new ClaimRepositories();
+        var packet = shape switch
+        {
+            "domain-root-sequence" => AddRootIdentityNode(PacketWithUnrelatedIdentityAliasesYaml, "domain", "  - other"),
+            "domain-root-empty" => AddRootIdentityNode(PacketWithUnrelatedIdentityAliasesYaml, "domain", "  \"\""),
+            "domain-root-conflict" => AddRootIdentityNode(PacketWithUnrelatedIdentityAliasesYaml, "domain", "  other"),
+            "domain-nested-map" => PacketWithUnrelatedIdentityAliasesYaml.Replace(
+                "  domain: intent-cli\n", "  domain: {}\n", StringComparison.Ordinal),
+            "domain-nested-null" => PacketWithUnrelatedIdentityAliasesYaml.Replace(
+                "  domain: intent-cli\n", "  domain: null\n", StringComparison.Ordinal),
+            "domain-metadata-only" => PacketWithUnrelatedIdentityAliasesYaml.Replace(
+                "  domain: intent-cli\n", string.Empty, StringComparison.Ordinal),
+            "target-root-map" => AddRootIdentityNode(PacketWithUnrelatedIdentityAliasesYaml, "target_repo", "  {}"),
+            "target-root-null" => AddRootIdentityNode(PacketWithUnrelatedIdentityAliasesYaml, "target_repo", "  null"),
+            "target-root-conflict" => AddRootIdentityNode(PacketWithUnrelatedIdentityAliasesYaml, "target_repo", "  other/repo"),
+            "target-nested-sequence" => PacketWithUnrelatedIdentityAliasesYaml.Replace(
+                "  target_repo: J-Tech-Japan/intent-system\n", "  target_repo:\n    - J-Tech-Japan/intent-system\n", StringComparison.Ordinal),
+            "target-nested-empty" => PacketWithUnrelatedIdentityAliasesYaml.Replace(
+                "  target_repo: J-Tech-Japan/intent-system\n", "  target_repo: \"\"\n", StringComparison.Ordinal),
+            "target-metadata-only" => PacketWithUnrelatedIdentityAliasesYaml.Replace(
+                "  target_repo: J-Tech-Japan/intent-system\n", string.Empty, StringComparison.Ordinal),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: packet);
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.Equal("refused", result.Completion?.Decision);
+        Assert.Equal(cause, Duty(result.Completion!, dutyId).Cause);
+        Assert.Equal("unavailable", Duty(result.Completion!, dutyId).State);
+    }
+
     [Theory]
     [InlineData("malformed-packet", "packet-unavailable", "applicability")]
     [InlineData("wrong-source-unit", "packet-identity-conflict", "applicability")]
@@ -1184,6 +1464,14 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal("completion-blocked", result.Status);
         Assert.Equal("unavailable", Duty(result, dutyId).State);
         Assert.Equal(cause, Duty(result, dutyId).Cause);
+        if (dutyId == "closeout-queue")
+        {
+            var duty = Duty(result, dutyId);
+            Assert.Empty(duty.RecoveryCommands);
+            Assert.Contains(".intent-cli/", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("host/queue-owner", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -1202,8 +1490,46 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal("completion-blocked", result.Status);
         foreach (var id in new[] { "pr-merged", "closeout-recorded" })
         {
-            Assert.Equal("unavailable", Duty(result, id).State);
-            Assert.Equal("run-log-unavailable", Duty(result, id).Cause);
+            var duty = Duty(result, id);
+            Assert.Equal("unavailable", duty.State);
+            Assert.Equal("run-log-unavailable", duty.Cause);
+            Assert.Empty(duty.RecoveryCommands);
+            Assert.Null(duty.PublicationStep);
+            Assert.Contains(".intent-cli/", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("--repair-runs", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("cannot correct", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("host/architect", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void SymlinkedCanonicalRunLogIsUnavailableWithRepairRouting_G857()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: ExplicitNoDutyPacketYaml);
+        var runPath = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        File.Delete(runPath);
+        var externalTarget = Path.Combine(Path.GetDirectoryName(repos.Writer)!, "external-runs.jsonl");
+        File.WriteAllText(externalTarget, string.Empty);
+        File.CreateSymbolicLink(runPath, externalTarget);
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Acquire(repos.Writer);
+
+        var result = Release(repos.Reader);
+
+        foreach (var id in new[] { "pr-merged", "closeout-recorded" })
+        {
+            var duty = Duty(result, id);
+            Assert.Equal("unavailable", duty.State);
+            Assert.Equal("run-log-unavailable", duty.Cause);
+            Assert.Empty(duty.RecoveryCommands);
+            Assert.Contains(".intent-cli/", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("--repair-runs", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("host/architect", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", duty.RepairUnavailableReason!, StringComparison.Ordinal);
         }
     }
 
@@ -1298,6 +1624,15 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal("satisfied", Duty(result, "closeout-queue").State);
         Assert.Equal("satisfied", Duty(result, "knowledge-architect").State);
         Assert.Equal("satisfied", Duty(result, "guide-reachability").State);
+        foreach (var id in new[] { "pr-merged", "closeout-recorded" })
+        {
+            var duty = Duty(result, id);
+            Assert.Empty(duty.RecoveryCommands);
+            Assert.Contains(".intent-cli/", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("--repair-runs", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("host/architect", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", duty.RepairUnavailableReason!, StringComparison.Ordinal);
+        }
     }
 
     [Theory]
@@ -1680,6 +2015,28 @@ public sealed class SoloConductorClaimReleaseG857Tests
         return yaml.Replace(marker, $"{fragment}\n{marker}", StringComparison.Ordinal);
     }
 
+    private static string AddRootIdentityNode(string yaml, string name, string content) =>
+        yaml.Replace("metadata:\n", $"{name}:\n{content}\nmetadata:\n", StringComparison.Ordinal);
+
+    private static string PacketWithRootOnlyActualIdentity()
+    {
+        var yaml = PacketWithUnrelatedIdentityAliasesYaml
+            .Replace("implementation_issue_packet:\n", string.Empty, StringComparison.Ordinal)
+            .Replace("  domain: intent-cli\n", string.Empty, StringComparison.Ordinal)
+            .Replace("  source_execution_unit: G857\n", string.Empty, StringComparison.Ordinal)
+            .Replace("  target_repo: J-Tech-Japan/intent-system\n", string.Empty, StringComparison.Ordinal);
+        yaml = AddRootIdentityNode(yaml, "domain", "  intent-cli");
+        yaml = AddRootIdentityNode(yaml, "source_execution_unit", "  G857");
+        return AddRootIdentityNode(yaml, "target_repo", "  J-Tech-Japan/intent-system");
+    }
+
+    private static string PacketWithMatchingRootIdentity()
+    {
+        var yaml = AddRootIdentityNode(PacketWithUnrelatedIdentityAliasesYaml, "domain", "  intent-cli");
+        yaml = AddRootIdentityNode(yaml, "source_execution_unit", "  G857");
+        return AddRootIdentityNode(yaml, "target_repo", "  J-Tech-Japan/intent-system");
+    }
+
     private static string PacketWithKnowledgeFragment(string fragment) =>
         ExplicitNoDutyPacketYaml.Replace(
             "knowledge_updates:\n  intent_tree:\n    required: false\n",
@@ -1978,6 +2335,56 @@ public sealed class SoloConductorClaimReleaseG857Tests
             - guide_surface: "guide workflow task implementation-loop"
               role: implementation
               target_surface: "claim release completion"
+        """;
+
+    private const string PacketMissingDomainWithMetadataAliasYaml = """
+        metadata:
+          domain: other
+          source_execution_unit: OTHER
+          target_repo: other/repo
+        implementation_issue_packet:
+          source_execution_unit: G857
+          target_repo: J-Tech-Japan/intent-system
+        knowledge_updates:
+          intent_tree:
+            required: false
+        guide_reachability:
+          no_role_facing_surface: true
+          routes: []
+        """;
+
+    private const string PacketWithUnrelatedIdentityAliasesYaml = """
+        metadata:
+          domain: other
+          source_execution_unit: OTHER
+          target_repo: other/repo
+        implementation_issue_packet:
+          domain: intent-cli
+          source_execution_unit: G857
+          target_repo: J-Tech-Japan/intent-system
+        knowledge_updates:
+          intent_tree:
+            required: false
+        guide_reachability:
+          no_role_facing_surface: true
+          routes: []
+        """;
+
+    private const string PacketIdentityWithMetadataAfterYaml = """
+        implementation_issue_packet:
+          domain: intent-cli
+          source_execution_unit: G857
+          target_repo: J-Tech-Japan/intent-system
+        metadata:
+          domain: other
+          source_execution_unit: OTHER
+          target_repo: other/repo
+        knowledge_updates:
+          intent_tree:
+            required: false
+        guide_reachability:
+          no_role_facing_surface: true
+          routes: []
         """;
 
     private const string ExplicitNoDutyPacketYaml = """
