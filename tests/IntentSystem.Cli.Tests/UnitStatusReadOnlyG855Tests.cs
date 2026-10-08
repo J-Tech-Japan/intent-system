@@ -508,6 +508,80 @@ public sealed class UnitStatusReadOnlyG855Tests
     }
 
     [Theory]
+    [InlineData("head")]
+    [InlineData("branch")]
+    [InlineData("invalid-head")]
+    [InlineData("empty-branch")]
+    public void ExecuteCore_ConfiguredClaimSourceRequiresValidLocalFreshness(string failingRead)
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true);
+        var git = new BoundedGitRunner(_head, _metadataOid, failFreshnessRead: failingRead);
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest);
+        var before = host.SnapshotAllFilesAndGitMarkers();
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(before, host.SnapshotAllFilesAndGitMarkers());
+        Assert.Equal(1, exit);
+        Assert.Equal(2, git.Calls.Count);
+        Assert.Equal(0, git.ForbiddenCalls);
+        Assert.Empty(github.Calls);
+        using var report = JsonDocument.Parse(output.ToString());
+        var root = report.RootElement;
+        Assert.Equal("claim-snapshot-unavailable", root.GetProperty("applicability").GetProperty("cause").GetString());
+        Assert.Equal("read-failure", root.GetProperty("applicability").GetProperty("unavailable_class").GetString());
+        var observation = root.GetProperty("observation");
+        Assert.Equal(failingRead is "branch" or "empty-branch" ? JsonValueKind.String : JsonValueKind.Null,
+            observation.GetProperty("local_head_sha").ValueKind);
+        Assert.Equal(failingRead is "head" or "invalid-head" ? JsonValueKind.String : JsonValueKind.Null,
+            observation.GetProperty("local_head_ref").ValueKind);
+        Assert.Equal("refs/remotes/origin/metadata", observation.GetProperty("claim_metadata_ref").GetString());
+        Assert.Contains(root.GetProperty("observation").GetProperty("warnings").EnumerateArray(), warning =>
+            warning.GetString()!.Contains("local-head-freshness-unavailable", StringComparison.Ordinal));
+        Assert.All(new[]
+        {
+            "design-claim-acquired", "design-claim-release", "implementation-claim-acquired", "implementation-claim-release",
+        }, id =>
+        {
+            var fact = FindFact(root, id);
+            Assert.Equal("local-head-freshness-unavailable", fact.GetProperty("cause").GetString());
+            Assert.Equal("read-failure", fact.GetProperty("unavailable_class").GetString());
+            AssertClaimFactSnapshotEvidence(fact);
+        });
+    }
+
+    [Fact]
+    public void ExecuteCore_ConfiguredClaimSourceAllowsDetachedHeadWithoutInventingBranch()
+    {
+        using var host = new HostFixture();
+        host.Prepare(includeCurrentSoloMode: true);
+        var git = new BoundedGitRunner(_head, _metadataOid, failFreshnessRead: "detached");
+        var github = new BoundedGitHubRunner("success", _repo, _head, _publicIssue, _pullRequest);
+        using var output = new StringWriter();
+
+        var exit = UnitStatusCommand.ExecuteCore(
+            host.Context,
+            ["--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"],
+            output,
+            new UnitStatusReadAdapter(github, git));
+
+        Assert.Equal(0, exit);
+        Assert.Equal(4, git.Calls.Count);
+        Assert.Equal(6, github.Calls.Count);
+        using var report = JsonDocument.Parse(output.ToString());
+        var observation = report.RootElement.GetProperty("observation");
+        Assert.Equal(_head, observation.GetProperty("local_head_sha").GetString());
+        Assert.Equal(JsonValueKind.Null, observation.GetProperty("local_head_ref").ValueKind);
+        Assert.Equal("completed", observation.GetProperty("github_snapshot").GetProperty("state").GetString());
+    }
+
+    [Theory]
     [InlineData("shorthand")]
     [InlineData("url")]
     public void ExecuteCore_RecognizesCanonicalIssuePublishFlowEventAndArtifact(string descriptorKind)
@@ -1444,9 +1518,12 @@ public sealed class UnitStatusReadOnlyG855Tests
             var copy = arguments.ToArray();
             Calls.Add(copy);
             if (copy.Length == 3 && copy[0] == "rev-parse" && copy[1] == "--verify" && copy[2] == "HEAD")
-                return _failFreshnessRead == "head" ? Failure("configured test HEAD read failure") : Success(_head);
+                return _failFreshnessRead == "head" ? Failure("configured test HEAD read failure")
+                    : _failFreshnessRead == "invalid-head" ? Success("not-an-object-id") : Success(_head);
             if (copy.Length == 3 && copy[0] == "rev-parse" && copy[1] == "--abbrev-ref" && copy[2] == "HEAD")
-                return _failFreshnessRead == "branch" ? Failure("configured test branch read failure") : Success("feature/g855");
+                return _failFreshnessRead == "branch" ? Failure("configured test branch read failure")
+                    : _failFreshnessRead == "empty-branch" ? Success(string.Empty)
+                    : _failFreshnessRead == "detached" ? Success("HEAD") : Success("feature/g855");
             if (copy.Length == 3 && copy[0] == "rev-parse" && copy[1] == "--verify"
                 && copy[2] == "refs/remotes/origin/metadata^{commit}")
             {

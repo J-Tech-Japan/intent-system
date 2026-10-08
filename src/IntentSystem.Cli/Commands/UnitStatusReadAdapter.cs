@@ -73,9 +73,25 @@ internal sealed class UnitStatusReadAdapter : IUnitStatusSnapshotReader
             return ClaimFailure("local-claim-scope-invalid", exception.Message, UnitStatusStates.InvalidRequest);
         }
 
-        var localHeadSha = ReadGitText(context.RepoRoot, ["rev-parse", "--verify", "HEAD"], out _);
-        var localHeadRef = ReadGitText(context.RepoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], out _);
-        if (string.Equals(localHeadRef, "HEAD", StringComparison.Ordinal)) localHeadRef = null;
+        var reportedConfiguredHeadSha = ReadGitText(context.RepoRoot, ["rev-parse", "--verify", "HEAD"], out var configuredHeadError);
+        var reportedConfiguredHeadRef = ReadGitText(context.RepoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], out var configuredHeadRefError);
+        var configuredDetachedHead = string.Equals(reportedConfiguredHeadRef, "HEAD", StringComparison.Ordinal);
+        var localHeadRef = configuredDetachedHead || string.IsNullOrWhiteSpace(reportedConfiguredHeadRef)
+            ? null
+            : reportedConfiguredHeadRef;
+        var configuredFreshnessErrors = new List<string>();
+        if (configuredHeadError is not null) configuredFreshnessErrors.Add(configuredHeadError);
+        else if (!IsObjectId(reportedConfiguredHeadSha ?? string.Empty)) configuredFreshnessErrors.Add("Local HEAD did not return a valid object ID.");
+        if (configuredHeadRefError is not null) configuredFreshnessErrors.Add(configuredHeadRefError);
+        else if (!configuredDetachedHead && string.IsNullOrWhiteSpace(localHeadRef)) configuredFreshnessErrors.Add("The current local branch name was empty.");
+        var localHeadSha = IsObjectId(reportedConfiguredHeadSha ?? string.Empty) ? reportedConfiguredHeadSha : null;
+        if (configuredFreshnessErrors.Count > 0)
+        {
+            var detail = $"local-head-freshness-unavailable: configured metadata snapshot '{metadataRef}' was selected, but local HEAD/ref freshness could not be validated. "
+                + string.Join(" ", configuredFreshnessErrors);
+            return ClaimFailure("local-head-freshness-unavailable", detail, UnitStatusStates.ReadFailure,
+                metadataRef, localHeadSha, localHeadRef);
+        }
 
         var oid = ReadGitText(
             context.RepoRoot,

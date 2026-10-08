@@ -6,6 +6,7 @@ using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
+[Collection("WorkerNextActionSharedState")]
 public sealed class UnitStatusCommandG855Tests
 {
     private const string HeadSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -538,7 +539,9 @@ public sealed class UnitStatusCommandG855Tests
         host.WriteMode(TeamMode.SoloConductor);
         const string sourceUrl = "https://github.com/J-Tech-Japan/intent-system/issues/1861";
         host.WritePacketAndPublishArtifact(sourceArtifact: sourceUrl);
-        host.WriteBugSourceChain("BUG-1861", sourceUrl);
+        host.WriteBugSourceChain("BUG-1861", sourceUrl, resolvedPacketRefs: [".intent-cli/issues/G855/packet.yaml"]);
+        var childDirectory = Directory.CreateDirectory(Path.Combine(host.Context.RepoRoot, "subdirectory"));
+        using var currentDirectory = new CurrentDirectoryScope(childDirectory.FullName);
         var reader = new FixedReader(new UnitStatusRemoteSnapshot
         {
             State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha, Facts = [],
@@ -996,6 +999,15 @@ public sealed class UnitStatusCommandG855Tests
         }
     }
 
+    private sealed class CurrentDirectoryScope : IDisposable
+    {
+        private readonly string _original = Directory.GetCurrentDirectory();
+
+        public CurrentDirectoryScope(string path) => Directory.SetCurrentDirectory(path);
+
+        public void Dispose() => Directory.SetCurrentDirectory(_original);
+    }
+
     private sealed class TempHost : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "g855-status-" + Guid.NewGuid().ToString("N"));
@@ -1111,7 +1123,7 @@ public sealed class UnitStatusCommandG855Tests
         }
 
         public void WriteBugSourceChain(string bugId, string sourceIssueUrl, bool duplicate = false, bool corruptPlan = false,
-            string? linkedIssueUrl = null, IReadOnlyList<string>? linkedUnits = null)
+            string? linkedIssueUrl = null, IReadOnlyList<string>? linkedUnits = null, IReadOnlyList<string>? resolvedPacketRefs = null)
         {
             var bugs = Path.Combine(_root, ".intent-cli", "bugs");
             Directory.CreateDirectory(bugs);
@@ -1154,7 +1166,7 @@ public sealed class UnitStatusCommandG855Tests
                 ResolvedExecutionUnits = [],
                 ResolvedImplementationRefs = [],
                 ResolvedReviewContextRefs = [],
-                ResolvedPacketRefs = [],
+                ResolvedPacketRefs = resolvedPacketRefs ?? [],
                 UnresolvedExecutionUnits = [],
                 ImplementationRepairCandidates = [],
                 IntentRepairCandidates = ["INTENT-1857-STATUS"],
@@ -1168,7 +1180,7 @@ public sealed class UnitStatusCommandG855Tests
                 DownstreamAction = "intent-only",
                 ResolvedImplementationRefs = [],
                 ResolvedReviewContextRefs = [],
-                ResolvedPacketRefs = corruptPlan ? [".intent-cli/issues/G854/packet.yaml"] : [],
+                ResolvedPacketRefs = corruptPlan ? [".intent-cli/issues/G854/packet.yaml"] : resolvedPacketRefs ?? [],
                 ImplementationTaskCandidates = [],
                 IntentTaskCandidates = ["INTENT-1857-STATUS"],
                 ClarificationRequired = false,

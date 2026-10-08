@@ -765,7 +765,7 @@ internal static class UnitStatusCommand
             return;
         }
 
-        var packetRelative = Path.GetRelativePath(root, packetPath).Replace('\\', '/');
+        var packetRelative = packetPath.Replace('\\', '/');
         var reportHasContradictoryUnits = selected.Report.LinkedExecutionUnits.Count > 0
             && !selected.Report.LinkedExecutionUnits.Contains(unit, StringComparer.Ordinal);
         var triageHasContradictoryUnits = triage.ResolvedExecutionUnits.Count > 0
