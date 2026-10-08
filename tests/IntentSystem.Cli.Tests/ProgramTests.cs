@@ -1,3 +1,4 @@
+using System.Text.Json;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 
@@ -127,6 +128,77 @@ public sealed class ProgramTests
             Assert.Contains("Host repo cwd: _unresolved_", stdout, StringComparison.Ordinal);
             Assert.Contains("Child implementation repo cwd:", stdout, StringComparison.Ordinal);
             Assert.Equal(string.Empty, consoleScope.Error.ToString());
+        }
+    }
+
+    [Fact]
+    public void Main_UnitStatusUsesRecordedNonSoloHostEntryAndDoesNotObserveGithub()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var repoRoot = tempDirectory.CreateDirectory("repo");
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+            tempDirectory.CreateFile(
+                Path.Combine("repo", ".intent-cli", "config.toml"),
+                """
+                [project]
+                domain = "intent-cli"
+                artifact_root = ".intent-cli"
+                """);
+            var timestamp = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+            var modeState = new TeamModeState
+            {
+                SchemaVersion = TeamModeStore.SchemaVersion,
+                Entries =
+                [
+                    new TeamModeEntry
+                    {
+                        Domain = "intent-cli",
+                        Team = "intent-cli-dev",
+                        Mode = TeamMode.Delivery,
+                        UpdatedAt = timestamp,
+                        Transitions = [new TeamModeTransition { From = TeamMode.Default, To = TeamMode.Delivery, At = timestamp }],
+                    },
+                ],
+            };
+            File.WriteAllText(TeamModeStore.ResolvePath(repoRoot), JsonSerializer.Serialize(modeState));
+            var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            using var consoleScope = new ConsoleScope();
+            using var currentDirectoryScope = new CurrentDirectoryScope(workingDirectory);
+
+            var exitCode = Program.Main(
+                ["unit", "status", "--execution-unit", "G855", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", "json"]);
+
+            Assert.Equal(0, exitCode);
+            using var report = JsonDocument.Parse(consoleScope.Out.ToString());
+            var root = report.RootElement;
+            Assert.Equal("delivery", root.GetProperty("team_mode").GetString());
+            Assert.Equal("current-recorded-entry", root.GetProperty("mode_basis").GetString());
+            Assert.Equal("not-observed", root.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
+            Assert.All(root.GetProperty("steps").EnumerateArray(), step => Assert.Equal("not-applicable", step.GetProperty("state").GetString()));
+        }
+    }
+
+    [Fact]
+    public void Main_UnitStatusMalformedHostConfigReturnsStructuredRefusal()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+            tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "config.toml"), "[project\nmalformed");
+            var workingDirectory = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            using var consoleScope = new ConsoleScope();
+            using var currentDirectoryScope = new CurrentDirectoryScope(workingDirectory);
+
+            var exitCode = Program.Main(
+                ["unit", "status", "--execution-unit", "G855", "--format", "json"]);
+
+            Assert.Equal(1, exitCode);
+            using var report = JsonDocument.Parse(consoleScope.Out.ToString());
+            Assert.Equal("host-context-invalid", report.RootElement.GetProperty("applicability").GetProperty("cause").GetString());
+            Assert.Equal("not-observed", report.RootElement.GetProperty("observation").GetProperty("github_snapshot").GetProperty("state").GetString());
         }
     }
 

@@ -133,6 +133,16 @@ must not use the model).
 affects every team on that host because the whole file fails to load. Refresh
 every intent-cli that reads the host before recording the mode.
 
+Use `intent-cli unit status --execution-unit <unit> --domain <domain> --team <team> --format json`
+to inspect the evidence for the ten-step unit loop described by this guide.
+It reads existing local records and a bounded, read-only GitHub snapshot. Its
+four states distinguish positive evidence, missing evidence, inapplicable
+phases, and unavailable evidence. Exit 0 means the observation completed; it
+does not mean the unit is complete or ready to merge. A stable
+`provenance-limit` finding is informational and is not a retry or
+re-approval instruction. Missing/unresolved mode and team context fail closed
+without GitHub reads; recorded non-solo mode returns not-applicable.
+
 ## Cross-runtime implementation review (G834 — preview-through-1.x)
 
 A team can require that each implementation PR is also reviewed by a reviewer on

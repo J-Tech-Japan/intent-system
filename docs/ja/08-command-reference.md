@@ -560,6 +560,30 @@ intent-cli guide oneshot --kind host-review-next-slice    --domain <name>
 worker/metadata コマンドだけでループを回す operator dogfooding 向けプロンプトテンプレートは
 [`docs/automation-templates/`](../automation-templates/README.md) にあります。
 
+### unit ごとの evidence status（G855 — preview-through-1.x）
+
+```bash
+intent-cli unit status --execution-unit <unit> [--domain <domain>] [--team <team>] --format json|markdown
+```
+
+この read-only report は、既存の local packet、queue、publish、runs、claim/history、closeout、review record と、
+上限を設けた read-only GitHub snapshot をまとめます。JSON は `schema_version: 1` を使い、両 format で
+solo-conductor の 10 phase と subcheck、evidence pointer、cause、repair 可否、freshness、count を表示します。
+固定 state は `done`、`missing`、`not-applicable`、`unavailable` です。evidence の欠落は、read failure や
+過去 provenance の未対応とは区別されます。
+
+applicability は `.intent-cli/team-mode.json` の現在の domain/team に完全一致する entry だけを使います。
+mode の欠落/default と team unresolved は unavailable、exit 1 で、GitHub call は行いません。記録済みの
+non-solo mode は solo-conductor phase を not-applicable にして GitHub read を省略します。
+solo-conductor では、API read を local で照合した issue/PR と観測 PR head に結び付けます。pagination は
+20 page まで完全に読み、head が変わった場合の retry は最大 1 回です。report は観測した check-run と
+commit-status を inventory として示しますが、branch protection や required-check rule は評価しません。
+
+exit 0 は observation が完了したことを示し、evidence の欠落や既知の `provenance-limit` だけで unavailable
+となる場合も含みます。exit 1 は不正な request または provenance 以外の observation failure を示します。
+どちらも完了や merge readiness の判断ではありません。過去の exact-head approval receipt や
+worker-completion receipt が存在しないなどの安定した provenance limit は、retry や再承認を促す指示ではありません。
+
 ### 貼り付け evidence gate（G785）
 
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`

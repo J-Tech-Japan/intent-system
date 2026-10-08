@@ -61,6 +61,14 @@ internal sealed record GitHubApiGraphQlBoundRead
     public required string Reason { get; init; }
 }
 
+/// <summary>One bounded REST read and the response fields consumed by unit status.</summary>
+internal sealed record GitHubApiObservedRead
+{
+    public required string Endpoint { get; init; }
+    public required IReadOnlyList<string> ConsumedFields { get; init; }
+    public required string Bound { get; init; }
+}
+
 /// <summary>
 /// G674 field inventory and equivalence ledger.  Keep this list close to the
 /// adapter so a transport change cannot land without naming its exact
@@ -119,6 +127,22 @@ internal static class GitHubApiReadInventory
         Equivalence("reconcile", "published-intent-target-issues"),
         Equivalence("stalled-work", "open-issues"),
         Equivalence("heartbeat", "stalled-work/open-issues (inherited)"),
+    ];
+
+    public static IReadOnlyList<GitHubApiObservedRead> UnitStatusRestReads { get; } =
+    [
+        Observed("GET /repos/{owner}/{repo}/pulls/{pull_number} (read before and after the snapshot)",
+            ["number", "head.sha", "merged", "merge_commit_sha", "labels[].name"], "2 reads per attempt; at most 2 attempts"),
+        Observed("GET /repos/{owner}/{repo}/issues/{issue_number}",
+            ["number", "labels[].name"], "1 read per attempt; at most 2 attempts"),
+        Observed("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews?per_page=100&page={n}",
+            ["id", "state", "commit_id", "body", "html_url", "user.login", "submitted_at"], "complete pagination, at most 20 pages"),
+        Observed("GET /repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100&page={n}",
+            ["total_count", "check_runs[].id", "check_runs[].name", "check_runs[].status", "check_runs[].conclusion", "check_runs[].head_sha", "check_runs[].app.slug", "check_runs[].details_url"], "complete pagination, at most 20 pages"),
+        Observed("GET /repos/{owner}/{repo}/commits/{sha}/statuses?per_page=100&page={n}",
+            ["id", "context", "state", "sha", "target_url"], "complete pagination, at most 20 pages"),
+        Observed("GET /repos/{owner}/{repo}/actions/runs/{run_id}",
+            ["id", "head_sha", "run_attempt"], "one read per distinct Actions run id per attempt"),
     ];
 
     public static IReadOnlyList<GitHubApiGraphQlBoundRead> GraphQlBoundReads { get; } =
@@ -188,5 +212,12 @@ internal static class GitHubApiReadInventory
         CallSite = callSite,
         UnverifiedFields = fields,
         Reason = reason,
+    };
+
+    private static GitHubApiObservedRead Observed(string endpoint, IReadOnlyList<string> fields, string bound) => new()
+    {
+        Endpoint = endpoint,
+        ConsumedFields = fields,
+        Bound = bound,
     };
 }

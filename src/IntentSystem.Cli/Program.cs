@@ -32,6 +32,46 @@ internal static class Program
                 return UpdateCommand.Execute(args[1..], Console.Out);
             }
 
+            // G855: unit status is a read-only historical observation. It
+            // must not inherit CreateBootstrapContext's fallback domain when
+            // invoked from a metadata-free child checkout.
+            if (UnitStatusCommand.IsStatusCommand(args))
+            {
+                var statusCwd = Directory.GetCurrentDirectory();
+                if (UnitStatusCommand.IsHelpRequest(args))
+                {
+                    return UnitStatusCommand.ExecuteMetadataFree(args, statusCwd, Console.Out);
+                }
+
+                var statusRoot = RepoRootResolver.Resolve(statusCwd);
+                if (statusRoot is null)
+                {
+                    return UnitStatusCommand.ExecuteMetadataFree(args, statusCwd, Console.Out);
+                }
+
+                try
+                {
+                    var statusConfigPath = CliRuntimeContracts.GetConfigPath(statusRoot);
+                    if (!File.Exists(statusConfigPath))
+                    {
+                        return UnitStatusCommand.ExecuteHostRefusal(args,
+                            $"Configured host root '{statusRoot}' has no readable config at '{statusConfigPath}'.", Console.Out);
+                    }
+
+                    var statusContext = new CliContext
+                    {
+                        RepoRoot = statusRoot,
+                        Config = CliConfigLoader.LoadFromFile(statusConfigPath),
+                    };
+                    return CommandRouter.Execute(args, statusContext, Console.Out);
+                }
+                catch (Exception exception) when (exception is DirectoryNotFoundException or FileNotFoundException
+                    or InvalidOperationException or IOException or System.Text.Json.JsonException or Tomlyn.TomlException)
+                {
+                    return UnitStatusCommand.ExecuteHostRefusal(args, exception.Message, Console.Out);
+                }
+            }
+
             // G368: CI-packed private-preview artifacts expire 14 days
             // after their build timestamp (G367 metadata). Once the
             // expiry passes, fail closed BEFORE any workflow command or

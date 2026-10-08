@@ -118,6 +118,18 @@ subagent を起動できない runtime では使わない）を出力します�
 その host のすべての team に影響します。mode を記録する前に、その host を読む
 すべての intent-cli を更新してください。
 
+この guide の 10-step unit loop の evidence は、次の read-only report で確認できます。
+
+```text
+intent-cli unit status --execution-unit <unit> --domain <domain> --team <team> --format json
+```
+
+既存の local record と上限を設けた read-only GitHub snapshot を読み、positive evidence、欠落、
+適用外、利用不可を 4 state で区別します。exit 0 は observation が完了したことを示し、unit の
+完了や merge readiness を意味しません。安定した `provenance-limit` は情報として示し、retry や
+再承認を指示しません。mode/team の欠落や未解決時は GitHub read を行わず、
+記録済み non-solo mode は not-applicable を返します。
+
 ## cross-runtime implementation review（G834 — preview-through-1.x）
 
 team は、各 implementation PR を別 runtime（Codex、Claude Code、Cursor agent を

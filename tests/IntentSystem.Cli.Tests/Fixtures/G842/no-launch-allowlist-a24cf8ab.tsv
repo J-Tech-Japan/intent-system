@@ -150,6 +150,10 @@ src/IntentSystem.Cli/Commands/TaskingTaskPacketCommand.cs	NestedProviderLauncher
 src/IntentSystem.Cli/Commands/TaskingTaskPacketCommand.cs	Process	1
 src/IntentSystem.Cli/Commands/TaskingTaskPacketPreviewCommand.cs	NestedProviderLauncher	3
 src/IntentSystem.Cli/Commands/TaskingTaskPacketPreviewCommand.cs	Process	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	GhCommandRunner	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	GitRemoteCommandRunner	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	IGitHubCommandRunner	1
+src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	IGitRemoteCommandRunner	1
 src/IntentSystem.Cli/Commands/UpdateCommand.cs	IUpdateProcessRunner	4
 src/IntentSystem.Cli/Commands/UpdateCommand.cs	Process	1
 src/IntentSystem.Cli/Commands/UpdateCommand.cs	ProcessStartInfo	1

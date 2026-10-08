@@ -601,6 +601,37 @@ Operator-dogfooding prompt templates that wire these loops entirely through the
 deterministic worker/metadata commands live under
 [`docs/automation-templates/`](../automation-templates/README.md).
 
+### Per-unit evidence status (G855 — preview-through-1.x)
+
+```bash
+intent-cli unit status --execution-unit <unit> [--domain <domain>] [--team <team>] --format json|markdown
+```
+
+This read-only report brings together the existing local packet, queue,
+publish, runs, claim/history, closeout, and review records with a bounded
+read-only GitHub snapshot. JSON uses `schema_version: 1`; both formats show the
+ten solo-conductor phases, their subchecks, evidence pointers, causes, repair
+availability, freshness, and counts. The fixed states are `done`, `missing`,
+`not-applicable`, and `unavailable`. A missing fact is different from a read
+failure or unsupported historical provenance.
+
+Applicability uses only an exact current domain/team entry in
+`.intent-cli/team-mode.json`. Missing/default mode and unresolved team are
+unavailable, exit 1, and make no GitHub calls. A recorded non-solo mode marks
+the solo-conductor phases not applicable and skips GitHub reads. For
+solo-conductor, API reads are bound to the locally corroborated issue/PR and
+the observed PR head, with complete pagination within a 20-page bound and at
+most one retry if the head changes. The report inventories observed
+check-runs and commit statuses; it does not evaluate branch protection or
+required-check rules.
+
+Exit 0 means observation completed, including when evidence is missing or the
+only unavailable facts are known `provenance-limit` cases. Exit 1 means an
+invalid request or a non-provenance observation failure. Neither exit code
+judges completion or merge readiness. Stable provenance limits, including a
+missing historical exact-head approval receipt or worker-completion receipt,
+are not retry or re-approval instructions.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by

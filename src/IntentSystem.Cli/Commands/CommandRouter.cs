@@ -10,6 +10,7 @@ internal static class CommandRouter
         "projection",
         "queue",
         "issue",
+        "unit",
         "bug",
         "review",
         "interview",
@@ -63,6 +64,7 @@ internal static class CommandRouter
         "worker",
         "review",
         "issue",
+        "unit",
         "packet",
         "intent",
         "closeout"
@@ -125,6 +127,10 @@ internal static class CommandRouter
             ["project"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["status"] = ProjectStatusCommand.Execute
+            },
+            ["unit"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["status"] = UnitStatusCommand.Execute,
             },
             ["projection"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -722,6 +728,7 @@ internal static class CommandRouter
             ["interview"] = "`intent-cli interview next-question --domain <d> --format json` then `intent-cli interview record-answer ...`.",
             ["packet"] = "`intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown`.",
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
+            ["unit"] = "`intent-cli unit status --execution-unit <unit> --format json` (read-only lifecycle evidence; missing and unavailable facts do not imply merge readiness).",
             ["automation"] = "`intent-cli automation summary --domain <d> --format json` (capability JSON), `intent-cli automation doctor --format json` (CLI freshness), and `intent-cli automation progress-supervision --domain <d> --team <t> --unit <u> --format json` (G812 deterministic progress health).",
             ["session-layer"] = "`intent-cli session-layer show --domain <d> [--team <t>]` (which transport is in force), `session-layer set` to change it, `session-layer topology record|show|validate|record-orca-run|orca-runs|move --domain <d> --team <t>` for the delivery mapping and Orca Run binding records, `session-layer inspect --domain <d> --team <t>` for read-only live pane/agent observation, and `session-layer model-resolution record|query` for the host-local measured launch ledger. Use `intent-cli guide topology-workspace-move` for the dry-run-first move recipe.",
             ["team-mode"] = "`intent-cli team-mode show --domain <d> [--team <t>]`, `team-mode set --mode delivery|authoring-only|solo-conductor --write`, and `team-mode validate` (G691 durable team shape; orthogonal to session-layer transport).",
