@@ -660,7 +660,24 @@ generic blocker も引き続き評価します。それ以外の solo team は g
 solo entry が 1 件でもある host で PR identity が解決できない場合は保守的に拒否します。既存 claim resolver は従来どおり `git fetch` を
 実行することがあり、remote-tracking ref、`FETCH_HEAD`、取得済み object が変化しますが、refusal は label と CI wait を変更しません。
 command は review 読み取り前と label 直前に head を読みます。GitHub に atomic な label/SHA compare はないため、
-`--match-head-commit` を使って merge します。override、approval receipt、completion/release gate は追加しません。gate は honest seat を前提とします。
+`--match-head-commit` を使って merge します。G856 自体は override や approval receipt を追加しません。eligible な implementation claim release は G857 が別途 gate します。gate は honest seat を前提とします。
+
+### solo-conductor implementation claim release（G857 — preview-through-1.x）
+
+この gate は `execution-unit:<unit>` の `claim release` に限り、actor が builder（`implementation`/`builder`）へ正規化され、完全な actor/team の組が現在の holder の場合に適用されます。既存の完全一致 holder check は維持します。canonical unit packet の明示 domain で held team が記録済み solo-conductor mode に解決される場合だけ gate を有効化します。solo entry がある host で applicability evidence が欠落または曖昧なら保守的に拒否し、mode がない場合や解決済み non-solo team では従来の claim 動作を維持します。
+
+write attempt ごとに canonical claim branch（設定済み `metadata_write_branch`、なければ解決した origin default branch）を ff-only の fresh clone で評価します。holder 確認後、history 書込み、claim 削除、stage、commit、push より前に評価し、retry は新しい canonical snapshot を読み直します。candidate preview は同じ evidence 判定のため bounded な一時 clone を 1 つ使って cleanup します。clone/pull で canonical remote を read する場合がありますが、preview の書込みはその一時 clone 内だけです。invoking checkout は fetch せず、stale transaction root sweep も行いません。canonical branch に既に publish 済みの evidence だけを使います。mixed host では、どの domain/team に対しても canonical solo entry があり packet/domain が欠落する場合、held team に solo entry が見えなくても推測せず拒否します。
+
+必須の closeout evidence は unit が一つだけ Completed の queue item、packet の `target_repo` 内の安全な linked PR、その repository/PR に一致する canonical `pr-merged` と `closeout-recorded` event です。required knowledge write-back には architect と orchestrator の各 role に帰属する record が 1 件必要です。受理される role alias は正規化されます。target は任意で、記録された target list を報告しますが path coverage は確認しません。全 false の明示宣言が `not-applicable` になるのは、既存 G855 predicate が `knowledge_updates.*.required` または `closeout_learning.write_back_required` の宣言 key を検出した場合だけです。宣言の欠落は missing、malformed declaration は unavailable です。宣言された guide route には architect に帰属する record が 1 件必要です。`record.roles` は recipient を示すため、recorder attribution の代用にはなりません。明示的な `no_role_facing_surface: true` は `not-applicable` です。
+
+```bash
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason <text> --format json
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason <text> --write --format json
+```
+
+duty が未完了または読めない場合、`completion-blocked`、exit 1、`push_succeeded: false` と、canonical OID/ref、duty state、evidence path、recovery guidance を含む `solo_conductor_completion` snapshot を返します。active claim と holder/team は保持されます。missing receipt は対応する local writer で記録し、厳密な owned receipt path と未公開の closeout path だけを stage、commit し、表示された canonical target ref に plain push します。canonical 上の公開を確認してから release を retry します。既存 writer が retry で修復できない unreadable、conflicting、duplicate、immutable evidence では `repair_unavailable_reason` を返します。`--reason` は gate の override になりません。この release check は lifecycle、queue、run-log、PR-transition writer を追加しません。
 
 ### 貼り付け evidence gate（G785）
 

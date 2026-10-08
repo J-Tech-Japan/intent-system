@@ -151,6 +151,11 @@ internal static class ClaimCommand
         var targetRef = $"refs/heads/{targetBranch}";
         if (!request.Write)
         {
+            if (TryGetSoloConductorCandidate(request, out var candidateUnit))
+            {
+                return RunCandidateDryRun(repoRoot, request, canonicalBranch, targetRef, candidateUnit, warningWriter, deleteDirectory);
+            }
+
             return new ClaimTransactionResult(
                 "planned", request.Scope, ClaimPath(request.Scope), false, 0,
                 null, null, null,
@@ -256,6 +261,32 @@ internal static class ClaimCommand
                 var head = RunGit(transactionRoot, ["rev-parse", "HEAD"]);
                 EnsureSuccess(head, "resolve claim base commit");
                 var baseCommit = head.StandardOutput.Trim();
+                SoloConductorClaimReleaseCompletion? soloConductorCompletion = null;
+                if (request.Operation == ClaimOperation.Release
+                    && TryGetSoloConductorCandidate(request, out var executionUnit))
+                {
+                    var gate = SoloConductorClaimReleaseGate.Evaluate(
+                        transactionRoot, executionUnit, current!.Team, baseCommit, targetRef);
+                    if (gate.IsApplicable)
+                    {
+                        soloConductorCompletion = gate.Completion;
+                        if (soloConductorCompletion?.Decision != "satisfied")
+                        {
+                            return new ClaimTransactionResult(
+                                "completion-blocked", request.Scope, relativeClaimPath, false, attempt,
+                                current.Actor, null, null,
+                                "Recorded solo-conductor completion evidence is incomplete or unavailable. "
+                                + "Publish repaired owned artifacts to the canonical target ref before retrying; --reason does not override this gate.")
+                            {
+                                HolderTeam = current.Team,
+                                TargetRef = targetRef,
+                                BaseCommit = baseCommit,
+                                GitWriteRetry = lastGitWriteRetry,
+                                SoloConductorCompletion = soloConductorCompletion,
+                            };
+                        }
+                    }
+                }
                 string? historyPath = null;
 
                 if (request.Operation == ClaimOperation.Acquire)
@@ -337,6 +368,7 @@ internal static class ClaimCommand
                     {
                         GitWriteRetry = lastGitWriteRetry,
                         TargetRef = targetRef,
+                        SoloConductorCompletion = soloConductorCompletion,
                     };
                 }
 
@@ -397,6 +429,7 @@ internal static class ClaimCommand
                         {
                             GitWriteRetry = lastGitWriteRetry,
                             TargetRef = targetRef,
+                            SoloConductorCompletion = soloConductorCompletion,
                         };
                     }
 
@@ -430,6 +463,7 @@ internal static class ClaimCommand
                     {
                         GitWriteRetry = lastGitWriteRetry,
                         TargetRef = targetRef,
+                        SoloConductorCompletion = soloConductorCompletion,
                     };
                 }
 
@@ -447,6 +481,7 @@ internal static class ClaimCommand
                         RemoteHead = remoteHead,
                         RemoteAdvanced = false,
                         GitPushError = gitPushError,
+                        SoloConductorCompletion = soloConductorCompletion,
                     };
                 }
 
@@ -466,6 +501,7 @@ internal static class ClaimCommand
                         RemoteHead = remoteHead,
                         RemoteAdvanced = true,
                         GitPushError = gitPushError,
+                        SoloConductorCompletion = soloConductorCompletion,
                     };
                 }
             }
@@ -504,6 +540,142 @@ internal static class ClaimCommand
         }
 
         throw new InvalidOperationException("claim transaction exhausted unexpectedly");
+    }
+
+    private static ClaimTransactionResult RunCandidateDryRun(
+        string repoRoot,
+        ClaimRequest request,
+        ClaimRemoteDefaultBranch canonicalBranch,
+        string targetRef,
+        string executionUnit,
+        TextWriter warningWriter,
+        Action<string> deleteDirectory)
+    {
+        var transactionRoot = Path.Combine(
+            Path.GetTempPath(), $"{TransactionRootPrefix}{Guid.NewGuid():N}");
+        using var transactionLease = ClaimTransactionLease.Create(transactionRoot);
+        var transactionFailure = (Exception?)null;
+        try
+        {
+            var clone = RunGit(Path.GetTempPath(),
+                ["clone", "--quiet", "--single-branch", "--branch", canonicalBranch.Name, canonicalBranch.Remote, transactionRoot]);
+            EnsureSuccess(clone, "clone candidate claim dry-run workspace");
+
+            // Candidate preview reads the same fresh canonical branch snapshot
+            // as a write attempt, but intentionally performs no invoking-clone
+            // fetch, stale-root sweep, staging, commit, or push.
+            var pull = RunGit(transactionRoot,
+                ["pull", "--ff-only", "origin", canonicalBranch.Name]);
+            EnsureSuccess(pull, "fast-forward candidate claim dry-run snapshot");
+
+            var relativeClaimPath = ClaimPath(request.Scope);
+            var claimPath = Path.Combine(transactionRoot, relativeClaimPath.Replace('/', Path.DirectorySeparatorChar));
+            var current = ReadClaim(claimPath);
+            if (current is null)
+            {
+                return new ClaimTransactionResult(
+                    "not-held", request.Scope, relativeClaimPath, false, 1,
+                    null, null, null, "No active claim exists for this scope.")
+                {
+                    TargetRef = targetRef,
+                };
+            }
+            if (!string.Equals(current.Actor, request.Actor, StringComparison.Ordinal)
+                || !string.Equals(current.Team, request.Team, StringComparison.Ordinal))
+            {
+                return Held(request, relativeClaimPath, 1, current,
+                    "Only the complete attributed holder identity (actor and team) may release; use explicit takeover otherwise.") with
+                {
+                    TargetRef = targetRef,
+                };
+            }
+
+            var head = RunGit(transactionRoot, ["rev-parse", "HEAD"]);
+            EnsureSuccess(head, "resolve candidate claim dry-run snapshot commit");
+            var snapshotOid = head.StandardOutput.Trim();
+            var gate = SoloConductorClaimReleaseGate.Evaluate(
+                transactionRoot, executionUnit, current.Team, snapshotOid, targetRef);
+            if (!gate.IsApplicable)
+            {
+                // Preserve the old planned result for a candidate whose
+                // canonical mode state proves the release is not gated.
+                return new ClaimTransactionResult(
+                    "planned", request.Scope, ClaimPath(request.Scope), false, 0,
+                    null, null, null,
+                    "Dry-run only. Re-run with --write; ownership exists only after a successful plain push.");
+            }
+
+            var completion = gate.Completion;
+            if (completion?.Decision != "satisfied")
+            {
+                return new ClaimTransactionResult(
+                    "completion-blocked", request.Scope, relativeClaimPath, false, 1,
+                    current.Actor, null, null,
+                    "Recorded solo-conductor completion evidence is incomplete or unavailable. "
+                    + "Publish repaired owned artifacts to the canonical target ref before retrying; --reason does not override this gate.")
+                {
+                    HolderTeam = current.Team,
+                    TargetRef = targetRef,
+                    BaseCommit = snapshotOid,
+                    SoloConductorCompletion = completion,
+                };
+            }
+
+            return new ClaimTransactionResult(
+                "planned", request.Scope, relativeClaimPath, false, 1,
+                current.Actor, null, null,
+                "Solo-conductor completion evidence is satisfied on the canonical snapshot. Dry-run only; re-run with --write to perform the plain-push release transaction.")
+            {
+                HolderTeam = current.Team,
+                TargetRef = targetRef,
+                BaseCommit = snapshotOid,
+                SoloConductorCompletion = completion,
+            };
+        }
+        catch (Exception exception)
+        {
+            transactionFailure = exception;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                CleanupTransactionRoot(
+                    transactionRoot,
+                    committed: false,
+                    tolerateCleanupFailure: false,
+                    warningWriter,
+                    deleteDirectory,
+                    transactionFailure);
+            }
+            catch (Exception cleanupFailure) when (transactionFailure is not null)
+            {
+                try
+                {
+                    warningWriter.WriteLine(
+                        "warning: candidate claim dry-run failed; the original read failure is preserved. "
+                        + "Temporary snapshot cleanup also failed: " + cleanupFailure.Message);
+                }
+                catch { }
+            }
+        }
+    }
+
+    private static bool TryGetSoloConductorCandidate(ClaimRequest request, out string executionUnit)
+    {
+        executionUnit = string.Empty;
+        if (request.Operation != ClaimOperation.Release
+            || !request.Scope.StartsWith("execution-unit:", StringComparison.Ordinal)
+            || !LogicalRoleNormalizer.TryNormalize(request.Actor, out var role, out _)
+            || !string.Equals(role, LogicalRoleNormalizer.Builder, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var unit = request.Scope["execution-unit:".Length..];
+        executionUnit = unit;
+        return true;
     }
 
     private static int ExecuteStrandedReport(
@@ -2138,7 +2310,9 @@ internal static class ClaimCommand
         ClaimOperation.Acquire =>
             "Usage: intent-cli claim acquire --scope <execution-unit:EU|release-prep:owner/repo:version> --actor <actor> --team <team> [--max-attempts 2] [--write] [--format json|markdown]",
         ClaimOperation.Release =>
-            "Usage: intent-cli claim release --scope <scope> --actor <holder> --team <team> --reason <reason> [--write] [--format json|markdown]",
+            "Usage: intent-cli claim release --scope <scope> --actor <holder> --team <team> --reason <reason> [--write] [--format json|markdown]"
+            + Environment.NewLine
+            + "Recorded solo-conductor implementation releases require canonical completed-queue, PR-closeout, and declared knowledge/guide receipts. Missing evidence returns completion-blocked with supported repair commands; publish exact owned artifacts to the canonical target ref before retrying. --reason is never an override.",
         _ =>
             "Usage: intent-cli claim takeover --scope <scope> --actor <actor> --team <team> --displaced-holder <actor> --reason <reason> [--max-attempts 2] [--write] [--format json|markdown]",
     };
@@ -2172,6 +2346,15 @@ internal static class ClaimCommand
             writer.WriteLine($"- manual_remediation: {result.GitWriteRetry.ManualRemediation}");
         }
         writer.WriteLine($"- detail: {result.Detail}");
+        if (result.SoloConductorCompletion is not null)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Solo-conductor completion");
+            writer.WriteLine();
+            writer.WriteLine("```json");
+            writer.WriteLine(JsonSerializer.Serialize(result.SoloConductorCompletion, JsonOptions));
+            writer.WriteLine("```");
+        }
     }
 }
 
@@ -2322,6 +2505,10 @@ internal sealed record ClaimTransactionResult(
     [JsonPropertyName("git_write_retry")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public HostStateGitRetryEvidence? GitWriteRetry { get; init; }
+
+    [JsonPropertyName("solo_conductor_completion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SoloConductorClaimReleaseCompletion? SoloConductorCompletion { get; init; }
 }
 
 internal sealed record ClaimProcessResult(

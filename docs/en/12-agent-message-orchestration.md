@@ -326,15 +326,58 @@ unrelated repost; fix API availability or use a replacement PR through normal
 review and canonical worker linkage. The transition reports when this evidence
 has no guaranteed same-PR repair.
 
-There is no override, approval receipt, completion/release gate, or claim that
-the login proves reviewer independence. The gate assumes an honest seat, and
-GitHub labels cannot be atomically tied to a SHA. Preserve exact-head CI and
-merge with `gh pr merge <pr> --repo <owner/repo> --squash
---match-head-commit <head-sha>`.
+G856 adds no override or approval receipt and does not claim that the login
+proves reviewer independence. It does not change the merge boundary. The gate
+assumes an honest seat, and GitHub labels cannot be atomically tied to a SHA.
+Preserve exact-head CI and merge with `gh pr merge <pr> --repo <owner/repo>
+--squash --match-head-commit <head-sha>`. G857 separately gates eligible
+implementation claim releases after closeout.
 
 **Forward compatibility.** An intent-cli without G856 does not enforce posted
 solo approval. Update every host binary that can approve PR transitions before
 relying on this boundary.
+
+## Published solo-conductor completion before claim release (G857 — preview-through-1.x)
+
+The solo-conductor loop's step 10 runs only after the PR is merged and the
+closeout queue/runs, submodule pointer, and intent-node changes have been
+published. Knowledge recorders then write separate architect and orchestrator
+receipts; the guide recorder writes the architect receipt. These commands write
+locally. Stage only their exact owned paths and any still-unpublished owned
+closeout paths, commit, and plain-push to the canonical claim branch: configured
+`metadata_write_branch`, otherwise origin's resolved default branch. Release
+the implementation claim only after that publication is visible on the same
+canonical ref.
+
+The release gate applies only to a current builder-role holder releasing an
+`execution-unit:<unit>` whose explicit packet domain resolves the exact held
+team to recorded solo-conductor mode. It checks one completed queue item and
+its linked target-repository PR, matching `pr-merged` and `closeout-recorded`
+events, both attributed knowledge roles when write-back is required, and an
+architect-attributed guide record when routes are declared. Accepted role
+aliases are normalized. Knowledge targets are optional; guide `record.roles`
+does not identify the recorder. Explicit false-only knowledge declarations
+are `not-applicable` only under the existing G855 key-presence predicate, and
+explicit `no_role_facing_surface: true` makes guide reachability
+`not-applicable`; absent declarations remain missing.
+
+Each retry reads a fresh canonical branch snapshot before any claim history or
+deletion is written. Candidate previews may read the canonical remote during
+clone/pull, then remove the bounded temporary clone without changing the
+invoking checkout. On a mixed host, any canonical solo entry plus a missing
+packet/domain refuses even when the held team has no matching solo entry. A
+`completion-blocked` result leaves
+the active claim and holder/team intact, reports canonical snapshot/ref and
+per-duty evidence, and gives publication recovery commands. Fix the named
+canonical artifacts, publish only exact owned paths, then retry. `--reason`
+does not override the gate. Unreadable, conflicting, duplicate, or immutable
+evidence includes `repair_unavailable_reason` when its existing writer cannot
+repair it by retry alone. This adds no PR merge, queue, run-log, or unit-status
+transition.
+
+**Forward compatibility.** An intent-cli without G857 retains the legacy
+claim-release behavior. Update every host binary that can release these claims
+before relying on the completion gate.
 
 ## Cross-runtime design review and model selection (G835 — preview-through-1.x)
 

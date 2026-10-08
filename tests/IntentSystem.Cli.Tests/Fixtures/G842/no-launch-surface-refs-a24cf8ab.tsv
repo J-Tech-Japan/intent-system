@@ -33,6 +33,9 @@ src/IntentSystem.Cli/Commands/ScopedModelResolutionReaders.cs	ScopedModelResolut
 src/IntentSystem.Cli/Commands/ScopedModelResolutionRecord.cs	ScopedModelResolutionObservationResult	2
 src/IntentSystem.Cli/Commands/ScopedModelResolutionRecord.cs	ScopedModelResolutionObservedEvidence	2
 src/IntentSystem.Cli/Commands/ScopedModelResolutionRecord.cs	ScopedModelResolutionTargetObserver	1
+src/IntentSystem.Cli/Commands/SoloConductorClaimReleaseContracts.cs	Targets	1
+src/IntentSystem.Cli/Commands/SoloConductorClaimReleaseGate.cs	ClaimCommand	1
+src/IntentSystem.Cli/Commands/SoloConductorClaimReleaseGate.cs	Targets	2
 src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	GhCommandRunner	1
 src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	IGitHubCommandRunner	2
 src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	SoloConductorReviewReadRequest	2

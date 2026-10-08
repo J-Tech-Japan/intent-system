@@ -284,12 +284,26 @@ login-scoped obligation を作ります。同じ login による厳密に後の 
 無関係な再投稿では修復できません。API 利用可能性を直すか、通常の review と canonical worker linkage で replacement PR を作成します。
 同一 PR で保証された修復がない evidence は transition が報告します。
 
-override、approval receipt、completion/release gate はなく、login が reviewer independence を証明するとも主張しません。
+G856 は override と approval receipt を追加せず、login が reviewer independence を証明するとも主張しません。merge boundary も変更しません。
 gate は honest seat を前提とし、GitHub label と SHA は atomic に結び付けられません。exact-head CI を維持し、
 `gh pr merge <pr> --repo <owner/repo> --squash --match-head-commit <head-sha>` を用いて、この SHA の PR だけを統合します。
+適用条件を満たす implementation claim release には、closeout 後に G857 の gate が別途適用されます。
 
 **前方互換性。** G856 を含まない intent-cli は posted solo approval を強制しません。この境界に依存する前に、
 PR transition を承認できるすべての host binary を更新してください。
+
+## claim release 前に公開する solo-conductor completion（G857 — preview-through-1.x）
+
+solo-conductor loop の step 10 は PR merge 後にだけ実行し、closeout queue/runs、submodule pointer、intent-node 変更を公開します。
+knowledge recorder は architect と orchestrator がそれぞれ receipt を書き、guide recorder は architect receipt を書きます。
+writer command は local に記録するだけです。厳密な owned path だけを Git の対象にし、未公開の closeout path と合わせて commit を作成し、`plain push` します。
+canonical claim branch は設定済み `metadata_write_branch`、なければ origin の解決済み default branch です。同じ canonical ref への公開が確認できてから implementation claim を解放します。
+
+gate の対象は、`execution-unit:<unit>` を release する現在の builder-role holder のうち、明示 packet domain が完全一致する held team を記録済み solo-conductor mode に解決するケースです。gate は Completed queue item 1 件と target repository 内の linked PR、同じ PR/repository の `pr-merged` と `closeout-recorded` event、required write-back がある場合の architect/orchestrator attribution、routes 宣言時の architect guide attribution を確認します。role alias は正規化します。knowledge target は任意であり、guide の `record.roles` は recorder を示しません。明示された false-only knowledge declaration は既存 G855 key-presence predicate を満たすときだけ `not-applicable` です。明示 `no_role_facing_surface: true` も guide の `not-applicable` となります。宣言の欠落は missing のままです。
+
+retry ごとに history 書込みや claim 削除より前に fresh canonical branch snapshot を読みます。candidate preview では canonical remote を clone/pull で読み込み、bounded な一時 clone を削除しますが invoking checkout は変更しません。mixed host で canonical solo entry があり packet/domain が欠落する場合、held team に一致 entry がなくても推測せず拒否します。`completion-blocked` は active claim と holder/team を保持し、canonical snapshot/ref、duty ごとの evidence、publication recovery command を返します。指定された canonical artifact を直し、厳密な owned path だけを公開してから再試行します。既存 writer が retry で直せない unreadable、conflicting、duplicate、immutable evidence では `repair_unavailable_reason` を返します。`--reason` で gate を override できません。PR merge、queue、run-log、unit-status transition は追加しません。
+
+**前方互換性。** G857 を含まない intent-cli は従来の claim-release 動作を保ちます。この completion gate に依存する前に、対象 claim を release できるすべての host binary を更新してください。
 
 ## cross-runtime design review と model 選択（G835 — preview-through-1.x）
 
