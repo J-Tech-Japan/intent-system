@@ -815,6 +815,11 @@ start. `--since` opts any mode into an explicit, query-wide debt window and
 overrides the adoption cutoff. The existing lane flags remain closeout-time
 filters and intersect with an active start window. Without an active start
 window, the fixed August cutoffs and legacy result shape remain unchanged.
+When the solo transition is unavailable or a team-scoped unit lacks
+corroborating claim-team provenance, the active window does not restore the
+August fallback: older debt may remain visible with an unavailable or unknown
+reason. This conservative treatment does not promise that every pre-adoption
+finding disappears; an explicit lane cutoff can still narrow closeout dates.
 
 The read uses the invoking checkout's existing legacy debt run log and claim
 files. It does not migrate scoped runtime logs or write state. Malformed,

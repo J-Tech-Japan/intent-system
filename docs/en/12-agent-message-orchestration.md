@@ -410,7 +410,10 @@ active/history claim files; scoped runtime logs remain outside this debt
 population, and no migration or durable write is introduced. `debt_window`
 provenance appears only when a window is active/requested, and the Markdown and
 JSON surfaces report the same cutoff, scope, evidence, unknowns, and distinct
-unit counts.
+unit counts. If the first solo transition is unavailable or team claim
+provenance is missing, the active window does not fall back to the August
+floors; older debt may remain visible as unavailable/unknown, so conservative
+retention does not promise that every pre-adoption finding disappears.
 
 ## Cross-runtime design review and model selection (G835 — preview-through-1.x)
 

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -38,6 +39,7 @@ internal sealed class StalledWorkAdoptionWindow
     private readonly HashSet<string> emittedDiagnostics = new(StringComparer.Ordinal);
     private string? runIndexError;
     private string? claimsIndexError;
+    private bool hasUnsafeClaimEvidencePath;
 
     private StalledWorkAdoptionWindow(
         string repoRoot,
@@ -121,10 +123,20 @@ internal sealed class StalledWorkAdoptionWindow
             cutoff,
             unavailableReason,
             legacyRunLogPath);
+        if (window.runIndexError is not null)
+        {
+            warnings.Add($"debt window run-log index is incomplete at `{window.legacyRunLogPath}`: {window.runIndexError}");
+        }
+        if (window.claimsIndexError is not null)
+        {
+            warnings.Add($"debt window claim index is incomplete at `{Path.Combine(window.repoRoot, ".intent-cli", "claims")}`: {window.claimsIndexError}");
+        }
         return window;
     }
 
     public DateTimeOffset? Cutoff => cutoff;
+
+    public bool HasUnsafeClaimEvidencePath => hasUnsafeClaimEvidencePath;
 
     public StalledWorkAdoptionDecision Decide(string executionUnit)
     {
@@ -417,14 +429,17 @@ internal sealed class StalledWorkAdoptionWindow
                 continue;
             }
 
-            if (!TryValidateUnit(runEvent.ExecutionUnit, out _))
+            if (!TryValidateUnit(runEvent.ExecutionUnit, out var unitError))
             {
-                // Unsafe/unscopable unit identifiers cannot be joined to a
-                // valid candidate and are never used to construct a path.
-                continue;
+                // A supported start/closeout event with an unscopable unit
+                // can belong to any candidate. Do not build a path from it,
+                // and do not let other rows in this partial index authorize
+                // an exclusion.
+                runIndexError = $"legacy run log `{legacyRunLogPath}` contains a supported event with an unsafe or missing execution-unit: {unitError}; exclusions are disabled for the incomplete index.";
+                return;
             }
 
-            var unitEvidence = GetEvidence(runEvent.ExecutionUnit);
+            var unitEvidence = GetEvidence(runEvent.ExecutionUnit!);
             if (runEvent.Event is "issue-created" or "issue-published")
             {
                 var parsed = ParseIssueIdentity(runEvent);
@@ -714,6 +729,7 @@ internal sealed class StalledWorkAdoptionWindow
         {
             if (!TryReadJsonFile(path, repoRoot, out var document, out var parseError))
             {
+                hasUnsafeClaimEvidencePath |= IsUnsafeFilePathDiagnostic(parseError);
                 claimsIndexError = parseError;
                 return;
             }
@@ -809,6 +825,7 @@ internal sealed class StalledWorkAdoptionWindow
             {
                 if (!TryReadJsonFile(path, repoRoot, out var document, out var parseError))
                 {
+                    hasUnsafeClaimEvidencePath |= IsUnsafeFilePathDiagnostic(parseError);
                     claimsIndexError = parseError;
                     return;
                 }
@@ -1011,9 +1028,14 @@ internal sealed class StalledWorkAdoptionWindow
         return evidence;
     }
 
-    private static bool TryValidateUnit(string executionUnit, out string error)
+    private static bool TryValidateUnit(string? executionUnit, out string error)
     {
         error = string.Empty;
+        if (string.IsNullOrWhiteSpace(executionUnit))
+        {
+            error = "execution-unit is missing.";
+            return false;
+        }
         if (!ExecutionUnitPattern.IsMatch(executionUnit)
             || !KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out error))
         {
@@ -1071,6 +1093,12 @@ internal sealed class StalledWorkAdoptionWindow
             return false;
         }
     }
+
+    private static bool IsUnsafeFilePathDiagnostic(string error) =>
+        error.Contains("symlink or reparse point", StringComparison.Ordinal)
+        || error.Contains("not a regular", StringComparison.Ordinal)
+        || error.Contains("could not be read safely (Empty)", StringComparison.Ordinal)
+        || error.Contains("could not be read safely (NotRegular)", StringComparison.Ordinal);
 
     private static bool TryEnumerateDirectory(string path, string root, out string[] files, out string error)
     {
@@ -1187,16 +1215,17 @@ internal sealed class StalledWorkAdoptionWindow
         {
             return false;
         }
-        try
+        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(path, out var bytes, out var failure, out var readError))
         {
-            content = File.ReadAllText(path);
-            return true;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            error = $"evidence file `{path}` could not be read: {exception.Message}";
+            error = $"evidence file `{path}` could not be read safely ({failure}): {readError}; it cannot authorize historical exclusion.";
             return false;
         }
+
+        // Run logs and claim records use UTF-8. Remove a possible UTF-8 BOM,
+        // matching File.ReadAllText while keeping the metadata-before-open
+        // check that refuses empty files and Unix FIFOs.
+        content = Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
+        return true;
     }
 
     private static bool TryValidateEvidencePath(string path, string root, bool expectDirectory, out string error)

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -135,60 +136,96 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
     }
 
     [Fact]
-    public void V05_ActualClaimWriterFieldsSupplyActiveAndDisplacedStartEvidence()
+    public void V05_ActualClaimWriterUsesEarliestAcquisitionNotReleaseOrReacquisitionTime()
     {
-        using var workspace = new AdoptionWorkspace();
-        var cutoff = DateTimeOffset.UtcNow.AddDays(1);
-        var reportNow = cutoff.AddDays(1);
-        const string activeUnit = "G858-active-claim";
-        const string displacedUnit = "G858-displaced-claim";
-        workspace.WriteDebtPacket(activeUnit);
-        workspace.WriteDebtPacket(displacedUnit);
-
-        using var claims = new ClaimRepositories();
-        var activeRequest = ClaimRequestFor(activeUnit, "alice", Team);
-        Assert.Equal("acquired", ClaimCommand.RunTransaction(claims.FirstClone, activeRequest).Status);
-        var displacedAcquire = ClaimRequestFor(displacedUnit, "alice", Team);
-        Assert.Equal("acquired", ClaimCommand.RunTransaction(claims.FirstClone, displacedAcquire).Status);
-        var takeover = ClaimCommand.RunTransaction(claims.SecondClone, displacedAcquire with
+        using (var workspace = new AdoptionWorkspace())
+        using (var claims = new ClaimRepositories())
         {
-            Operation = ClaimOperation.Takeover,
-            Actor = "bob",
-            Team = "intent-cli-reviewers",
-            Reason = "operator reassigned the unit",
-            DisplacedHolder = "alice",
-        });
-        Assert.Equal("taken-over", takeover.Status);
-        Assert.NotNull(takeover.HistoryPath);
+            const string unit = "G858-release-reacquire";
+            workspace.WriteDebtPacket(unit);
+            var design = ClaimRequestFor(unit, "designer", Team);
+            Assert.Equal("acquired", ClaimCommand.RunTransaction(claims.FirstClone, design).Status);
+            var release = ClaimCommand.RunTransaction(claims.FirstClone, design with
+            {
+                Operation = ClaimOperation.Release,
+                Reason = "design handoff completed",
+            });
+            Assert.Equal("released", release.Status);
+            Assert.NotNull(release.HistoryPath);
+            var implementation = ClaimRequestFor(unit, "implementation", Team);
+            Assert.Equal("acquired", ClaimCommand.RunTransaction(claims.FirstClone, implementation).Status);
 
-        var inspection = claims.CloneForInspection();
-        var activeClaimPath = Path.Combine(inspection, ClaimCommand.ClaimPath(activeRequest.Scope));
-        var historyPath = Path.Combine(inspection, takeover.HistoryPath!);
-        using var activeJson = JsonDocument.Parse(File.ReadAllText(activeClaimPath));
-        using var historyJson = JsonDocument.Parse(File.ReadAllText(historyPath));
-        Assert.True(activeJson.RootElement.TryGetProperty("claimed_at", out _));
-        Assert.True(historyJson.RootElement.TryGetProperty("displaced_claimed_at", out _));
-        Assert.True(historyJson.RootElement.TryGetProperty("displaced_team", out _));
-        Assert.True(historyJson.RootElement.TryGetProperty("recorded_at", out _));
+            var inspection = claims.CloneForInspection();
+            var activePath = Path.Combine(inspection, ClaimCommand.ClaimPath(implementation.Scope));
+            var historyPath = Path.Combine(inspection, release.HistoryPath!);
+            using var activeJson = JsonDocument.Parse(File.ReadAllText(activePath));
+            using var historyJson = JsonDocument.Parse(File.ReadAllText(historyPath));
+            var firstAcquiredAt = historyJson.RootElement.GetProperty("displaced_claimed_at").GetDateTimeOffset();
+            var releaseRecordedAt = historyJson.RootElement.GetProperty("recorded_at").GetDateTimeOffset();
+            var reacquiredAt = activeJson.RootElement.GetProperty("claimed_at").GetDateTimeOffset();
+            var cutoff = Midpoint(firstAcquiredAt, releaseRecordedAt);
+            Assert.True(firstAcquiredAt < cutoff && cutoff < releaseRecordedAt);
+            Assert.True(reacquiredAt > releaseRecordedAt);
+            Assert.Equal(Team, historyJson.RootElement.GetProperty("displaced_team").GetString());
 
-        workspace.CopyClaimEvidence(activeUnit, activeClaimPath, null);
-        workspace.CopyClaimEvidence(displacedUnit, null, historyPath);
-        workspace.WriteCloseoutOnly(activeUnit, cutoff.AddDays(1), 2610);
-        workspace.WriteCloseoutOnly(displacedUnit, cutoff.AddDays(1), 2611);
-        var activeBytes = File.ReadAllBytes(workspace.ClaimPath(activeUnit));
-        var historyBytes = File.ReadAllBytes(workspace.ClaimHistoryPath(displacedUnit, Path.GetFileName(historyPath)));
-        SetMode(workspace.Context, TeamMode.SoloConductor, cutoff, Team);
+            workspace.CopyClaimEvidence(unit, activePath, historyPath);
+            workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2610);
+            var activeBytes = File.ReadAllBytes(workspace.ClaimPath(unit));
+            var historyBytes = File.ReadAllBytes(workspace.ClaimHistoryPath(unit, Path.GetFileName(historyPath)));
+            SetMode(workspace.Context, TeamMode.SoloConductor, cutoff, Team);
 
-        using var result = Report(workspace.Context, ["--team", Team], now: reportNow);
-        Assert.Equal(activeBytes, File.ReadAllBytes(workspace.ClaimPath(activeUnit)));
-        Assert.Equal(historyBytes, File.ReadAllBytes(workspace.ClaimHistoryPath(displacedUnit, Path.GetFileName(historyPath))));
-        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
-            item.GetProperty("execution_unit").GetString() == activeUnit
-            && item.GetProperty("debt_window_evidence_kind").GetString() == "active-claim");
-        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
-            item.GetProperty("execution_unit").GetString() == displacedUnit
-            && item.GetProperty("debt_window_evidence_kind").GetString() == "claim-history");
+            using var result = Report(workspace.Context, ["--team", Team], now: reacquiredAt.AddDays(1));
+            Assert.Equal(activeBytes, File.ReadAllBytes(workspace.ClaimPath(unit)));
+            Assert.Equal(historyBytes, File.ReadAllBytes(workspace.ClaimHistoryPath(unit, Path.GetFileName(historyPath))));
+            Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("debt_window_evidence_kind").GetString() == "claim-history"
+                && item.GetProperty("debt_window_evidence_at").GetDateTimeOffset() == firstAcquiredAt);
+        }
+
+        using (var workspace = new AdoptionWorkspace())
+        using (var claims = new ClaimRepositories())
+        {
+            const string unit = "G858-displaced-start";
+            workspace.WriteDebtPacket(unit);
+            var displacedAcquire = ClaimRequestFor(unit, "alice", Team);
+            Assert.Equal("acquired", ClaimCommand.RunTransaction(claims.FirstClone, displacedAcquire).Status);
+            var takeover = ClaimCommand.RunTransaction(claims.SecondClone, displacedAcquire with
+            {
+                Operation = ClaimOperation.Takeover,
+                Actor = "bob",
+                Team = "intent-cli-reviewers",
+                Reason = "operator reassigned the unit",
+                DisplacedHolder = "alice",
+            });
+            Assert.Equal("taken-over", takeover.Status);
+            Assert.NotNull(takeover.HistoryPath);
+
+            var inspection = claims.CloneForInspection();
+            var historyPath = Path.Combine(inspection, takeover.HistoryPath!);
+            using var historyJson = JsonDocument.Parse(File.ReadAllText(historyPath));
+            var displacedClaimedAt = historyJson.RootElement.GetProperty("displaced_claimed_at").GetDateTimeOffset();
+            var takeoverRecordedAt = historyJson.RootElement.GetProperty("recorded_at").GetDateTimeOffset();
+            var cutoff = Midpoint(displacedClaimedAt, takeoverRecordedAt);
+            Assert.True(displacedClaimedAt < cutoff && cutoff < takeoverRecordedAt);
+            Assert.Equal(Team, historyJson.RootElement.GetProperty("displaced_team").GetString());
+
+            // Retain only the displaced acquisition record so the test pins
+            // that it, not the later takeover's recorded_at, establishes the
+            // unit's start and team provenance.
+            workspace.CopyClaimEvidence(unit, null, historyPath);
+            workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2611);
+            SetMode(workspace.Context, TeamMode.SoloConductor, cutoff, Team);
+            using var result = Report(workspace.Context, ["--team", Team], now: takeoverRecordedAt.AddDays(1));
+            Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("debt_window_evidence_kind").GetString() == "claim-history"
+                && item.GetProperty("debt_window_evidence_at").GetDateTimeOffset() == displacedClaimedAt);
+        }
     }
+
+    private static DateTimeOffset Midpoint(DateTimeOffset first, DateTimeOffset second) =>
+        first.AddTicks((second - first).Ticks / 2);
 
     private static ClaimRequest ClaimRequestFor(string unit, string actor, string team) => new(
         ClaimOperation.Acquire,
@@ -369,6 +406,442 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
     }
 
     [Fact]
+    public void V11_NullUnitAndMalformedClaimEvidenceRetainCloseoutDebt()
+    {
+        var cutoff = new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero);
+        using (var workspace = new AdoptionWorkspace())
+        {
+            const string unit = "G858-null-run-unit";
+            workspace.WriteDebtPacket(unit);
+            workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2830);
+            workspace.AppendRawRunLogLine($"{{\"ts\":\"{cutoff:O}\",\"execution_unit\":null,\"event\":\"issue-created\",\"by\":\"fixture\"}}");
+
+            using var result = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2));
+            Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+            Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
+                warning.GetString()!.Contains("supported event with an unsafe or missing execution-unit", StringComparison.Ordinal));
+            Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("reason").GetString() == "debt-window-start-unknown");
+        }
+
+        using (var workspace = new AdoptionWorkspace())
+        {
+            const string unit = "G858-malformed-claim-json";
+            workspace.WriteDebtPacket(unit);
+            workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2831);
+            workspace.WriteMalformedClaimJson(unit);
+
+            using var result = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2));
+            Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+            Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
+                warning.GetString()!.Contains("claim index is incomplete", StringComparison.Ordinal));
+            Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("reason").GetString() == "debt-window-start-unknown");
+        }
+
+        using (var workspace = new AdoptionWorkspace())
+        {
+            const string unit = "G858-invalid-claim-timestamp";
+            workspace.WriteDebtPacket(unit);
+            workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2832);
+            workspace.WriteClaimWithRawTimestamp(unit, Team, "not-a-timestamp");
+
+            using var result = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2));
+            Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+            Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("reason").GetString() == "debt-window-start-unknown"
+                && item.GetProperty("detail").GetString()!.Contains("claim-start-timestamp-invalid", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void V11_RunIndexFailureIsVisibleWithoutCandidatesAndMalformedRunLogCannotAllClear()
+    {
+        var cutoff = new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero);
+        using (var empty = new AdoptionWorkspace())
+        {
+            empty.MakeRunLogDirectory();
+            using var result = Report(empty.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(1));
+            Assert.Equal(0, result.RootElement.GetProperty("items").GetArrayLength());
+            Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
+                warning.GetString()!.Contains("run-log index is incomplete", StringComparison.Ordinal)
+                && warning.GetString()!.Contains(empty.RunLogPath, StringComparison.Ordinal));
+        }
+
+        using (var malformed = new AdoptionWorkspace())
+        {
+            const string unit = "G858-malformed-run-line";
+            malformed.WriteDebtPacket(unit);
+            malformed.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2833);
+            malformed.AppendRawRunLogLine("{ this line is not JSON }");
+            using var result = Report(malformed.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2));
+            Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
+                warning.GetString()!.Contains("run-log index is incomplete", StringComparison.Ordinal));
+            Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+                item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                && item.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable);
+        }
+    }
+
+    [Fact]
+    public async Task V11_FifoClaimEvidenceIsRefusedWithoutBlockingAndLeavesDebtVisible()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var workspace = new AdoptionWorkspace();
+        var cutoff = new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero);
+        const string unit = "G858-fifo-claim";
+        workspace.WriteDebtPacket(unit);
+        workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2834);
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.ClaimPath(unit))!);
+        Assert.Equal(0, MkFifo(workspace.ClaimPath(unit), 0x180));
+        Assert.False(CrossRuntimeReviewFileMode.IsRegularFile(workspace.ClaimPath(unit)));
+        Assert.False(CrossRuntimeReviewFileMode.TryReadRegularFileBytes(workspace.ClaimPath(unit), out _, out _, out _));
+
+        var report = Task.Run(() => Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2)));
+        var completed = await Task.WhenAny(report, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.Same(report, completed);
+        using var result = await report;
+        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+        Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
+            warning.GetString()!.Contains(workspace.ClaimPath(unit), StringComparison.Ordinal));
+        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("reason").GetString() == "debt-window-start-unknown");
+    }
+
+    [Fact]
+    public async Task V11_FifoLegacyRunLogIsRefusedByBacklogReadersWithoutBlocking()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var workspace = new AdoptionWorkspace();
+        var cutoff = new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero);
+        const string unit = "G858-fifo-run-log";
+        workspace.WriteDebtPacket(unit);
+        workspace.WriteBlockedQueue(unit);
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunLogPath)!);
+        Assert.Equal(0, MkFifo(workspace.RunLogPath, 0x180));
+        Assert.False(CrossRuntimeReviewFileMode.IsRegularFile(workspace.RunLogPath));
+
+        var report = Task.Run(() => Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2)));
+        var completed = await Task.WhenAny(report, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.Same(report, completed);
+        using var result = await report;
+        Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
+            warning.GetString()!.Contains("run-log index is incomplete", StringComparison.Ordinal)
+            && warning.GetString()!.Contains(workspace.RunLogPath, StringComparison.Ordinal));
+        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBlockedParked
+            && item.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonActivityDataUnusable);
+    }
+
+    [Fact]
+    public void V11_FutureSoloTransitionIsUnavailableAndPreAugustDebtStaysVisible()
+    {
+        using var workspace = new AdoptionWorkspace();
+        const string unit = "G858-future-solo-transition";
+        var preAugustCloseout = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var reportNow = new DateTimeOffset(2026, 9, 16, 12, 0, 0, TimeSpan.Zero);
+        workspace.WriteDebtPacket(unit);
+        workspace.WriteCloseoutOnly(unit, preAugustCloseout, 2835);
+        SetMode(workspace.Context, TeamMode.SoloConductor, reportNow.AddDays(1));
+
+        using var unavailable = Report(workspace.Context, now: reportNow);
+        Assert.Equal("solo-adoption-transition-in-future",
+            unavailable.RootElement.GetProperty("debt_window").GetProperty("unavailable_reason").GetString());
+        Assert.True(unavailable.RootElement.GetProperty("stalled").GetBoolean());
+        Assert.Contains(unavailable.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+        Assert.Contains(unavailable.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("reason").GetString() == "debt-window-unavailable");
+
+        using var deliberateLaneCutoffs = Report(workspace.Context,
+            ["--knowledge-writeback-since", AutomationStalledWorkCommand.KnowledgeWriteBackActivationUtc.ToString("O"),
+             "--guide-reachability-since", AutomationStalledWorkCommand.GuideReachabilityActivationUtc.ToString("O")],
+            now: reportNow);
+        Assert.DoesNotContain(deliberateLaneCutoffs.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                or AutomationStalledWorkCommand.KindGuideReachabilityPending);
+        Assert.Equal("solo-adoption-transition-in-future",
+            deliberateLaneCutoffs.RootElement.GetProperty("debt_window").GetProperty("unavailable_reason").GetString());
+    }
+
+    [Fact]
+    public void V11_InvalidRecordedModeStillReturnsTheExistingCommandFailure()
+    {
+        using var workspace = new AdoptionWorkspace();
+        var path = TeamModeStore.ResolvePath(workspace.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "{\"schema_version\":\"1\",\"entries\":[{\"domain\":\"intent-cli\",\"team\":\"intent-cli-dev\",\"mode\":\"solo-conductor\",\"updated_at\":\"2026-08-13T00:00:00Z\",\"transitions\":[]}]}");
+
+        using var writer = new StringWriter();
+        var exitCode = AutomationStalledWorkCommand.Execute(workspace.Context,
+            ["--domain", Domain, "--repo", Repo, "--format", "json"], writer);
+        Assert.Equal(1, exitCode);
+        Assert.Contains("team mode state", writer.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void V14_ExplicitWindowLeavesEveryUnrelatedLivePopulationUnchanged()
+    {
+        using var workspace = new AdoptionWorkspace();
+        var cutoff = Now.AddDays(-1);
+        const string ciUnit = "G858-v14-ci";
+        const string reviewUnit = "G858-v14-review";
+        const string repairUnit = "G858-v14-repair";
+        const string claimUnit = "G858-v14-claim";
+        foreach (var unit in new[] { ciUnit, reviewUnit, repairUnit, claimUnit, "G858-v14-old-debt" })
+        {
+            workspace.WriteDebtPacket(unit);
+        }
+        workspace.WriteCloseoutOnly("G858-v14-old-debt", new DateTimeOffset(2026, 8, 2, 0, 0, 0, TimeSpan.Zero), 2840);
+        workspace.WriteCloseoutOnly("G858-v14-old-debt", new DateTimeOffset(2026, 8, 2, 0, 0, 0, TimeSpan.Zero), 2841);
+        workspace.WriteClaim(claimUnit, Team, Now.AddDays(-10));
+        workspace.AppendEvent(new RunEvent
+        {
+            Ts = Now.AddMinutes(-46),
+            ExecutionUnit = "G858-v14-last-activity",
+            Event = "run-started",
+            By = "fixture",
+        });
+
+        var attentionOpened = Now.AddDays(-2);
+        OperatorAttentionStore.Write(workspace.Root, OperatorAttentionStore.BuildUpdated(null,
+        [
+            new OperatorAttentionRecord
+            {
+                RecordId = "G858-v14-operator-attention",
+                Domain = Domain,
+                Team = Team,
+                Owner = "operator",
+                BlockingReference = "issue:1876",
+                ActionNeeded = "Review the independent live finding.",
+                EstablishingEvidence = "V14 pre-adoption live-lane fixture",
+                Status = "open",
+                OpenedAt = attentionOpened,
+                ResolutionEvidence = null,
+                SupersedesRecordId = null,
+                Transitions =
+                [
+                    new OperatorAttentionTransition
+                    {
+                        FromStatus = null,
+                        ToStatus = "open",
+                        TransitionedAt = attentionOpened,
+                        Evidence = "V14 pre-adoption live-lane fixture",
+                    },
+                ],
+            },
+        ], Now));
+        Assert.True(NotifyPendingDelegationStore.WriteDispatch(workspace.Root, new NotifyPendingDelegation
+        {
+            Domain = Domain,
+            Team = Team,
+            TaskId = "G858-v14-delegation",
+            DelegatingRole = "orchestration",
+            RecipientRole = "implementation",
+            RecipientIdentity = "implementation-seat",
+            ExpectedArtifact = "https://github.com/J-Tech-Japan/intent-system/issues/1876",
+            ExpectedArtifacts = ["https://github.com/J-Tech-Japan/intent-system/issues/1876"],
+            Objective = "Keep the unrelated delegation lane visible.",
+            Inputs = ["https://github.com/J-Tech-Japan/intent-system/issues/1876"],
+            ResultNonce = "g858-v14-delegation",
+            DispatchedAt = Now.AddDays(-1),
+        }).Written);
+
+        var issues = new[]
+        {
+            WindowIssue(2842, ciUnit, Now.AddDays(-3)),
+            WindowIssue(2843, reviewUnit, Now.AddDays(-3)),
+            WindowIssue(2844, repairUnit, Now.AddDays(-3)),
+        };
+        var prs = new[]
+        {
+            WindowPr(2845, ciUnit, 2842, Now.AddHours(-2),
+                head: new string('c', 40), statuses: [new GitHubAutomationStatusCheckCandidate { TypeName = "CheckRun", Status = "IN_PROGRESS" }]),
+            WindowPr(2846, reviewUnit, 2843, Now.AddHours(-2)),
+            WindowPr(2847, repairUnit, 2844, Now.AddHours(-2), "intent-pr-request-update"),
+        };
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new WindowFixtureLister(issues, prs);
+        SetMode(workspace.Context, TeamMode.Delivery, Now.AddDays(-20), Team);
+
+        using var baseline = Report(workspace.Context, ["--team", Team], now: Now, staleMinutes: 0);
+        using var activeWindow = Report(workspace.Context,
+            ["--team", Team, "--since", cutoff.ToString("O")], now: Now, staleMinutes: 0);
+
+        var expectedKinds = new[]
+        {
+            AutomationStalledWorkCommand.KindCiPending,
+            AutomationStalledWorkCommand.KindClaimStale,
+            AutomationStalledWorkCommand.KindOperatorAttentionPending,
+            AutomationStalledWorkCommand.KindPrCreatedNotReviewing,
+            AutomationStalledWorkCommand.KindRepairPending,
+            AutomationStalledWorkCommand.KindPendingDelegationOpen,
+        };
+        foreach (var kind in expectedKinds)
+        {
+            Assert.Contains(baseline.RootElement.GetProperty("items").EnumerateArray(), item => item.GetProperty("kind").GetString() == kind);
+            Assert.Contains(activeWindow.RootElement.GetProperty("items").EnumerateArray(), item => item.GetProperty("kind").GetString() == kind);
+        }
+
+        Assert.Equal(NonDebtPopulation(baseline.RootElement), NonDebtPopulation(activeWindow.RootElement));
+        Assert.Equal("explicit-since", activeWindow.RootElement.GetProperty("debt_window").GetProperty("policy").GetString());
+        Assert.Contains(baseline.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == "G858-v14-old-debt"
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+        Assert.DoesNotContain(activeWindow.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == "G858-v14-old-debt"
+            && item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                or AutomationStalledWorkCommand.KindGuideReachabilityPending);
+
+        using var backlog = new AdoptionWorkspace();
+        const string backlogUnit = "G858-v14-backlog";
+        backlog.WriteDebtPacket(backlogUnit);
+        backlog.WriteQueue([backlogUnit]);
+        backlog.AppendEvent(new RunEvent
+        {
+            Ts = Now.AddMinutes(-46),
+            ExecutionUnit = "G858-v14-backlog-last-activity",
+            Event = "run-started",
+            By = "fixture",
+        });
+        AutomationStalledWorkCommand.CandidateListerFactory = () => new EmptyLister();
+        SetMode(backlog.Context, TeamMode.Delivery, Now.AddDays(-20), Team);
+        using var backlogBaseline = Report(backlog.Context, ["--team", Team], now: Now);
+        using var backlogWindow = Report(backlog.Context, ["--team", Team, "--since", cutoff.ToString("O")], now: Now);
+        Assert.Contains(backlogBaseline.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle
+            && item.GetProperty("execution_unit").GetString() == backlogUnit);
+        Assert.Contains(backlogWindow.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBacklogReadyIdle
+            && item.GetProperty("execution_unit").GetString() == backlogUnit);
+        Assert.Equal(NonDebtPopulation(backlogBaseline.RootElement), NonDebtPopulation(backlogWindow.RootElement));
+    }
+
+    [Fact]
+    public void V14_NoWindowKeepsAugustDebtFloorsForDefaultDeliveryAndAuthoringOnlyModes()
+    {
+        foreach (var mode in new string?[] { null, TeamMode.Delivery, TeamMode.AuthoringOnly })
+        {
+            using var workspace = new AdoptionWorkspace();
+            const string beforeBothFloors = "G858-v14-before-floors";
+            const string afterKnowledgeBeforeGuide = "G858-v14-knowledge-only-floor";
+            workspace.WriteDebtPacket(beforeBothFloors);
+            workspace.WriteDebtPacket(afterKnowledgeBeforeGuide);
+            workspace.WriteCloseoutOnly(beforeBothFloors,
+                AutomationStalledWorkCommand.KnowledgeWriteBackActivationUtc.AddTicks(-1), 2848);
+            workspace.WriteCloseoutOnly(afterKnowledgeBeforeGuide,
+                AutomationStalledWorkCommand.KnowledgeWriteBackActivationUtc.AddDays(4), 2849);
+            if (mode is not null)
+            {
+                SetMode(workspace.Context, mode, Now.AddDays(-10), Team);
+            }
+
+            string[]? arguments = mode is null ? null : ["--team", Team];
+            using var result = Report(workspace.Context, arguments, now: Now);
+            Assert.False(result.RootElement.TryGetProperty("debt_window", out _));
+            Assert.DoesNotContain(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == beforeBothFloors
+                && item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                    or AutomationStalledWorkCommand.KindGuideReachabilityPending);
+            Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == afterKnowledgeBeforeGuide
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+            Assert.DoesNotContain(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == afterKnowledgeBeforeGuide
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
+        }
+    }
+
+    private static GitHubAutomationIssueCandidate WindowIssue(int number, string unit, DateTimeOffset createdAt) => new()
+    {
+        Number = number,
+        Title = $"{unit}: G858 V14 preserved issue",
+        Url = $"https://github.com/{Repo}/issues/{number}",
+        CreatedAt = createdAt.ToString("O"),
+        UpdatedAt = createdAt.ToString("O"),
+        State = "OPEN",
+        Labels = [new GitHubAutomationLabel { Name = "intent-pr-created" }],
+    };
+
+    private static GitHubAutomationPrCandidate WindowPr(
+        int number,
+        string unit,
+        int issueNumber,
+        DateTimeOffset createdAt,
+        string? label = null,
+        string head = "",
+        IReadOnlyList<GitHubAutomationStatusCheckCandidate>? statuses = null) => new()
+    {
+        Number = number,
+        Title = $"{unit}: G858 V14 preserved PR",
+        Url = $"https://github.com/{Repo}/pull/{number}",
+        CreatedAt = createdAt.ToString("O"),
+        UpdatedAt = createdAt.ToString("O"),
+        State = "OPEN",
+        HeadRefOid = head,
+        StatusCheckRollup = statuses ?? [],
+        Labels = label is null ? [] : [new GitHubAutomationLabel { Name = label }],
+        ClosingIssuesReferences =
+        [
+            new GitHubPrClosingIssueReference
+            {
+                Number = issueNumber,
+                Repository = new GitHubPrClosingIssueRepository
+                {
+                    Name = "intent-system",
+                    Owner = new GitHubPrClosingIssueRepositoryOwner { Login = "J-Tech-Japan" },
+                },
+            },
+        ],
+    };
+
+    private static string[] NonDebtPopulation(JsonElement report) => report.GetProperty("items").EnumerateArray()
+        .Where(item => item.GetProperty("kind").GetString() is not AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+            and not AutomationStalledWorkCommand.KindKnowledgeWritebackRecordedUncommitted
+            and not AutomationStalledWorkCommand.KindGuideReachabilityPending)
+        .Select(item => string.Join("|",
+            item.GetProperty("kind").GetString(),
+            item.GetProperty("execution_unit").GetString(),
+            item.TryGetProperty("issue", out var issue) && issue.ValueKind == JsonValueKind.Object ? issue.GetProperty("number").GetInt32() : 0,
+            item.TryGetProperty("pr", out var pr) && pr.ValueKind == JsonValueKind.Object ? pr.GetProperty("number").GetInt32() : 0))
+        .OrderBy(value => value, StringComparer.Ordinal)
+        .ToArray();
+
+    private sealed class WindowFixtureLister(
+        IReadOnlyList<GitHubAutomationIssueCandidate> issues,
+        IReadOnlyList<GitHubAutomationPrCandidate> prs) : IGitHubAutomationCandidateLister
+    {
+        public IReadOnlyList<GitHubAutomationPrCandidate> ListPullRequests(string repo, IReadOnlyCollection<string> requiredLabels) => prs;
+        public IReadOnlyList<GitHubAutomationIssueCandidate> ListIssues(string repo, IReadOnlyCollection<string> requiredLabels) => issues;
+    }
+
+    [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+    private static extern int MkFifo(string pathname, int mode);
+
+    [Fact]
     public void V13_OnlyLegacyRunLogContributesEvidenceWhenScopedRuntimeLogAlsoExists()
     {
         using var workspace = new AdoptionWorkspace();
@@ -524,6 +997,16 @@ internal sealed class AdoptionWorkspace : IDisposable
         WriteQueueState(items);
     }
 
+    public void WriteBlockedQueue(string unit)
+    {
+        var item = QueueItemFor(unit) with
+        {
+            State = QueueItemState.Blocked,
+            BlockedBy = ["fixture blocked state"],
+        };
+        WriteQueueState([item]);
+    }
+
     public void AttachPrsAndSetReviewState(IReadOnlyList<string> units, IReadOnlyList<int> prs)
     {
         var current = ReadQueueState();
@@ -555,6 +1038,36 @@ internal sealed class AdoptionWorkspace : IDisposable
     {
         Directory.CreateDirectory(Path.GetDirectoryName(RunLogPath)!);
         File.AppendAllText(RunLogPath, RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
+    }
+
+    public void AppendRawRunLogLine(string line)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(RunLogPath)!);
+        File.AppendAllText(RunLogPath, line + Environment.NewLine);
+    }
+
+    public void MakeRunLogDirectory()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(RunLogPath)!);
+        if (File.Exists(RunLogPath)) File.Delete(RunLogPath);
+        Directory.CreateDirectory(RunLogPath);
+    }
+
+    public void WriteMalformedClaimJson(string unit)
+    {
+        var path = ClaimPath(unit);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "{ malformed claim json }");
+    }
+
+    public void WriteClaimWithRawTimestamp(string unit, string team, string claimedAt)
+    {
+        var path = ClaimPath(unit);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var json = $$"""
+            {"schema_version":"1","scope":"execution-unit:{{unit}}","actor":"fixture","team":"{{team}}","claimed_at":"{{claimedAt}}","base_commit":"{{new string('a', 40)}}"}
+            """;
+        File.WriteAllText(path, json);
     }
 
     public void WriteClaim(string unit, string team, DateTimeOffset claimedAt)

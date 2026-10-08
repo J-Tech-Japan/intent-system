@@ -697,6 +697,9 @@ cutoff より前の一致する closeout は unit が既に存在した証拠に
 `--since` はどの mode でも明示的な query-wide debt window を有効化し、adoption cutoff を上書きします。
 既存 lane flag は closeout-time filter のままなので、active な start window と交差します。start window がなければ、固定 August cutoff と
 legacy result shape を維持します。
+solo 遷移が利用できない場合や team-scoped unit に corroborating な claim-team provenance がない場合、active window は August floor に戻りません。
+August より古い debt が unavailable / unknown reason とともに表示されることがあります。この保守的な保持は、adoption 前の finding がすべて消えることを保証しません。
+明示的な lane cutoff で closeout date をさらに絞れます。
 
 read は invoking checkout の既存 legacy debt run log と claim file を使います。scoped runtime log へ移行せず、state も書きません。
 関連する identity/team evidence が欠落、malformed、conflicting の場合は pending debt を unknown/foreign diagnostic とともに表示します。

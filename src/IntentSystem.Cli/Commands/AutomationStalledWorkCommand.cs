@@ -763,7 +763,7 @@ internal static class AutomationStalledWorkCommand
         // G679: claim files are entirely local/Git-backed evidence. Collect
         // them even when every GitHub-derived lane is quota-inoperable; the
         // result-level partial marker is applied below without losing them.
-        CollectStaleClaims(context, now, staleMinutes, items, warnings);
+        CollectStaleClaims(context, now, staleMinutes, items, warnings, debtWindow is not null);
 
         var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
         CollectPublishedNotDelegated(
@@ -831,7 +831,7 @@ internal static class AutomationStalledWorkCommand
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
         CollectVersionRollRequired(context, domain, repo, now, publishedReleases, items, warnings);
-        CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, items, excluded);
+        CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, debtWindow, items, excluded);
         CollectDesignDecisionPending(context, domain, candidateDomains, repo, now, items, excluded);
         CollectKnowledgeWritebackPending(
             context,
@@ -1109,7 +1109,8 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset now,
         int staleMinutes,
         List<StalledWorkItem> items,
-        List<string> warnings)
+        List<string> warnings,
+        bool refuseNonRegularFiles)
     {
         var claimsRoot = Path.Combine(context.RepoRoot, ".intent-cli", "claims");
         if (!Directory.Exists(claimsRoot))
@@ -1121,10 +1122,25 @@ internal static class AutomationStalledWorkCommand
         // evidence, not active ownership and must never become a stale claim.
         foreach (var path in Directory.EnumerateFiles(claimsRoot, "*.json", SearchOption.TopDirectoryOnly))
         {
+            string claimJson;
+            if (refuseNonRegularFiles)
+            {
+                if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(path, out var bytes, out var failure, out var readError))
+                {
+                    warnings.Add($"claim record could not be read safely at '{path}' ({failure}): {readError}");
+                    continue;
+                }
+                claimJson = Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
+            }
+            else
+            {
+                claimJson = File.ReadAllText(path);
+            }
+
             ClaimRecord? claim;
             try
             {
-                claim = JsonSerializer.Deserialize<ClaimRecord>(File.ReadAllText(path), JsonOptions);
+                claim = JsonSerializer.Deserialize<ClaimRecord>(claimJson, JsonOptions);
             }
             catch (Exception exception) when (exception is IOException or JsonException)
             {
@@ -3490,6 +3506,51 @@ internal static class AutomationStalledWorkCommand
     /// <c>excluded[]</c>, never a guessed age — same philosophy as
     /// <see cref="ReasonActivityDataUnusable"/> above.
     /// </summary>
+    private static string ReadWindowedEvidenceText(string path, StalledWorkAdoptionWindow? debtWindow)
+    {
+        if (debtWindow is null)
+        {
+            return File.ReadAllText(path);
+        }
+
+        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(path, out var bytes, out var failure, out var error))
+        {
+            throw new IOException($"evidence file '{path}' could not be read safely ({failure}): {error}");
+        }
+
+        return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
+    }
+
+    private static string? FindUnsafeNextSlicePacketPath(CliContext context)
+    {
+        var issueRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
+        if (!Directory.Exists(issueRoot))
+        {
+            return null;
+        }
+
+        try
+        {
+            foreach (var directory in Directory.EnumerateDirectories(issueRoot, "*", SearchOption.TopDirectoryOnly))
+            {
+                var packetPath = Path.Combine(directory, "packet.yaml");
+                if ((File.Exists(packetPath) || Directory.Exists(packetPath))
+                    && !CrossRuntimeReviewFileMode.IsRegularFile(packetPath))
+                {
+                    return packetPath;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The ordinary candidate selector retains its existing behavior
+            // for an unreadable issue directory; this preflight only exists
+            // to avoid reopening known nonregular paths.
+        }
+
+        return null;
+    }
+
     private static void CollectBacklogReadyIdle(
         CliContext context,
         string domain,
@@ -3499,9 +3560,33 @@ internal static class AutomationStalledWorkCommand
         string repo,
         DateTimeOffset now,
         int backlogIdleMinutes,
+        StalledWorkAdoptionWindow? debtWindow,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded)
     {
+        var unsafePacketPath = debtWindow is null ? null : FindUnsafeNextSlicePacketPath(context);
+        if (debtWindow?.HasUnsafeClaimEvidencePath == true || unsafePacketPath is not null)
+        {
+            // IntentNextSliceCommand performs its own local claim read while
+            // considering each packet. Do not send it claim or packet paths
+            // already rejected as empty/nonregular/symlink evidence: its
+            // legacy reader could block on a FIFO. Other report lanes remain
+            // available, and the matching exclusion identifies the blocked
+            // next-slice population.
+            excluded.Add(new StalledWorkExcluded
+            {
+                Kind = KindBacklogReadyIdle,
+                ExecutionUnit = string.Empty,
+                Issue = null,
+                Pr = null,
+                Reason = ReasonActivityDataUnusable,
+                Detail = unsafePacketPath is not null
+                    ? $"backlog-ready-idle candidate selection was skipped because packet `{unsafePacketPath}` is not a readable regular file; next-slice must not reopen it."
+                    : "backlog-ready-idle candidate selection was skipped because the active debt-window claim index contains a nonregular or unsafe path that the next-slice reader must not reopen.",
+            });
+            return;
+        }
+
         if (!DomainWipIsEmpty(context, domain, candidateDomains, openIssues, openPrs, repo))
         {
             return;
@@ -3521,7 +3606,7 @@ internal static class AutomationStalledWorkCommand
         // queue-state directly here is therefore necessary both to suppress
         // the unsafe publish recommendation and to keep reverse drift visible.
         var nonPublishableUnits = CollectBacklogBlockedState(
-            context, domain, repo, now, items, excluded);
+            context, domain, repo, now, debtWindow, items, excluded);
 
         IntentNextSliceResult nextSlice;
         try
@@ -3578,7 +3663,7 @@ internal static class AutomationStalledWorkCommand
             DateTimeOffset? incompleteLastActivity = null;
             try
             {
-                foreach (var runEvent in RunLogSerializer.DeserializeAll(File.ReadAllText(incompleteRunLogPath)))
+                foreach (var runEvent in RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(incompleteRunLogPath, debtWindow)))
                 {
                     if (incompleteLastActivity is null || runEvent.Ts > incompleteLastActivity.Value)
                     {
@@ -3658,7 +3743,7 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset? lastActivity = null;
         try
         {
-            foreach (var runEvent in RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath)))
+            foreach (var runEvent in RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(runLogPath, debtWindow)))
             {
                 if (lastActivity is null || runEvent.Ts > lastActivity.Value)
                 {
@@ -3666,7 +3751,7 @@ internal static class AutomationStalledWorkCommand
                 }
             }
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
         {
             excluded.Add(new StalledWorkExcluded
             {
@@ -3734,6 +3819,7 @@ internal static class AutomationStalledWorkCommand
         string domain,
         string repo,
         DateTimeOffset now,
+        StalledWorkAdoptionWindow? debtWindow,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded)
     {
@@ -3775,7 +3861,7 @@ internal static class AutomationStalledWorkCommand
         try
         {
             runEvents = File.Exists(runLogPath)
-                ? RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath))
+                ? RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(runLogPath, debtWindow))
                 : Array.Empty<RunEvent>();
         }
         catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
@@ -4077,7 +4163,7 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<RunEvent> events;
         try
         {
-            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            events = RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(runLogPath, debtWindow));
         }
         catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or NotSupportedException)
         {
@@ -4143,7 +4229,7 @@ internal static class AutomationStalledWorkCommand
                 Corroborated: File.Exists(packetYamlPath),
                 IsAmbiguous: false,
                 CandidatePacketPaths: Array.Empty<string>());
-            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit), candidateDomains, repo,
+            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit, debtWindow), candidateDomains, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
@@ -4161,7 +4247,7 @@ internal static class AutomationStalledWorkCommand
             KnowledgeWriteBackDeclaration declaration;
             try
             {
-                declaration = KnowledgeWriteBackDeclaration.Read(File.ReadAllText(packetYamlPath));
+                declaration = KnowledgeWriteBackDeclaration.Read(ReadWindowedEvidenceText(packetYamlPath, debtWindow));
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
             {
@@ -4203,7 +4289,7 @@ internal static class AutomationStalledWorkCommand
                     // from a multi-role read.
                     recordEntries.Add((
                         recordPath,
-                        KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit)));
+                        KnowledgeWriteBackRecord.Deserialize(ReadWindowedEvidenceText(recordPath, debtWindow), executionUnit)));
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
                 {
@@ -4415,7 +4501,7 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<RunEvent> events;
         try
         {
-            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
+            events = RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(runLogPath, debtWindow));
         }
         catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or NotSupportedException)
         {
@@ -4482,7 +4568,7 @@ internal static class AutomationStalledWorkCommand
                 Corroborated: File.Exists(packetYamlPath),
                 IsAmbiguous: false,
                 CandidatePacketPaths: Array.Empty<string>());
-            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit), candidateDomains, repo,
+            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit, debtWindow), candidateDomains, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
@@ -4500,7 +4586,7 @@ internal static class AutomationStalledWorkCommand
             GuideReachabilityDeclaration declaration;
             try
             {
-                declaration = GuideReachabilityDeclaration.Read(File.ReadAllText(packetYamlPath));
+                declaration = GuideReachabilityDeclaration.Read(ReadWindowedEvidenceText(packetYamlPath, debtWindow));
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
             {
@@ -4570,7 +4656,7 @@ internal static class AutomationStalledWorkCommand
                 {
                     recordEntries.Add((
                         existingPath,
-                        GuideReachabilityRecord.Deserialize(File.ReadAllText(existingPath), executionUnit)));
+                        GuideReachabilityRecord.Deserialize(ReadWindowedEvidenceText(existingPath, debtWindow), executionUnit)));
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
                 {
@@ -4776,7 +4862,10 @@ internal static class AutomationStalledWorkCommand
     /// the packet — e.g. a `review_context_packet` section — silently
     /// shadowing the real declaration.
     /// </summary>
-    private static string? ReadPacketDeclaredDomain(CliContext context, string executionUnit)
+    private static string? ReadPacketDeclaredDomain(
+        CliContext context,
+        string executionUnit,
+        StalledWorkAdoptionWindow? debtWindow = null)
     {
         if (string.IsNullOrWhiteSpace(executionUnit))
         {
@@ -4791,7 +4880,7 @@ internal static class AutomationStalledWorkCommand
         string packetText;
         try
         {
-            packetText = File.ReadAllText(packetYamlPath);
+            packetText = ReadWindowedEvidenceText(packetYamlPath, debtWindow);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
