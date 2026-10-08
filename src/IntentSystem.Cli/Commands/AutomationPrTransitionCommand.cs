@@ -1046,8 +1046,48 @@ internal static class AutomationPrTransitionCommand
 
         if (result.SoloConductorReview is not null)
         {
-            writer.WriteLine($"solo_conductor_review: {result.SoloConductorReview.Decision}"
-                + (result.SoloConductorReview.Cause is null ? string.Empty : $" ({result.SoloConductorReview.Cause})"));
+            var solo = result.SoloConductorReview;
+            writer.WriteLine($"solo_conductor_review: {solo.Decision}"
+                + (solo.Cause is null ? string.Empty : $" ({solo.Cause})"));
+            writer.WriteLine("solo_conductor_identity: "
+                + $"execution_unit={solo.ExecutionUnit ?? "(unresolved)"} "
+                + $"domain={solo.Domain ?? "(unresolved)"} "
+                + $"team={solo.Team ?? "(unresolved)"}");
+            writer.WriteLine("solo_conductor_head: "
+                + $"expected={solo.ExpectedHeadSha ?? "(unavailable)"} "
+                + $"observed={solo.ObservedHeadSha ?? "(unavailable)"}");
+            foreach (var review in solo.QualifyingReviews)
+            {
+                writer.WriteLine("solo_conductor_qualifying_review: "
+                    + $"review_id={review.ReviewId.ToString(System.Globalization.CultureInfo.InvariantCulture)} "
+                    + $"login={review.Login} "
+                    + $"url={review.Url ?? "(unavailable)"}"
+                    + (review.Runtime is null ? string.Empty : $" runtime={review.Runtime}")
+                    + (review.Relation is null ? string.Empty : $" relation={review.Relation}")
+                    + (review.CitedRecordPath is null ? string.Empty : $" cited_record_path={review.CitedRecordPath}"));
+            }
+
+            foreach (var obligation in solo.Obligations)
+            {
+                writer.WriteLine("solo_conductor_obligation: "
+                    + $"kind={obligation.Kind} identity_kind={obligation.IdentityKind} "
+                    + $"identity={obligation.Identity} review_ids={FormatReviewIds(obligation.ReviewIds)} "
+                    + $"recovery={obligation.Recovery}");
+            }
+
+            writer.WriteLine($"solo_conductor_superseded_invalid_review_ids: {FormatReviewIds(solo.SupersededInvalidReviewIds)}");
+            writer.WriteLine($"solo_conductor_unscopable_review_ids: {FormatReviewIds(solo.UnscopableReviewIds)}");
+            if (solo.RepairUnavailableReason is not null)
+            {
+                writer.WriteLine($"solo_conductor_repair_unavailable_reason: {solo.RepairUnavailableReason}");
+            }
+
+            if (solo.UnscopableReviewIds.Count > 0)
+            {
+                writer.WriteLine("solo_conductor_recovery_guidance: no unrelated review or repost can repair missing review identity/order. "
+                    + "Create a replacement PR from the same reviewed source through normal PR creation, fresh review, and canonical worker-complete linkage; "
+                    + "this command does not create, relink, or close it.");
+            }
         }
 
         // G535 review repair: phase-aware ambiguity reporting — only ever
@@ -1059,6 +1099,18 @@ internal static class AutomationPrTransitionCommand
                 $"intended_labels: {string.Join(", ", result.IntendedLabels ?? Array.Empty<string>())}");
             writer.WriteLine($"recovery_command: {result.RecoveryCommand}");
         }
+    }
+
+    private static string FormatReviewIds(IEnumerable<long?> values)
+    {
+        var ids = values.Select(value => value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown").ToArray();
+        return ids.Length == 0 ? "(none)" : string.Join(",", ids);
+    }
+
+    private static string FormatReviewIds(IEnumerable<long> values)
+    {
+        var ids = values.Select(value => value.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        return ids.Length == 0 ? "(none)" : string.Join(",", ids);
     }
 
     private static void WriteHelp(TextWriter writer)

@@ -85,6 +85,287 @@ public sealed class SoloConductorApprovalGateTests
         Assert.Equal([60L], repaired.SupersededInvalidReviewIds);
     }
 
+    [Fact]
+    public void ContradictorySecondHeadingCreatesApprovalOnlyObligationAndSameLoginCanRepairIt()
+    {
+        var contradictoryBody = GenericBody(Unit, H2)
+            + "\n## Independent subagent review: request-changes\n";
+        var contradictory = ParseRow(63, contradictoryBody, "COMMENTED", H2, "reviewer", T1);
+        var otherLogin = ParseRow(64, GenericBody(Unit, H2), "APPROVED", H2, "other", T1.AddMinutes(1));
+        var sameLogin = ParseRow(65, GenericBody(Unit, H2), "APPROVED", H2, "REVIEWER", T1.AddMinutes(1));
+
+        var refused = Evaluate([contradictory]);
+        var wrongRepair = Evaluate([contradictory, otherLogin]);
+        var repaired = Evaluate([contradictory, sameLogin]);
+
+        Assert.True(contradictory.ObserverAccepted);
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, refused.Cause);
+        Assert.Equal("reviewer", Assert.Single(refused.Obligations).Identity);
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, wrongRepair.Cause);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, repaired.Decision);
+        Assert.Equal([63L], repaired.SupersededInvalidReviewIds);
+    }
+
+    [Fact]
+    public void G855ConflictRemainsObservableAfterApprovalRecovery()
+    {
+        var conflictingBody = GenericBody(Unit, H2).Replace(
+            "- verdict: approve\n\n### Blocking findings",
+            "- verdict: approve\n- verdict: request-changes\n\n### Blocking findings",
+            StringComparison.Ordinal);
+        var conflict = ParseRow(66, conflictingBody, "COMMENTED", H2, "reviewer", T1);
+        var repair = ParseRow(67, GenericBody(Unit, H2), "APPROVED", H2, "reviewer", T1.AddMinutes(1));
+
+        var result = Evaluate([conflict, repair]);
+
+        Assert.Equal(IndependentReviewEvidenceKind.IdentityConflict, conflict.Classification);
+        Assert.False(conflict.ObserverAccepted);
+        Assert.Equal(ReviewParseFailure.IdentityConflict, conflict.ObserverFailureKind);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, result.Decision);
+        Assert.Equal([66L], result.SupersededInvalidReviewIds);
+    }
+
+    [Theory]
+    [InlineData("metadata-verdict")]
+    [InlineData("metadata-head")]
+    public void ConflictingMetadataCreatesRepairableLoginObligation(string conflictKind)
+    {
+        var body = conflictKind == "metadata-verdict"
+            ? GenericBody(Unit, H2).Replace(
+                "- verdict: approve\n\n### Blocking findings",
+                "- verdict: approve\n- verdict: request-changes\n\n### Blocking findings",
+                StringComparison.Ordinal)
+            : GenericBody(Unit, H2).Replace(
+                $"- head SHA: {H2}\n",
+                $"- head SHA: {H2}\n- head SHA: {H1}\n",
+                StringComparison.Ordinal);
+        var invalid = ParseRow(68, body, "COMMENTED", H2, "reviewer", T1);
+        var repair = ParseRow(69, GenericBody(Unit, H2), "COMMENTED", H2, "reviewer", T1.AddMinutes(1));
+
+        var refused = Evaluate([invalid]);
+        var repaired = Evaluate([invalid, repair]);
+
+        Assert.Equal(ReviewParseFailure.IdentityConflict, invalid.ObserverFailureKind);
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, refused.Cause);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, repaired.Decision);
+        Assert.Equal([68L], repaired.SupersededInvalidReviewIds);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("mismatch")]
+    public void InvalidCanonicalCitationCreatesRepairableLoginObligation(string citationKind)
+    {
+        var citation = citationKind == "missing"
+            ? "Recorded as unavailable citation evidence."
+            : "Recorded as `.intent-cli/issues/G999/reviews/missing.json` by `intent-cli review cross-runtime record`.";
+        var body = GenericBody(Unit, H2).Replace("### Notes", citation + "\n\n### Notes", StringComparison.Ordinal);
+        var invalid = ParseRow(71, body, "COMMENTED", H2, "reviewer", T1);
+        var repair = ParseRow(72, GenericBody(Unit, H2), "APPROVED", H2, "reviewer", T1.AddMinutes(1));
+
+        var refused = Evaluate([invalid]);
+        var repaired = Evaluate([invalid, repair]);
+
+        Assert.True(invalid.BodyEvidence!.HasCitationAssertion);
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, refused.Cause);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, repaired.Decision);
+        Assert.Equal([71L], repaired.SupersededInvalidReviewIds);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("mismatch")]
+    public void CanonicalCitationMustBePresentAndValidateBeforeApproval(string citationKind)
+    {
+        var bundle = CreateLocalGateBundle();
+        var canonicalBody = bundle.Bodies["claude"];
+        var citationLine = canonicalBody.Split('\n').Single(line => line.StartsWith("Recorded as `", StringComparison.Ordinal));
+        string body;
+        if (citationKind == "missing")
+        {
+            body = canonicalBody.Replace(citationLine + "\n", string.Empty, StringComparison.Ordinal);
+        }
+        else
+        {
+            var pathStart = "Recorded as `".Length;
+            var pathEnd = citationLine.IndexOf('`', pathStart);
+            var path = citationLine[pathStart..pathEnd];
+            body = canonicalBody.Replace(citationLine, citationLine.Replace(path, path + ".missing", StringComparison.Ordinal), StringComparison.Ordinal);
+        }
+
+        var invalid = ParseRow(92, body, "COMMENTED", H2, "reviewer", T1, bundle.Read);
+        var repair = ParseRow(93, GenericBody(Unit, H2), "APPROVED", H2, "reviewer", T1.AddMinutes(1), bundle.Read);
+
+        var refused = Evaluate([invalid]);
+        var repaired = Evaluate([invalid, repair]);
+
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, refused.Cause);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, repaired.Decision);
+        Assert.Equal([92L], repaired.SupersededInvalidReviewIds);
+    }
+
+    [Fact]
+    public void LaterInvalidReviewReinstatesObligationAfterRepair()
+    {
+        var firstInvalid = ParseRow(73, GenericBody(Unit, H1), "COMMENTED", H2, "reviewer", T1);
+        var repair = ParseRow(74, GenericBody(Unit, H2), "APPROVED", H2, "reviewer", T1.AddMinutes(1));
+        var laterInvalid = ParseRow(75, GenericBody(Unit, H1), "COMMENTED", H2, "reviewer", T1.AddMinutes(2));
+
+        var result = Evaluate([firstInvalid, repair, laterInvalid]);
+
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, result.Cause);
+        Assert.Equal("reviewer", Assert.Single(result.Obligations).Identity);
+        Assert.Equal(new long?[] { 75L }, result.Obligations[0].ReviewIds);
+        Assert.Equal([73L], result.SupersededInvalidReviewIds);
+    }
+
+    [Fact]
+    public void ExactDuplicateRowIsDeduplicatedToOneQualifyingReview()
+    {
+        var approval = ParseRow(76, GenericBody(Unit, H2), "APPROVED", H2, "reviewer", T1);
+
+        var result = Evaluate([approval, approval]);
+
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, result.Decision);
+        Assert.Equal(76L, Assert.Single(result.QualifyingReviews).ReviewId);
+    }
+
+    [Fact]
+    public void EmptyAndStaleOnlyInventoriesRemainReviewMissing()
+    {
+        var stale = ParseRow(77, GenericBody(Unit, H1), "APPROVED", H1, "reviewer", T1);
+
+        Assert.Equal(SoloConductorApprovalGate.CauseReviewMissing, Evaluate([]).Cause);
+        Assert.Equal(SoloConductorApprovalGate.CauseReviewMissing, Evaluate([stale]).Cause);
+    }
+
+    [Fact]
+    public void SameHeadBlockerRequiresRepairFromSameLogin()
+    {
+        var blocker = ParseRow(78, GenericBody(Unit, H2, "request-changes"), "COMMENTED", H2, "blocked-login", T1);
+        var otherLoginApprove = ParseRow(79, GenericBody(Unit, H2), "APPROVED", H2, "other-login", T1.AddMinutes(1));
+
+        var result = Evaluate([blocker, otherLoginApprove]);
+
+        Assert.Equal(SoloConductorApprovalGate.CauseReviewBlocked, result.Cause);
+        Assert.Equal("blocked-login", Assert.Single(result.Obligations).Identity);
+    }
+
+    [Fact]
+    public void OptionalRuntimeDoesNotChangeGenericBlockerIdentity()
+    {
+        var genericWithRuntime = GenericBody(Unit, H2, "request-changes").Replace(
+            $"- kind: implementation\n- head SHA: {H2}",
+            $"- kind: implementation\n- runtime: claude\n- conductor runtime: claude\n- head SHA: {H2}",
+            StringComparison.Ordinal);
+        var blocker = ParseRow(80, genericWithRuntime, "COMMENTED", H2, "blocked-login", T1);
+        var otherLoginApprove = ParseRow(81, GenericBody(Unit, H2), "APPROVED", H2, "other-login", T1.AddMinutes(1));
+
+        var result = Evaluate([blocker, otherLoginApprove]);
+        var sameLoginApprove = ParseRow(82, GenericBody(Unit, H2), "APPROVED", H2, "BLOCKED-LOGIN", T1.AddMinutes(1));
+        var repaired = Evaluate([blocker, sameLoginApprove]);
+
+        Assert.Equal(SoloConductorApprovalGate.CauseReviewBlocked, result.Cause);
+        var obligation = Assert.Single(result.Obligations);
+        Assert.Equal("github-login", obligation.IdentityKind);
+        Assert.Equal("blocked-login", obligation.Identity);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, repaired.Decision);
+    }
+
+    [Theory]
+    [InlineData("G999", "implementation")]
+    [InlineData(Unit, "design")]
+    public void CoherentGenericForeignUnitOrDesignReviewIsNonqualifying(string unit, string kind)
+    {
+        var body = GenericBody(unit, H2).Replace("- kind: implementation", $"- kind: {kind}", StringComparison.Ordinal);
+        var foreign = ParseRow(82, body, "COMMENTED", H2, "foreign-login", T1);
+        var approval = ParseRow(83, GenericBody(Unit, H2), "APPROVED", H2, "reviewer", T1.AddMinutes(1));
+
+        var foreignOnly = Evaluate([foreign]);
+        var withApproval = Evaluate([foreign, approval]);
+
+        Assert.Equal(SoloConductorApprovalGate.CauseReviewMissing, foreignOnly.Cause);
+        Assert.Empty(foreignOnly.Obligations);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, withApproval.Decision);
+    }
+
+    [Theory]
+    [InlineData("heading")]
+    [InlineData("submitted-state")]
+    public void LegacyIndependentRequestChangesStillCreatesLoginObligation(string source)
+    {
+        const string legacy = "## Independent subagent review: notes\n\nlegacy reviewer prose";
+        var body = source == "heading" ? "## Independent subagent review: request-changes\n\nlegacy prose" : legacy;
+        var state = source == "submitted-state" ? "CHANGES_REQUESTED" : "COMMENTED";
+        var row = ParseRow(84, body, state, H2, "legacy-reviewer", T1);
+
+        var result = Evaluate([row]);
+
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, result.Cause);
+        Assert.Equal("legacy-reviewer", Assert.Single(result.Obligations).Identity);
+    }
+
+    [Fact]
+    public void LegacyIndependentProseWithoutBlockerRemainsNonqualifyingProvenance()
+    {
+        var legacy = ParseRow(85, "## Independent subagent review: notes\n\nlegacy reviewer prose", "COMMENTED", H2, "legacy-reviewer", T1);
+
+        var result = Evaluate([legacy]);
+
+        Assert.Equal(IndependentReviewEvidenceKind.Provenance, legacy.Classification);
+        Assert.Equal(SoloConductorApprovalGate.CauseReviewMissing, result.Cause);
+        Assert.Empty(result.Obligations);
+    }
+
+    [Fact]
+    public void PartialStructuredMetadataCreatesRepairableInvalidEvidenceObligation()
+    {
+        var partial = GenericBody(Unit, H2).Replace("- kind: implementation\n", string.Empty, StringComparison.Ordinal);
+        var invalid = ParseRow(94, partial, "COMMENTED", H2, "reviewer", T1);
+        var repair = ParseRow(95, GenericBody(Unit, H2), "APPROVED", H2, "reviewer", T1.AddMinutes(1));
+
+        var refused = Evaluate([invalid]);
+        var repaired = Evaluate([invalid, repair]);
+
+        Assert.False(invalid.BodyEvidence!.IsStructured);
+        Assert.True(invalid.BodyEvidence.HasStructuredMetadata);
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, refused.Cause);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, repaired.Decision);
+        Assert.Equal([94L], repaired.SupersededInvalidReviewIds);
+    }
+
+    [Fact]
+    public void UnknownSubmittedStateCreatesRepairableInvalidEvidenceObligation()
+    {
+        var unknown = ParseRow(96, GenericBody(Unit, H2), "UNKNOWN", H2, "reviewer", T1);
+        var repair = ParseRow(97, GenericBody(Unit, H2), "APPROVED", H2, "reviewer", T1.AddMinutes(1));
+
+        var refused = Evaluate([unknown]);
+        var repaired = Evaluate([unknown, repair]);
+
+        Assert.Equal(ReviewParseFailure.Malformed, unknown.ObserverFailureKind);
+        Assert.Equal(SoloConductorApprovalGate.CauseInvalidEvidence, refused.Cause);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, repaired.Decision);
+        Assert.Equal([96L], repaired.SupersededInvalidReviewIds);
+    }
+
+    [Fact]
+    public void DismissedRequestChangesIsExcludedAndCannotRepairEarlierBlocker()
+    {
+        var dismissedBlocker = ParseRow(86, GenericBody(Unit, H2, "request-changes"), "DISMISSED", H2, "reviewer", T1);
+        var blocker = ParseRow(87, GenericBody(Unit, H2, "request-changes"), "COMMENTED", H2, "reviewer", T1);
+        var dismissedRepair = ParseRow(88, GenericBody(Unit, H2), "DISMISSED", H2, "reviewer", T1.AddMinutes(1));
+
+        var dismissedOnly = Evaluate([dismissedBlocker]);
+        var withDismissedRepair = Evaluate([blocker, dismissedRepair]);
+        var withOtherApproval = Evaluate([dismissedBlocker, ParseRow(89, GenericBody(Unit, H2), "APPROVED", H2, "other-login", T1.AddMinutes(1))]);
+
+        Assert.Equal(SoloConductorApprovalGate.CauseReviewMissing, dismissedOnly.Cause);
+        Assert.Equal(SoloConductorApprovalGate.CauseReviewBlocked, withDismissedRepair.Cause);
+        Assert.Equal("reviewer", Assert.Single(withDismissedRepair.Obligations).Identity);
+        Assert.Equal(SoloConductorApprovalGate.DecisionSatisfied, withOtherApproval.Decision);
+    }
+
     [Theory]
     [InlineData("APPROVED", "request-changes")]
     [InlineData("CHANGES_REQUESTED", "approve")]

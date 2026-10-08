@@ -102,5 +102,6 @@ internal sealed record UnitStatusReviewBodyParse(
     public string? LeadingVerdict { get; init; }
     public bool HasCitationAssertion { get; init; }
     public bool HasStructuredMetadata { get; init; }
+    public bool ApprovalEvidenceConflicting { get; init; }
     public bool ExplicitRequestChangesAssertion { get; init; }
 }

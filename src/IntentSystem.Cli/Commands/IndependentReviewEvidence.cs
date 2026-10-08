@@ -114,7 +114,12 @@ internal static class IndependentReviewEvidence
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var lines = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var leadingLine = lines.Select(line => line.Trim()).FirstOrDefault(line => line.Length > 0);
-        string? heading = null;
+        var headings = lines
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("## ", StringComparison.Ordinal))
+            .Select(line => line[3..].Trim())
+            .ToArray();
+        var heading = headings.FirstOrDefault();
         string? citedRecord = null;
         var hasCitationAssertion = false;
         var conflicting = false;
@@ -122,7 +127,6 @@ internal static class IndependentReviewEvidence
         foreach (var rawLine in lines)
         {
             var line = rawLine.Trim();
-            if (heading is null && line.StartsWith("## ", StringComparison.Ordinal)) heading = line[3..].Trim();
             if (line.StartsWith("Recorded as", StringComparison.OrdinalIgnoreCase))
             {
                 hasCitationAssertion = true;
@@ -200,6 +204,17 @@ internal static class IndependentReviewEvidence
             && IsExplicitVerdict(leadingVerdict)
             && !string.Equals(headingVerdict, leadingVerdict, StringComparison.Ordinal);
         conflicting |= headingVerdictConflict || leadingVerdictConflict || headingAndLeadingVerdictConflict;
+        var approvalHeadingVerdicts = headings
+            .Select(NamedIndependentVerdict)
+            .Where(IsExplicitVerdict)
+            .Cast<string>()
+            .ToArray();
+        var approvalEvidenceConflicting = approvalHeadingVerdicts
+            .Distinct(StringComparer.Ordinal)
+            .Skip(1)
+            .Any()
+            || IsExplicitVerdict(verdict)
+            && approvalHeadingVerdicts.Any(headingAssertion => !string.Equals(headingAssertion, verdict, StringComparison.Ordinal));
         var canonicalRelationMatchesReviewer = relation switch
         {
             "cross-runtime" => string.Equals(reviewer, "cross-runtime review", StringComparison.OrdinalIgnoreCase),
@@ -237,9 +252,11 @@ internal static class IndependentReviewEvidence
             LeadingVerdict = leadingVerdict,
             HasCitationAssertion = hasCitationAssertion,
             HasStructuredMetadata = fields.Keys.Any(key => key is "head_sha" or "execution_unit" or "kind" or "verdict" or "runtime" or "conductor_runtime"),
+            ApprovalEvidenceConflicting = approvalEvidenceConflicting,
             ExplicitRequestChangesAssertion = string.Equals(verdict, CrossRuntimeReviewVerdict.RequestChanges, StringComparison.Ordinal)
                 || string.Equals(headingVerdict, CrossRuntimeReviewVerdict.RequestChanges, StringComparison.Ordinal)
-                || string.Equals(leadingVerdict, CrossRuntimeReviewVerdict.RequestChanges, StringComparison.Ordinal),
+                || string.Equals(leadingVerdict, CrossRuntimeReviewVerdict.RequestChanges, StringComparison.Ordinal)
+                || approvalHeadingVerdicts.Contains(CrossRuntimeReviewVerdict.RequestChanges, StringComparer.Ordinal),
         };
     }
 

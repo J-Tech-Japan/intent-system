@@ -77,6 +77,7 @@ internal static class SoloConductorApprovalGate
             {
                 var isLegacyProvenance = !body.IsStructured
                     && !body.Conflicting
+                    && !body.ApprovalEvidenceConflicting
                     && !body.HasStructuredMetadata
                     && !body.HasCitationAssertion
                     && !body.ExplicitRequestChangesAssertion
@@ -273,6 +274,7 @@ internal static class SoloConductorApprovalGate
             || !row.ReviewUrlFieldValid
             || !body.IsStructured
             || body.Conflicting
+            || body.ApprovalEvidenceConflicting
             || body.Kind is not (CrossRuntimeReviewRecord.KindImplementation or CrossRuntimeReviewRecord.KindDesign))
         {
             return false;
@@ -294,9 +296,11 @@ internal static class SoloConductorApprovalGate
                 ? string.Equals(body.Runtime, body.ConductorRuntime, StringComparison.Ordinal)
                 : body.Relation == CrossRuntimeReviewRecord.RelationCrossRuntime
                 && !string.Equals(body.Runtime, body.ConductorRuntime, StringComparison.Ordinal));
-        var citationValid = !body.HasCitationAssertion
-            ? body.CitedRecord is null
-            : body.CitedRecord is not null && row.CitedRecordValidatedForDeclaredUnit;
+        var citationValid = body.Relation is null
+            ? !body.HasCitationAssertion && body.CitedRecord is null
+            : body.HasCitationAssertion
+            && body.CitedRecord is not null
+            && row.CitedRecordValidatedForDeclaredUnit;
         return relationValid && citationValid;
     }
 
