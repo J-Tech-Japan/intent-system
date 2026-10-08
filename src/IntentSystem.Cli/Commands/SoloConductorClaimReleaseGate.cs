@@ -265,10 +265,26 @@ internal static class SoloConductorClaimReleaseGate
         GuideReachabilityDeclaration? guide = null;
         string? knowledgeError = null;
         string? guideError = null;
-        try { knowledge = KnowledgeWriteBackDeclaration.Read(packetYaml); }
-        catch (Exception exception) when (IsReadFailure(exception)) { knowledgeError = exception.Message; }
-        try { guide = GuideReachabilityDeclaration.Read(packetYaml); }
-        catch (Exception exception) when (IsReadFailure(exception)) { guideError = exception.Message; }
+        try
+        {
+            ValidateKnowledgeDeclarationShapes(packetYaml);
+            knowledge = KnowledgeWriteBackDeclaration.Read(packetYaml);
+            knowledgeError = null;
+        }
+        catch (Exception exception) when (IsReadFailure(exception))
+        {
+            knowledgeError = exception.Message;
+        }
+        try
+        {
+            ValidateGuideDeclarationShapes(packetYaml);
+            guide = GuideReachabilityDeclaration.Read(packetYaml);
+            guideError = null;
+        }
+        catch (Exception exception) when (IsReadFailure(exception))
+        {
+            guideError = exception.Message;
+        }
 
         var explicitKnowledge = HasExplicitKnowledgeDeclaration(packetYaml);
         if (knowledgeError is not null)
@@ -860,6 +876,91 @@ internal static class SoloConductorClaimReleaseGate
                 .Any(facet => facet.Children.ContainsKey(new YamlScalarNode("required")));
         }
         catch (YamlDotNet.Core.YamlException) { return false; }
+    }
+
+    private static YamlMappingNode ReadDeclarationRoot(string yaml)
+    {
+        try
+        {
+            var stream = new YamlStream();
+            using var reader = new StringReader(yaml);
+            stream.Load(reader);
+            return stream.Documents.Count > 0 && stream.Documents[0].RootNode is YamlMappingNode root
+                ? root
+                : throw new InvalidOperationException("Packet declaration root must be a mapping.");
+        }
+        catch (YamlDotNet.Core.YamlException exception)
+        {
+            throw new InvalidOperationException("Packet declaration YAML cannot be read: " + exception.Message);
+        }
+    }
+
+    private static YamlMappingNode? OptionalDeclarationMapping(YamlMappingNode parent, string key, string path)
+    {
+        if (!parent.Children.TryGetValue(new YamlScalarNode(key), out var node)) return null;
+        return node as YamlMappingNode
+            ?? throw new InvalidOperationException($"Packet field '{path}' must be a mapping when present.");
+    }
+
+    private static void ValidatePresentDeclarationBoolean(YamlMappingNode mapping, string key, string path)
+    {
+        if (!mapping.Children.TryGetValue(new YamlScalarNode(key), out var node)) return;
+        if (node is not YamlScalarNode scalar || string.IsNullOrWhiteSpace(scalar.Value)
+            || !bool.TryParse(scalar.Value.Trim(), out _))
+        {
+            throw new InvalidOperationException($"Packet field '{path}' must be a nonempty boolean scalar when present.");
+        }
+    }
+
+    private static void ValidateKnowledgeDeclarationShapes(string yaml)
+    {
+        var root = ReadDeclarationRoot(yaml);
+        var updates = OptionalDeclarationMapping(root, "knowledge_updates", "knowledge_updates");
+        if (updates is not null)
+        {
+            foreach (var facet in new[] { "intent_tree", "adr", "diagram", "docs" })
+            {
+                OptionalDeclarationMapping(updates, facet, $"knowledge_updates.{facet}");
+            }
+
+            foreach (var entry in updates.Children)
+            {
+                if (entry.Value is not YamlMappingNode facetMapping) continue;
+                var facetName = (entry.Key as YamlScalarNode)?.Value ?? "<facet>";
+                ValidatePresentDeclarationBoolean(facetMapping, "required", $"knowledge_updates.{facetName}.required");
+            }
+        }
+
+        var learning = OptionalDeclarationMapping(root, "closeout_learning", "closeout_learning");
+        if (learning is not null)
+        {
+            ValidatePresentDeclarationBoolean(learning, "write_back_required", "closeout_learning.write_back_required");
+        }
+    }
+
+    private static void ValidateGuideDeclarationShapes(string yaml)
+    {
+        var root = ReadDeclarationRoot(yaml);
+        if (!root.Children.TryGetValue(new YamlScalarNode("guide_reachability"), out var node)) return;
+        if (node is YamlSequenceNode) return;
+        if (node is not YamlMappingNode mapping)
+        {
+            throw new InvalidOperationException("Packet field 'guide_reachability' must be a mapping or nonempty route sequence.");
+        }
+
+        foreach (var key in new[] { "no_role_facing_surface", "no_role_facing", "no_surface", "none",
+                     "not_applicable", "declared_no_surface", "required" })
+        {
+            ValidatePresentDeclarationBoolean(mapping, key, $"guide_reachability.{key}");
+        }
+
+        foreach (var key in new[] { "routes", "guide_routes", "entries", "declarations", "surfaces" })
+        {
+            if (mapping.Children.TryGetValue(new YamlScalarNode(key), out var routes) && routes is not YamlSequenceNode)
+            {
+                throw new InvalidOperationException($"Packet field 'guide_reachability.{key}' must be a route sequence when present.");
+            }
+        }
     }
 
     private static bool TryReadPacketIdentityAssertions(

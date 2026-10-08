@@ -520,24 +520,29 @@ public sealed class SoloConductorClaimReleaseG857Tests
         using var repos = new ClaimRepositories();
         repos.PublishSnapshot(queueState: QueueItemState.Completed,
             runEvents: ["pr-merged", "closeout-recorded"], packetYaml: CloseoutLearningFalsePacketYaml);
+        Acquire(repos.Writer);
 
-        var result = EvaluateCanonicalSnapshot(repos.Writer);
+        var result = Release(repos.Reader);
 
-        Assert.True(result.IsApplicable);
-        Assert.Equal("satisfied", result.Completion?.Decision);
-        Assert.Equal("not-applicable", Duty(result.Completion!, "knowledge-writeback").State);
-        Assert.Equal("not-applicable", Duty(result.Completion!, "guide-reachability").State);
+        Assert.Equal("released", result.Status);
+        Assert.Equal("satisfied", result.SoloConductorCompletion?.Decision);
+        Assert.Equal("not-applicable", Duty(result, "knowledge-writeback").State);
+        Assert.Equal("not-applicable", Duty(result, "guide-reachability").State);
     }
 
     [Theory]
     [InlineData("empty-knowledge-updates")]
     [InlineData("empty-closeout-learning")]
+    [InlineData("empty-facet")]
     public void EmptyEnclosingKnowledgeMappingsAreNotExplicitNoOpDeclarations_G857(string kind)
     {
         using var repos = new ClaimRepositories();
-        var packet = kind == "empty-knowledge-updates"
-            ? PacketWithKnowledgeFragment("knowledge_updates: {}")
-            : PacketWithKnowledgeFragment("closeout_learning: {}");
+        var packet = kind switch
+        {
+            "empty-knowledge-updates" => PacketWithKnowledgeFragment("knowledge_updates: {}"),
+            "empty-closeout-learning" => PacketWithKnowledgeFragment("closeout_learning: {}"),
+            _ => PacketWithKnowledgeFragment("knowledge_updates:\n  intent_tree: {}"),
+        };
         repos.PublishSnapshot(queueState: QueueItemState.Completed,
             runEvents: ["pr-merged", "closeout-recorded"], packetYaml: packet);
 
@@ -649,6 +654,67 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal("completion-blocked", result.Status);
         Assert.Equal("unavailable", Duty(result, "knowledge-declaration").State);
         Assert.Equal("not-applicable", Duty(result, "guide-reachability").State);
+    }
+
+    [Theory]
+    [InlineData("knowledge-required-array", "knowledge-declaration")]
+    [InlineData("knowledge-required-map", "knowledge-declaration")]
+    [InlineData("knowledge-required-null", "knowledge-declaration")]
+    [InlineData("knowledge-required-empty", "knowledge-declaration")]
+    [InlineData("knowledge-required-invalid", "knowledge-declaration")]
+    [InlineData("closeout-required-array", "knowledge-declaration")]
+    [InlineData("closeout-required-map", "knowledge-declaration")]
+    [InlineData("closeout-required-null", "knowledge-declaration")]
+    [InlineData("closeout-required-empty", "knowledge-declaration")]
+    [InlineData("closeout-required-invalid", "knowledge-declaration")]
+    [InlineData("knowledge-updates-array-with-false", "knowledge-declaration")]
+    [InlineData("knowledge-updates-null-with-false", "knowledge-declaration")]
+    [InlineData("closeout-learning-array-with-false", "knowledge-declaration")]
+    [InlineData("closeout-learning-null-with-false", "knowledge-declaration")]
+    [InlineData("facet-array-with-false", "knowledge-declaration")]
+    [InlineData("facet-null-with-false", "knowledge-declaration")]
+    [InlineData("malformed-required-with-valid-true-facet", "knowledge-declaration")]
+    public void PresentMalformedKnowledgeNodeShapesRefuseCanonicalRelease_G857(string shape, string dutyId)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: PacketWithMalformedDeclarationShape(shape));
+
+        AssertBlockedReleasePreservesCanonicalClaim(repos, dutyId, "knowledge-declaration-unavailable");
+    }
+
+    [Theory]
+    [InlineData("guide-boolean-array")]
+    [InlineData("guide-boolean-map")]
+    [InlineData("guide-boolean-null")]
+    [InlineData("guide-boolean-empty")]
+    [InlineData("guide-boolean-invalid")]
+    [InlineData("guide-hidden-no-surface-array")]
+    [InlineData("guide-hidden-required-map")]
+    [InlineData("guide-hidden-route-alias-map")]
+    public void PresentMalformedGuideNodeShapesRefuseCanonicalRelease_G857(string shape)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: PacketWithMalformedGuideShape(shape));
+
+        AssertBlockedReleasePreservesCanonicalClaim(repos, "guide-declaration", "guide-declaration-unavailable");
+    }
+
+    [Fact]
+    public void PreviewRouteSequenceDeclarationRemainsAccepted_G857()
+    {
+        using var repos = new ClaimRepositories();
+        var packet = ReplaceGuideTail(
+            "  - guide_surface: guide workflow task implementation-loop\n    role: implementation\n    target_surface: claim release completion");
+        repos.PublishSnapshot(queueState: QueueItemState.Completed,
+            runEvents: ["pr-merged", "closeout-recorded"], packetYaml: packet);
+
+        var result = EvaluateCanonicalSnapshot(repos.Writer);
+
+        Assert.True(result.IsApplicable);
+        Assert.Equal("missing", Duty(result.Completion!, "guide-reachability").State);
+        Assert.DoesNotContain(result.Completion!.Duties, duty => duty.Id == "guide-declaration");
     }
 
     [Fact]
@@ -2042,6 +2108,94 @@ public sealed class SoloConductorClaimReleaseG857Tests
             "knowledge_updates:\n  intent_tree:\n    required: false\n",
             fragment + "\n",
             StringComparison.Ordinal);
+
+    private static string PacketWithMalformedDeclarationShape(string shape)
+    {
+        const string knowledgeRequired = "    required: false\n";
+        const string closeoutRequired = "  write_back_required: false\n";
+        return shape switch
+        {
+            "knowledge-required-array" => ExplicitNoDutyPacketYaml.Replace(knowledgeRequired, "    required: []\n", StringComparison.Ordinal),
+            "knowledge-required-map" => ExplicitNoDutyPacketYaml.Replace(knowledgeRequired, "    required: {}\n", StringComparison.Ordinal),
+            "knowledge-required-null" => ExplicitNoDutyPacketYaml.Replace(knowledgeRequired, "    required: null\n", StringComparison.Ordinal),
+            "knowledge-required-empty" => ExplicitNoDutyPacketYaml.Replace(knowledgeRequired, "    required: \"\"\n", StringComparison.Ordinal),
+            "knowledge-required-invalid" => ExplicitNoDutyPacketYaml.Replace(knowledgeRequired, "    required: definitely\n", StringComparison.Ordinal),
+            "closeout-required-array" => CloseoutLearningFalsePacketYaml.Replace(closeoutRequired, "  write_back_required: []\n", StringComparison.Ordinal),
+            "closeout-required-map" => CloseoutLearningFalsePacketYaml.Replace(closeoutRequired, "  write_back_required: {}\n", StringComparison.Ordinal),
+            "closeout-required-null" => CloseoutLearningFalsePacketYaml.Replace(closeoutRequired, "  write_back_required: null\n", StringComparison.Ordinal),
+            "closeout-required-empty" => CloseoutLearningFalsePacketYaml.Replace(closeoutRequired, "  write_back_required: \"\"\n", StringComparison.Ordinal),
+            "closeout-required-invalid" => CloseoutLearningFalsePacketYaml.Replace(closeoutRequired, "  write_back_required: definitely\n", StringComparison.Ordinal),
+            "knowledge-updates-array-with-false" => PacketWithKnowledgeFragment(
+                "knowledge_updates: []\ncloseout_learning:\n  write_back_required: false"),
+            "knowledge-updates-null-with-false" => PacketWithKnowledgeFragment(
+                "knowledge_updates: null\ncloseout_learning:\n  write_back_required: false"),
+            "closeout-learning-array-with-false" => PacketWithKnowledgeFragment(
+                "knowledge_updates:\n  intent_tree:\n    required: false\ncloseout_learning: []"),
+            "closeout-learning-null-with-false" => PacketWithKnowledgeFragment(
+                "knowledge_updates:\n  intent_tree:\n    required: false\ncloseout_learning: null"),
+            "facet-array-with-false" => PacketWithKnowledgeFragment(
+                "knowledge_updates:\n  intent_tree: []\n  adr:\n    required: false"),
+            "facet-null-with-false" => PacketWithKnowledgeFragment(
+                "knowledge_updates:\n  intent_tree: null\n  adr:\n    required: false"),
+            "malformed-required-with-valid-true-facet" => PacketWithKnowledgeFragment(
+                "knowledge_updates:\n  intent_tree:\n    required: true\n  adr:\n    required: []"),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+        };
+    }
+
+    private static string PacketWithMalformedGuideShape(string shape) => shape switch
+    {
+        "guide-boolean-array" => ExplicitNoDutyPacketYaml.Replace(
+            "no_role_facing_surface: true", "no_role_facing_surface: []", StringComparison.Ordinal),
+        "guide-boolean-map" => ExplicitNoDutyPacketYaml.Replace(
+            "no_role_facing_surface: true", "no_role_facing_surface: {}", StringComparison.Ordinal),
+        "guide-boolean-null" => ExplicitNoDutyPacketYaml.Replace(
+            "no_role_facing_surface: true", "no_role_facing_surface: null", StringComparison.Ordinal),
+        "guide-boolean-empty" => ExplicitNoDutyPacketYaml.Replace(
+            "no_role_facing_surface: true", "no_role_facing_surface: \"\"", StringComparison.Ordinal),
+        "guide-boolean-invalid" => ExplicitNoDutyPacketYaml.Replace(
+            "no_role_facing_surface: true", "no_role_facing_surface: definitely", StringComparison.Ordinal),
+        "guide-hidden-no-surface-array" => ReplaceGuideTail(
+            "  no_role_facing_surface: true\n  no_surface: []\n  routes: []"),
+        "guide-hidden-required-map" => ReplaceGuideTail(
+            "  no_role_facing_surface: true\n  required: {}\n  routes: []"),
+        "guide-hidden-route-alias-map" => ReplaceGuideTail(
+            "  no_role_facing_surface: false\n  routes:\n    - guide_surface: guide workflow task implementation-loop\n      role: implementation\n      target_surface: claim release completion\n  guide_routes: {}"),
+        _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),
+    };
+
+    private static string ReplaceGuideTail(string replacement)
+    {
+        const string guideTail = "  no_role_facing_surface: true\n  routes: []";
+        Assert.Contains(guideTail, ExplicitNoDutyPacketYaml);
+        var packet = ExplicitNoDutyPacketYaml.Replace(guideTail, replacement, StringComparison.Ordinal);
+        Assert.NotEqual(ExplicitNoDutyPacketYaml, packet);
+        return packet;
+    }
+
+    private static void AssertBlockedReleasePreservesCanonicalClaim(
+        ClaimRepositories repos,
+        string dutyId,
+        string expectedCause)
+    {
+        Acquire(repos.Writer);
+        var claimRelative = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimBefore = File.ReadAllBytes(Path.Combine(repos.CloneForInspection(), claimRelative));
+        var historyBefore = ClaimHistory(repos.CloneForInspection()).ToArray();
+
+        var result = Release(repos.Reader);
+
+        Assert.Equal("completion-blocked", result.Status);
+        Assert.False(result.PushSucceeded);
+        Assert.Equal("refused", result.SoloConductorCompletion?.Decision);
+        Assert.Equal("unavailable", Duty(result, dutyId).State);
+        Assert.Equal(expectedCause, Duty(result, dutyId).Cause);
+        Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        var inspection = repos.CloneForInspection();
+        Assert.Equal(claimBefore, File.ReadAllBytes(Path.Combine(inspection, claimRelative)));
+        Assert.Equal(historyBefore, ClaimHistory(inspection));
+    }
 
     private static IReadOnlyList<string> ClaimHistory(string root)
     {
