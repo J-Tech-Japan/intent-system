@@ -257,9 +257,7 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
         File.WriteAllText(workspace.RecordPath("G564"), "{ not json");
 
         var result = workspace.RunStalledWorkResult();
-        Assert.Contains(result.GetProperty("items").EnumerateArray(), item =>
-            item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending
-            && item.GetProperty("execution_unit").GetString() == "G564");
+        Assert.Equal(0, result.GetProperty("items").GetArrayLength());
 
         var excluded = Assert.Single(result.GetProperty("excluded").EnumerateArray());
         Assert.Equal(AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable, excluded.GetProperty("reason").GetString());
@@ -571,9 +569,7 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
 
         var result = workspace.RunStalledWorkResult();
 
-        Assert.Contains(result.GetProperty("items").EnumerateArray(), item =>
-            item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending
-            && item.GetProperty("execution_unit").GetString() == "G564");
+        Assert.Equal(0, result.GetProperty("items").GetArrayLength());
         var excluded = Assert.Single(result.GetProperty("excluded").EnumerateArray());
         Assert.Equal(AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable, excluded.GetProperty("reason").GetString());
         Assert.Contains("record.json", excluded.GetProperty("detail").GetString()!, StringComparison.Ordinal);
@@ -590,9 +586,7 @@ public sealed class KnowledgeWriteBackG564Tests : IDisposable
 
         var result = workspace.RunStalledWorkResult();
 
-        Assert.Contains(result.GetProperty("items").EnumerateArray(), item =>
-            item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending
-            && item.GetProperty("execution_unit").GetString() == "G564");
+        Assert.Equal(0, result.GetProperty("items").GetArrayLength());
         var excluded = Assert.Single(result.GetProperty("excluded").EnumerateArray());
         Assert.Equal(AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable, excluded.GetProperty("reason").GetString());
         Assert.Contains("hexadecimal SHA", excluded.GetProperty("detail").GetString()!, StringComparison.Ordinal);

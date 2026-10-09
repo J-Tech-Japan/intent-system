@@ -493,7 +493,7 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
     }
 
     [Fact]
-    public async Task V11_FifoClaimEvidenceIsRefusedWithoutBlockingAndLeavesDebtVisible()
+    public async Task V11_FifoActiveClaimIsRefusedByWindowIndexWithoutBlocking()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -504,28 +504,34 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
         var cutoff = new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero);
         const string unit = "G858-fifo-claim";
         workspace.WriteDebtPacket(unit);
-        workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2834);
         Directory.CreateDirectory(Path.GetDirectoryName(workspace.ClaimPath(unit))!);
         Assert.Equal(0, MkFifo(workspace.ClaimPath(unit), 0x180));
         Assert.False(CrossRuntimeReviewFileMode.IsRegularFile(workspace.ClaimPath(unit)));
         Assert.False(CrossRuntimeReviewFileMode.TryReadRegularFileBytes(workspace.ClaimPath(unit), out _, out _, out _));
 
-        var report = Task.Run(() => Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2)));
-        var completed = await Task.WhenAny(report, Task.Delay(TimeSpan.FromSeconds(2)));
-        Assert.Same(report, completed);
-        using var result = await report;
-        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
-            item.GetProperty("execution_unit").GetString() == unit
-            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
-        Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
-            warning.GetString()!.Contains(workspace.ClaimPath(unit), StringComparison.Ordinal));
-        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
-            item.GetProperty("execution_unit").GetString() == unit
-            && item.GetProperty("reason").GetString() == "debt-window-start-unknown");
+        var warnings = new List<string>();
+        var mode = TeamModeStore.Resolve(workspace.Root, "intent-cli", null);
+        var createWindow = Task.Run(() => StalledWorkAdoptionWindow.Create(
+            workspace.Root,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            null,
+            workspace.RunLogPath,
+            mode,
+            cutoff,
+            cutoff.AddDays(2),
+            warnings));
+        Assert.Same(createWindow, await Task.WhenAny(createWindow, Task.Delay(TimeSpan.FromSeconds(2))));
+        var window = await createWindow;
+        Assert.NotNull(window);
+        var decision = window.Decide(unit);
+        Assert.Equal(StalledWorkAdoptionDecisionStatus.Unknown, decision.Status);
+        Assert.Equal("claim-index-unavailable", decision.Reason);
+        Assert.Contains(warnings, warning => warning.Contains(workspace.ClaimPath(unit), StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task V11_FifoLegacyRunLogIsRefusedByBacklogReadersWithoutBlocking()
+    public async Task V11_FifoLegacyRunLogIsRefusedByWindowIndexWithoutBlocking()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -536,22 +542,29 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
         var cutoff = new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero);
         const string unit = "G858-fifo-run-log";
         workspace.WriteDebtPacket(unit);
-        workspace.WriteBlockedQueue(unit);
         Directory.CreateDirectory(Path.GetDirectoryName(workspace.RunLogPath)!);
         Assert.Equal(0, MkFifo(workspace.RunLogPath, 0x180));
         Assert.False(CrossRuntimeReviewFileMode.IsRegularFile(workspace.RunLogPath));
 
-        var report = Task.Run(() => Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2)));
-        var completed = await Task.WhenAny(report, Task.Delay(TimeSpan.FromSeconds(2)));
-        Assert.Same(report, completed);
-        using var result = await report;
-        Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), warning =>
-            warning.GetString()!.Contains("run-log index is incomplete", StringComparison.Ordinal)
-            && warning.GetString()!.Contains(workspace.RunLogPath, StringComparison.Ordinal));
-        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
-            item.GetProperty("execution_unit").GetString() == unit
-            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindBlockedParked
-            && item.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonActivityDataUnusable);
+        var warnings = new List<string>();
+        var mode = TeamModeStore.Resolve(workspace.Root, "intent-cli", null);
+        var createWindow = Task.Run(() => StalledWorkAdoptionWindow.Create(
+            workspace.Root,
+            "intent-cli",
+            "J-Tech-Japan/intent-system",
+            null,
+            workspace.RunLogPath,
+            mode,
+            cutoff,
+            cutoff.AddDays(2),
+            warnings));
+        Assert.Same(createWindow, await Task.WhenAny(createWindow, Task.Delay(TimeSpan.FromSeconds(2))));
+        var window = await createWindow;
+        Assert.NotNull(window);
+        var decision = window.Decide(unit);
+        Assert.Equal(StalledWorkAdoptionDecisionStatus.Unknown, decision.Status);
+        Assert.Equal("run-log-index-unavailable", decision.Reason);
+        Assert.Contains(warnings, warning => warning.Contains(workspace.RunLogPath, StringComparison.Ordinal));
     }
 
     [Fact]
