@@ -246,7 +246,7 @@ src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	AutomationStalledW
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	CheckoutFreshnessGitCommandRunner	1
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	CheckoutFreshnessObservation	3
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	CheckoutFreshnessProbe	5
-src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	ClaimCommand	1
+src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	ClaimCommand	2
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	ClaimRecord	2
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	DelegationOutcomeEvidence	3
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	ExecutionUnitResolution	19

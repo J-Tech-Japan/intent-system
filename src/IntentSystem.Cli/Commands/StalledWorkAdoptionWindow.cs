@@ -16,7 +16,6 @@ namespace IntentSystem.Cli.Commands;
 /// </summary>
 internal sealed class StalledWorkAdoptionWindow
 {
-    private static readonly Regex ExecutionUnitPattern = new("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", RegexOptions.CultureInvariant);
     private static readonly Regex RepoIssuePattern = new("^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#([1-9][0-9]*)$", RegexOptions.CultureInvariant);
     private static readonly Regex GitHubIssueUrlPattern = new("https?://(?:www\\.)?github\\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(issues|pull)/([1-9][0-9]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex GitHubIssueUrlExactPattern = new("^https?://(?:www\\.)?github\\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(issues|pull)/([1-9][0-9]*)/?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -39,7 +38,6 @@ internal sealed class StalledWorkAdoptionWindow
     private readonly HashSet<string> emittedDiagnostics = new(StringComparer.Ordinal);
     private string? runIndexError;
     private string? claimsIndexError;
-    private bool hasUnsafeClaimEvidencePath;
 
     private StalledWorkAdoptionWindow(
         string repoRoot,
@@ -135,8 +133,6 @@ internal sealed class StalledWorkAdoptionWindow
     }
 
     public DateTimeOffset? Cutoff => cutoff;
-
-    public bool HasUnsafeClaimEvidencePath => hasUnsafeClaimEvidencePath;
 
     public StalledWorkAdoptionDecision Decide(string executionUnit)
     {
@@ -729,7 +725,6 @@ internal sealed class StalledWorkAdoptionWindow
         {
             if (!TryReadJsonFile(path, repoRoot, out var document, out var parseError))
             {
-                hasUnsafeClaimEvidencePath |= IsUnsafeFilePathDiagnostic(parseError);
                 claimsIndexError = parseError;
                 return;
             }
@@ -825,7 +820,6 @@ internal sealed class StalledWorkAdoptionWindow
             {
                 if (!TryReadJsonFile(path, repoRoot, out var document, out var parseError))
                 {
-                    hasUnsafeClaimEvidencePath |= IsUnsafeFilePathDiagnostic(parseError);
                     claimsIndexError = parseError;
                     return;
                 }
@@ -1036,8 +1030,7 @@ internal sealed class StalledWorkAdoptionWindow
             error = "execution-unit is missing.";
             return false;
         }
-        if (!ExecutionUnitPattern.IsMatch(executionUnit)
-            || !KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out error))
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out error))
         {
             error = string.IsNullOrWhiteSpace(error) ? "execution-unit is not a safe canonical identifier." : error;
             return false;
@@ -1093,12 +1086,6 @@ internal sealed class StalledWorkAdoptionWindow
             return false;
         }
     }
-
-    private static bool IsUnsafeFilePathDiagnostic(string error) =>
-        error.Contains("symlink or reparse point", StringComparison.Ordinal)
-        || error.Contains("not a regular", StringComparison.Ordinal)
-        || error.Contains("could not be read safely (Empty)", StringComparison.Ordinal)
-        || error.Contains("could not be read safely (NotRegular)", StringComparison.Ordinal);
 
     private static bool TryEnumerateDirectory(string path, string root, out string[] files, out string error)
     {

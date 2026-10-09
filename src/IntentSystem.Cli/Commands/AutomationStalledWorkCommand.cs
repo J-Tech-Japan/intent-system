@@ -763,7 +763,7 @@ internal static class AutomationStalledWorkCommand
         // G679: claim files are entirely local/Git-backed evidence. Collect
         // them even when every GitHub-derived lane is quota-inoperable; the
         // result-level partial marker is applied below without losing them.
-        CollectStaleClaims(context, now, staleMinutes, items, warnings, debtWindow is not null);
+        CollectStaleClaims(context, now, staleMinutes, items, warnings);
 
         var branchLaneQueueState = TryLoadQueueStateForBranchLaneRouting(context, domain, repo, warnings);
         CollectPublishedNotDelegated(
@@ -831,7 +831,7 @@ internal static class AutomationStalledWorkCommand
         CollectMergedNotClosedOut(context, domain, candidateDomains, repo, mergedPrs, now, items, excluded, warnings);
         CollectClaimedButSilent(context, domain, candidateDomains, openIssues, openPrs, repo, now, claimedSilentMinutes, items, excluded, warnings);
         CollectVersionRollRequired(context, domain, repo, now, publishedReleases, items, warnings);
-        CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, debtWindow, items, excluded);
+        CollectBacklogReadyIdle(context, domain, candidateDomains, openIssues, openPrs, repo, now, backlogIdleMinutes, debtWindow, items, excluded, warnings);
         CollectDesignDecisionPending(context, domain, candidateDomains, repo, now, items, excluded);
         CollectKnowledgeWritebackPending(
             context,
@@ -1109,8 +1109,7 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset now,
         int staleMinutes,
         List<StalledWorkItem> items,
-        List<string> warnings,
-        bool refuseNonRegularFiles)
+        List<string> warnings)
     {
         var claimsRoot = Path.Combine(context.RepoRoot, ".intent-cli", "claims");
         if (!Directory.Exists(claimsRoot))
@@ -1122,27 +1121,18 @@ internal static class AutomationStalledWorkCommand
         // evidence, not active ownership and must never become a stale claim.
         foreach (var path in Directory.EnumerateFiles(claimsRoot, "*.json", SearchOption.TopDirectoryOnly))
         {
-            string claimJson;
-            if (refuseNonRegularFiles)
+            ClaimRecord? claim;
+            try
             {
                 if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(path, out var bytes, out var failure, out var readError))
                 {
                     warnings.Add($"claim record could not be read safely at '{path}' ({failure}): {readError}");
                     continue;
                 }
-                claimJson = Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
-            }
-            else
-            {
-                claimJson = File.ReadAllText(path);
-            }
-
-            ClaimRecord? claim;
-            try
-            {
+                var claimJson = Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
                 claim = JsonSerializer.Deserialize<ClaimRecord>(claimJson, JsonOptions);
             }
-            catch (Exception exception) when (exception is IOException or JsonException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
             {
                 warnings.Add($"claim record could not be read at '{path}': {exception.Message}");
                 continue;
@@ -3521,31 +3511,67 @@ internal static class AutomationStalledWorkCommand
         return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
     }
 
-    private static string? FindUnsafeNextSlicePacketPath(CliContext context)
+    private static string ReadBacklogRunLogText(string path)
     {
-        var issueRoot = Path.Combine(context.RepoRoot, ".intent-cli", "issues");
-        if (!Directory.Exists(issueRoot))
+        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(path, out var bytes, out var failure, out var error))
         {
-            return null;
+            // A zero-length file has always behaved like an empty log in this
+            // live lane. Preserve that result without opening the path: the
+            // same metadata shape can be a FIFO, which must never block a
+            // report regardless of whether a debt window is active.
+            if (failure == CrossRuntimeReviewFileReadFailure.Empty)
+            {
+                return string.Empty;
+            }
+
+            throw new IOException($"backlog activity log '{path}' could not be read safely ({failure}): {error}");
         }
 
-        try
+        return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
+    }
+
+    private static string? RejectUnsafeNextSlicePacket(CliContext context, string executionUnit)
+    {
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var unitError))
         {
-            foreach (var directory in Directory.EnumerateDirectories(issueRoot, "*", SearchOption.TopDirectoryOnly))
-            {
-                var packetPath = Path.Combine(directory, "packet.yaml");
-                if ((File.Exists(packetPath) || Directory.Exists(packetPath))
-                    && !CrossRuntimeReviewFileMode.IsRegularFile(packetPath))
-                {
-                    return packetPath;
-                }
-            }
+            return $"next-slice skipped unsafe execution-unit `{executionUnit}` before packet access: {unitError}";
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+
+        var unitDirectory = Path.Combine(context.RepoRoot, ".intent-cli", "issues", executionUnit);
+        var packetPath = Path.Combine(unitDirectory, "packet.yaml");
+        if (CrossRuntimeReviewFileMode.IsSymlink(unitDirectory)
+            || CrossRuntimeReviewFileMode.IsSymlink(packetPath))
         {
-            // The ordinary candidate selector retains its existing behavior
-            // for an unreadable issue directory; this preflight only exists
-            // to avoid reopening known nonregular paths.
+            return $"next-slice skipped `{executionUnit}` because packet evidence at `{packetPath}` is a symlink and cannot be read safely.";
+        }
+
+        if ((File.Exists(packetPath) || Directory.Exists(packetPath))
+            && !CrossRuntimeReviewFileMode.IsRegularFile(packetPath))
+        {
+            return $"next-slice skipped `{executionUnit}` because packet evidence at `{packetPath}` is not a readable regular file.";
+        }
+
+        return null;
+    }
+
+    private static string? RejectUnsafeNextSliceClaim(CliContext context, string executionUnit)
+    {
+        if (!KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out var unitError))
+        {
+            return $"next-slice skipped unsafe execution-unit `{executionUnit}` before claim access: {unitError}";
+        }
+
+        var relativePath = ClaimCommand.ClaimPath($"execution-unit:{executionUnit}");
+        var claimPath = Path.Combine(context.RepoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        if (CrossRuntimeReviewFileMode.IsSymlink(claimPath))
+        {
+            return $"next-slice skipped `{executionUnit}` because active claim evidence at `{claimPath}` is a symlink and cannot be read safely.";
+        }
+
+        if ((File.Exists(claimPath) || Directory.Exists(claimPath))
+            && !CrossRuntimeReviewFileMode.IsRegularFile(claimPath))
+        {
+            return $"next-slice skipped `{executionUnit}` because active claim evidence at `{claimPath}` is not a readable regular file.";
         }
 
         return null;
@@ -3562,31 +3588,9 @@ internal static class AutomationStalledWorkCommand
         int backlogIdleMinutes,
         StalledWorkAdoptionWindow? debtWindow,
         List<StalledWorkItem> items,
-        List<StalledWorkExcluded> excluded)
+        List<StalledWorkExcluded> excluded,
+        List<string> warnings)
     {
-        var unsafePacketPath = debtWindow is null ? null : FindUnsafeNextSlicePacketPath(context);
-        if (debtWindow?.HasUnsafeClaimEvidencePath == true || unsafePacketPath is not null)
-        {
-            // IntentNextSliceCommand performs its own local claim read while
-            // considering each packet. Do not send it claim or packet paths
-            // already rejected as empty/nonregular/symlink evidence: its
-            // legacy reader could block on a FIFO. Other report lanes remain
-            // available, and the matching exclusion identifies the blocked
-            // next-slice population.
-            excluded.Add(new StalledWorkExcluded
-            {
-                Kind = KindBacklogReadyIdle,
-                ExecutionUnit = string.Empty,
-                Issue = null,
-                Pr = null,
-                Reason = ReasonActivityDataUnusable,
-                Detail = unsafePacketPath is not null
-                    ? $"backlog-ready-idle candidate selection was skipped because packet `{unsafePacketPath}` is not a readable regular file; next-slice must not reopen it."
-                    : "backlog-ready-idle candidate selection was skipped because the active debt-window claim index contains a nonregular or unsafe path that the next-slice reader must not reopen.",
-            });
-            return;
-        }
-
         if (!DomainWipIsEmpty(context, domain, candidateDomains, openIssues, openPrs, repo))
         {
             return;
@@ -3606,15 +3610,35 @@ internal static class AutomationStalledWorkCommand
         // queue-state directly here is therefore necessary both to suppress
         // the unsafe publish recommendation and to keep reverse drift visible.
         var nonPublishableUnits = CollectBacklogBlockedState(
-            context, domain, repo, now, debtWindow, items, excluded);
+            context, domain, repo, now, items, excluded);
+
+        var nextSliceSafetyWarnings = new List<string>();
+        var seenNextSliceSafetyWarnings = new HashSet<string>(StringComparer.Ordinal);
+        string? TrackNextSliceSafetyWarning(string? detail)
+        {
+            if (detail is not null && seenNextSliceSafetyWarnings.Add(detail))
+            {
+                nextSliceSafetyWarnings.Add(detail);
+            }
+
+            return detail;
+        }
 
         IntentNextSliceResult nextSlice;
         try
         {
-            nextSlice = IntentNextSliceCommand.Analyze(context, domain, repo, runtimeCreationAllowed: true);
+            nextSlice = IntentNextSliceCommand.Analyze(
+                context,
+                domain,
+                repo,
+                runtimeCreationAllowed: true,
+                team: null,
+                packetReadRejection: unit => TrackNextSliceSafetyWarning(RejectUnsafeNextSlicePacket(context, unit)),
+                claimReadRejection: unit => TrackNextSliceSafetyWarning(RejectUnsafeNextSliceClaim(context, unit)));
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
+            warnings.AddRange(nextSliceSafetyWarnings);
             excluded.Add(new StalledWorkExcluded
             {
                 Kind = KindBacklogReadyIdle,
@@ -3626,6 +3650,7 @@ internal static class AutomationStalledWorkCommand
             });
             return;
         }
+        warnings.AddRange(nextSliceSafetyWarnings);
 
         // G670: only an incomplete candidate is a readiness-preview lane.
         // Keep its evidence subject to the existing G544 eligibility gates;
@@ -3663,7 +3688,7 @@ internal static class AutomationStalledWorkCommand
             DateTimeOffset? incompleteLastActivity = null;
             try
             {
-                foreach (var runEvent in RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(incompleteRunLogPath, debtWindow)))
+                foreach (var runEvent in RunLogSerializer.DeserializeAll(ReadBacklogRunLogText(incompleteRunLogPath)))
                 {
                     if (incompleteLastActivity is null || runEvent.Ts > incompleteLastActivity.Value)
                     {
@@ -3743,7 +3768,7 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset? lastActivity = null;
         try
         {
-            foreach (var runEvent in RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(runLogPath, debtWindow)))
+            foreach (var runEvent in RunLogSerializer.DeserializeAll(ReadBacklogRunLogText(runLogPath)))
             {
                 if (lastActivity is null || runEvent.Ts > lastActivity.Value)
                 {
@@ -3819,7 +3844,6 @@ internal static class AutomationStalledWorkCommand
         string domain,
         string repo,
         DateTimeOffset now,
-        StalledWorkAdoptionWindow? debtWindow,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded)
     {
@@ -3861,7 +3885,7 @@ internal static class AutomationStalledWorkCommand
         try
         {
             runEvents = File.Exists(runLogPath)
-                ? RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(runLogPath, debtWindow))
+                ? RunLogSerializer.DeserializeAll(ReadBacklogRunLogText(runLogPath))
                 : Array.Empty<RunEvent>();
         }
         catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException)
@@ -4276,7 +4300,6 @@ internal static class AutomationStalledWorkCommand
             }
 
             var recordEntries = new List<(string Path, KnowledgeWriteBackRecord Record)>();
-            var recordReadFailed = false;
             foreach (var recordPath in RoleScopedCloseoutRecordStore.EnumerateExistingPaths(
                          context.RepoRoot,
                          KnowledgeWriteBackRecord.RecordRootRelativePath,
@@ -4306,14 +4329,8 @@ internal static class AutomationStalledWorkCommand
                             + "unreadable record is not evidence that the write-back happened.",
                     });
                     recordEntries.Clear();
-                    recordReadFailed = true;
                     break;
                 }
-            }
-
-            if (recordReadFailed)
-            {
-                continue;
             }
 
             var consideredEntries = recordingRole is null
@@ -4646,7 +4663,6 @@ internal static class AutomationStalledWorkCommand
             }
 
             var recordEntries = new List<(string Path, GuideReachabilityRecord Record)>();
-            var recordReadFailed = false;
             foreach (var existingPath in RoleScopedCloseoutRecordStore.EnumerateExistingPaths(
                          context.RepoRoot,
                          GuideReachabilityRecord.RecordRootRelativePath,
@@ -4671,14 +4687,9 @@ internal static class AutomationStalledWorkCommand
                             $"'{executionUnit}': guide-reachability record '{existingPath}' could not be read: "
                             + $"{exception.Message}. An unreadable record is not evidence of clearance.",
                     });
-                    recordReadFailed = true;
+                    recordEntries.Clear();
                     break;
                 }
-            }
-
-            if (recordReadFailed)
-            {
-                continue;
             }
 
             var consideredEntries = recordingRole is null

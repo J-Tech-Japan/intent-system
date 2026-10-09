@@ -140,7 +140,9 @@ internal static class IntentNextSliceCommand
         string? domainOverride,
         string? targetRepo,
         bool runtimeCreationAllowed,
-        string? team)
+        string? team,
+        Func<string, string?>? packetReadRejection = null,
+        Func<string, string?>? claimReadRejection = null)
     {
         var domain = string.IsNullOrWhiteSpace(domainOverride)
             ? context.Config.Project.Domain
@@ -282,7 +284,12 @@ internal static class IntentNextSliceCommand
                         // domain bindings execution_unit_regex on queue
                         // items so a misnamed cross-namespace WIP item
                         // cannot block the requested domain lane.
-                        if (MatchesDomainAndRepoFilter(domain, targetRepo, queueState, item.ExecutionUnit, Path.Combine(packetRoot, item.ExecutionUnit), packetParseWarnings)
+                        var packetRejection = packetReadRejection?.Invoke(item.ExecutionUnit);
+                        if (packetRejection is not null)
+                        {
+                            warnings.Add(packetRejection);
+                        }
+                        else if (MatchesDomainAndRepoFilter(domain, targetRepo, queueState, item.ExecutionUnit, Path.Combine(packetRoot, item.ExecutionUnit), packetParseWarnings)
                             && MatchesExecutionUnitRegex(executionUnitRegex, item.ExecutionUnit))
                         {
                             wip.Add(item.ExecutionUnit);
@@ -415,6 +422,12 @@ internal static class IntentNextSliceCommand
                     continue;
                 }
 
+                if (packetReadRejection?.Invoke(executionUnit) is { } packetRejection)
+                {
+                    warnings.Add(packetRejection);
+                    continue;
+                }
+
                 if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory, packetParseWarnings))
                 {
                     continue;
@@ -442,6 +455,12 @@ internal static class IntentNextSliceCommand
                 if (PacketLifecycle.HasLegacyHumanMarker(directory))
                 {
                     legacyRetirementMarkerUnits.Add(executionUnit);
+                    continue;
+                }
+
+                if (claimReadRejection?.Invoke(executionUnit) is { } claimRejection)
+                {
+                    warnings.Add(claimRejection);
                     continue;
                 }
 
@@ -493,6 +512,12 @@ internal static class IntentNextSliceCommand
                         continue;
                     }
 
+                    if (packetReadRejection?.Invoke(executionUnit) is { } packetRejection)
+                    {
+                        warnings.Add(packetRejection);
+                        continue;
+                    }
+
                     if (!MatchesDomainAndRepoFilter(domain, targetRepo, queueState, executionUnit, directory, packetParseWarnings))
                     {
                         continue;
@@ -528,6 +553,12 @@ internal static class IntentNextSliceCommand
                             legacyRetirementMarkerUnits.Add(executionUnit);
                         }
 
+                        continue;
+                    }
+
+                    if (claimReadRejection?.Invoke(executionUnit) is { } claimRejection)
+                    {
+                        warnings.Add(claimRejection);
                         continue;
                     }
 
