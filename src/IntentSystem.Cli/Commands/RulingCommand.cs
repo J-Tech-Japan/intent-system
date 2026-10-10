@@ -148,7 +148,7 @@ internal static class RulingCommand
                 { Disposition = "refused", Status = "conflict", Cause = "ruling-content-conflict", Detail = "ID is immutable; supplied content differs from existing bytes.", ArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = existing.ExpiresAt is not null && now >= existing.ExpiresAt.Value, RecoveryHint = "Choose a new ID or record an explicit successor; existing bytes are immutable." });
             if (candidateEval.Status != "active")
                 return Emit(writer, parsed.Format, ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
-                { Disposition = "refused", Cause = candidateEval.Cause, Detail = candidateEval.Detail, ArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = existing.ExpiresAt is not null && now >= existing.ExpiresAt.Value, RecoveryHint = "Review current graph status; replay does not reactivate an inactive record." });
+                { Disposition = "refused", Cause = candidateEval.Cause.Length == 0 ? "ruling-inactive-target" : candidateEval.Cause, Detail = candidateEval.Detail, ArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = existing.ExpiresAt is not null && now >= existing.ExpiresAt.Value, RecoveryHint = "Review current graph status; replay does not reactivate an inactive record." });
             var idem = ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
             { Disposition = "idempotent", Status = "active", Cause = "", Detail = "identical active record already exists", Idempotent = true, ArtifactPath = existing.RelativePath, PlannedArtifactPath = null, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = false };
             return Emit(writer, parsed.Format, idem);
@@ -156,14 +156,16 @@ internal static class RulingCommand
         if (candidateEval.Status != "active")
         {
             var capacity = candidateEval.Cause == "ruling-inventory-limit";
+            var expiredCandidate = candidateEval.Status == "expired";
             return Emit(writer, parsed.Format, ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
             {
                 Disposition = candidateEval.Status == "unavailable" && candidateEval.Cause != "ruling-future-recorded-at" ? "unavailable" : "refused",
+                Cause = expiredCandidate && candidateEval.Cause.Length == 0 ? "ruling-expired-candidate" : candidateEval.Cause,
                 TimestampSource = timestampSource,
                 NormalizedRecord = JsonDocument.Parse(bytes).RootElement.Clone(),
                 ContentSha256 = null,
                 ArtifactPath = null,
-                Expired = null,
+                Expired = expiredCandidate ? true : null,
                 PlannedArtifactPath = record.RelativePath,
                 RecoveryHint = capacity
                     ? "The exact-scope ruling inventory is at capacity; ask the responsible host operator to resolve scope capacity. Do not partially merge or archive records."

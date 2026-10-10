@@ -852,6 +852,8 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         var byId = records.ToDictionary(x => x.Id, StringComparer.Ordinal);
         foreach (var predecessorId in candidate.Supersedes)
         {
+            if (StringComparer.Ordinal.Equals(predecessorId, candidate.Id))
+            { error = $"candidate {candidate.Id} cannot supersede itself"; return false; }
             if (!byId.TryGetValue(predecessorId, out var predecessor)) { error = $"missing predecessor {predecessorId}"; return false; }
             if (!candidate.SameApplicability(predecessor)) { error = $"predecessor {predecessorId} has different applicability"; return false; }
             if (predecessor.RecordedAt >= candidate.RecordedAt) { error = $"candidate is not later than {predecessorId}"; return false; }
