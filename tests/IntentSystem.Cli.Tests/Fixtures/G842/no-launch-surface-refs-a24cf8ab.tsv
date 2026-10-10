@@ -43,7 +43,7 @@ src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVe
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVerifier	2
 src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	INotifyProcessRunner	1
 src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	NotifyCommand	1
-src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingArtifact	29
+src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingArtifact	30
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingArtifactStore	1
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingAtomicLinkResult	2
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingDiagnostic	6

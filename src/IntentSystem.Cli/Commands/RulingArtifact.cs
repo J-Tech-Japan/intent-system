@@ -540,9 +540,27 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
             var preCommit = Evaluate(record.Domain, record.Team, record.Id, now, record, forAdmission: true);
             if (preCommit.Status != "active")
             {
+                if (TryResolveFailedEvaluationTarget(record, bytes, now, final, out var targetIdempotent, out var targetCause, out var targetDetail))
+                {
+                    if (targetIdempotent)
+                    {
+                        phase = "owned-temp-cleanup";
+                        CleanupOwnedTemp();
+                        idempotent = true;
+                        cause = "";
+                        detail = "identical canonical artifact is active";
+                        createdDirectories = created;
+                        return true;
+                    }
+                    cause = targetCause;
+                    detail = targetDetail;
+                }
+                else
+                {
+                    cause = preCommit.Cause.Length == 0 ? "ruling-supersession-conflict" : preCommit.Cause;
+                    detail = preCommit.Detail;
+                }
                 phase = "owned-temp-cleanup";
-                cause = preCommit.Cause.Length == 0 ? "ruling-supersession-conflict" : preCommit.Cause;
-                detail = preCommit.Detail;
                 detail = CleanupOwnedTempPreservingFailure(detail); createdDirectories = created; return false;
             }
             beforeOperation?.Invoke("before-rename-inspect", final);
@@ -569,8 +587,26 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
             var immediatelyBeforeCreate = Evaluate(record.Domain, record.Team, record.Id, now, record, forAdmission: true);
             if (immediatelyBeforeCreate.Status != "active")
             {
-                cause = immediatelyBeforeCreate.Cause.Length == 0 ? "ruling-supersession-conflict" : immediatelyBeforeCreate.Cause;
-                detail = immediatelyBeforeCreate.Detail;
+                if (TryResolveFailedEvaluationTarget(record, bytes, now, final, out var targetIdempotent, out var targetCause, out var targetDetail))
+                {
+                    if (targetIdempotent)
+                    {
+                        phase = "owned-temp-cleanup";
+                        CleanupOwnedTemp();
+                        idempotent = true;
+                        cause = "";
+                        detail = "identical canonical artifact is active";
+                        createdDirectories = created;
+                        return true;
+                    }
+                    cause = targetCause;
+                    detail = targetDetail;
+                }
+                else
+                {
+                    cause = immediatelyBeforeCreate.Cause.Length == 0 ? "ruling-supersession-conflict" : immediatelyBeforeCreate.Cause;
+                    detail = immediatelyBeforeCreate.Detail;
+                }
                 phase = "owned-temp-cleanup";
                 detail = CleanupOwnedTempPreservingFailure(detail);
                 createdDirectories = created;
@@ -672,6 +708,30 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         { cause = "ruling-target-unavailable"; detail = ex.Message; return false; }
+    }
+
+    private bool TryResolveFailedEvaluationTarget(RulingArtifact record, byte[] bytes, DateTimeOffset now, string path,
+        out bool idempotent, out string cause, out string detail)
+    {
+        idempotent = false;
+        cause = "";
+        detail = "";
+        var state = Inspect(path);
+        if (state.Error is not null)
+        {
+            cause = "ruling-target-unavailable";
+            detail = state.Error;
+            return true;
+        }
+        if (!state.Exists) return false;
+        if (state.IsSymlink || state.IsDirectory)
+        {
+            cause = "ruling-unsafe-path";
+            detail = "raced target is a symlink or directory";
+            return true;
+        }
+        idempotent = TryResolveConcurrentTarget(record, bytes, now, path, out cause, out detail);
+        return true;
     }
 
     internal static string ClassifyNativeAtomicCreateError(RulingNativePlatform platform, int errorCode) => platform switch

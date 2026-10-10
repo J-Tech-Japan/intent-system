@@ -1110,7 +1110,7 @@ src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	IGitHubLabelMutator	
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	Labels	8
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	Targets	2
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	WorkerSignalContract	11
-src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingArtifact	29
+src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingArtifact	30
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingArtifactStore	1
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingAtomicLinkResult	2
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingDiagnostic	6

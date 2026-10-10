@@ -1775,8 +1775,11 @@ public sealed class RulingCommandTests
                 Assert.Equal(1, exit);
                 using var result = format == "json" ? JsonDocument.Parse(writer.ToString()) : StructuredJsonFromMarkdown(writer.ToString());
                 var root = result.RootElement;
-                Assert.Equal("ruling-invalid-json", root.GetProperty("cause").GetString());
+                Assert.Equal("refused", root.GetProperty("disposition").GetString());
+                Assert.Equal("conflict", root.GetProperty("status").GetString());
+                Assert.Equal("ruling-content-conflict", root.GetProperty("cause").GetString());
                 Assert.False(root.GetProperty("wrote").GetBoolean());
+                Assert.False(root.GetProperty("idempotent").GetBoolean());
                 Assert.Equal(JsonValueKind.Null, root.GetProperty("artifact_path").ValueKind);
                 Assert.Equal(JsonValueKind.Null, root.GetProperty("content_sha256").ValueKind);
                 Assert.Equal(JsonValueKind.Null, root.GetProperty("expired").ValueKind);
@@ -1813,6 +1816,108 @@ public sealed class RulingCommandTests
                 Assert.Equal("independently published existing bytes", root.GetProperty("normalized_record").GetProperty("decision").GetString());
                 Assert.False(root.GetProperty("expired").GetBoolean());
                 Assert.Equal(diskBytes, File.ReadAllBytes(finalPath));
+            }
+        }
+    }
+
+    [Fact]
+    public void ExactTargetRacesAreConflictsButUnrelatedMalformedNeighborsStayUnavailableInBothFormats()
+    {
+        foreach (var format in new[] { "json", "markdown" })
+        foreach (var phase in new[] { "temp-write", "rename" })
+        {
+            using var workspace = new TemporaryWorkspace();
+            var id = phase == "temp-write" ? "R-RACE-MALFORMED-PRECOMMIT" : "R-RACE-MALFORMED-BEFORE-CREATE";
+            var input = workspace.Write("candidate.json", RecordJson(id, T0.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")));
+            var finalPath = Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", id + ".json");
+            var args = new[] { "ruling", "record", "--id", id, "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", input, "--authority-role", "operator", "--write", "--format", format };
+            const string malformed = "not canonical ruling JSON";
+            using var writer = new StringWriter();
+            var reached = false;
+            var exit = RulingCommand.ExecuteRecord(CreateContext(workspace.Root), args[2..], writer, (operation, _) =>
+            {
+                if (operation != phase) return;
+                reached = true;
+                File.WriteAllText(finalPath, malformed, new UTF8Encoding(false));
+            }, T0);
+
+            Assert.True(reached);
+            Assert.Equal(1, exit);
+            using var result = format == "json" ? JsonDocument.Parse(writer.ToString()) : StructuredJsonFromMarkdown(writer.ToString());
+            var root = result.RootElement;
+            Assert.Equal("refused", root.GetProperty("disposition").GetString());
+            Assert.Equal("conflict", root.GetProperty("status").GetString());
+            Assert.Equal("ruling-content-conflict", root.GetProperty("cause").GetString());
+            Assert.False(root.GetProperty("wrote").GetBoolean());
+            Assert.False(root.GetProperty("idempotent").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("artifact_path").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("content_sha256").ValueKind);
+            Assert.Equal(malformed, File.ReadAllText(finalPath));
+            Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(finalPath)!, "*.tmp"));
+        }
+
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using (var workspace = new TemporaryWorkspace())
+            {
+                var inputJson = RecordJson("R-RACE-IDENTICAL-ACTIVE", T0.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"));
+                Assert.True(RulingArtifact.TryParse(Encoding.UTF8.GetBytes(inputJson), false, out var candidate, out var parseCause, out var parseDetail), $"{parseCause}: {parseDetail}");
+                var candidateBytes = RulingArtifact.Serialize(candidate!);
+                var input = workspace.Write("candidate.json", inputJson);
+                var finalPath = Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", candidate!.Id + ".json");
+                var args = new[] { "ruling", "record", "--id", candidate.Id, "--domain", candidate.Domain, "--team", candidate.Team, "--from-file", input, "--authority-role", "operator", "--write", "--format", format };
+                using var writer = new StringWriter();
+                var reached = false;
+                var exit = RulingCommand.ExecuteRecord(CreateContext(workspace.Root), args[2..], writer, (operation, _) =>
+                {
+                    if (operation != "temp-write") return;
+                    reached = true;
+                    File.WriteAllBytes(finalPath, candidateBytes);
+                }, T0);
+
+                Assert.True(reached);
+                Assert.Equal(0, exit);
+                using var result = format == "json" ? JsonDocument.Parse(writer.ToString()) : StructuredJsonFromMarkdown(writer.ToString());
+                var root = result.RootElement;
+                Assert.Equal("idempotent", root.GetProperty("disposition").GetString());
+                Assert.Equal("active", root.GetProperty("status").GetString());
+                Assert.True(root.GetProperty("idempotent").GetBoolean());
+                Assert.False(root.GetProperty("wrote").GetBoolean());
+                Assert.Equal("", root.GetProperty("cause").GetString());
+                Assert.Equal(Convert.ToHexString(SHA256.HashData(candidateBytes)).ToLowerInvariant(), root.GetProperty("content_sha256").GetString());
+                Assert.Equal(candidateBytes, File.ReadAllBytes(finalPath));
+                Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(finalPath)!, "*.tmp"));
+            }
+
+            using (var workspace = new TemporaryWorkspace())
+            {
+                var id = "R-RACE-UNRELATED-MALFORMED";
+                var input = workspace.Write("candidate.json", RecordJson(id, T0.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")));
+                var scope = Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev");
+                var candidatePath = Path.Combine(scope, id + ".json");
+                var unrelatedPath = Path.Combine(scope, "R-UNRELATED-MALFORMED.json");
+                var args = new[] { "ruling", "record", "--id", id, "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", input, "--authority-role", "operator", "--write", "--format", format };
+                using var writer = new StringWriter();
+                var reached = false;
+                var exit = RulingCommand.ExecuteRecord(CreateContext(workspace.Root), args[2..], writer, (operation, _) =>
+                {
+                    if (operation != "temp-write") return;
+                    reached = true;
+                    File.WriteAllText(unrelatedPath, "not canonical ruling JSON", new UTF8Encoding(false));
+                }, T0);
+
+                Assert.True(reached);
+                Assert.Equal(1, exit);
+                using var result = format == "json" ? JsonDocument.Parse(writer.ToString()) : StructuredJsonFromMarkdown(writer.ToString());
+                var root = result.RootElement;
+                Assert.Equal("unavailable", root.GetProperty("disposition").GetString());
+                Assert.Equal("unavailable", root.GetProperty("status").GetString());
+                Assert.Equal("ruling-invalid-json", root.GetProperty("cause").GetString());
+                Assert.False(root.GetProperty("wrote").GetBoolean());
+                Assert.Equal(JsonValueKind.Null, root.GetProperty("artifact_path").ValueKind);
+                Assert.Equal(JsonValueKind.Null, root.GetProperty("content_sha256").ValueKind);
+                Assert.False(File.Exists(candidatePath));
+                Assert.Equal("not canonical ruling JSON", File.ReadAllText(unrelatedPath));
             }
         }
     }
