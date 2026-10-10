@@ -723,11 +723,14 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         try
         {
             var root = Path.GetFullPath(repoRoot);
+            if (!TryValidateRepositoryRootAncestors(root, out cause, out detail)) return false;
             var segments = new[] { ".intent-cli", "rulings", domain, team };
             if (id is not null) segments = segments.Append(id + ".json").ToArray();
             var current = root;
-            foreach (var segment in segments)
+            for (var index = 0; index < segments.Length; index++)
             {
+                var segment = segments[index];
+                var isArtifactSegment = id is not null && index == segments.Length - 1;
                 var parentState = Inspect(current);
                 if (parentState.Error is not null) { detail = parentState.Error; return false; }
                 if (!parentState.Exists) break;
@@ -743,8 +746,8 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
                 var state = Inspect(current);
                 if (state.Error is not null) { detail = state.Error; return false; }
                 if (state.Exists && state.IsSymlink) { cause = "ruling-unsafe-path"; detail = "symlink path component refused"; return false; }
-                if (state.Exists && segment != id + ".json" && !state.IsDirectory) { cause = "ruling-unsafe-path"; detail = "file blocks ruling directory path"; return false; }
-                if (state.Exists && segment == id + ".json" && state.IsDirectory) { cause = "ruling-unsafe-path"; detail = "directory occupies ruling target"; return false; }
+                if (state.Exists && !isArtifactSegment && !state.IsDirectory) { cause = "ruling-unsafe-path"; detail = "file blocks ruling directory path"; return false; }
+                if (state.Exists && isArtifactSegment && state.IsDirectory) { cause = "ruling-unsafe-path"; detail = "directory occupies ruling target"; return false; }
             }
             var full = Path.GetFullPath(directory);
             var prefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
@@ -753,6 +756,49 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         { cause = "ruling-path-unavailable"; detail = ex.Message; return false; }
+    }
+
+    private static bool TryValidateRepositoryRootAncestors(string root, out string cause, out string detail)
+    {
+        cause = "ruling-path-unavailable";
+        detail = "repository root ancestor could not be inspected";
+        var filesystemRoot = Path.GetPathRoot(root);
+        if (string.IsNullOrEmpty(filesystemRoot))
+        {
+            detail = "repository root has no filesystem root";
+            return false;
+        }
+
+        var current = filesystemRoot;
+        var state = Inspect(current);
+        if (state.Error is not null) { detail = state.Error; return false; }
+        if (!state.Exists) { detail = "filesystem root is missing"; return false; }
+        if (state.IsSymlink || !state.IsDirectory)
+        {
+            cause = "ruling-unsafe-path";
+            detail = "filesystem root is not a safe directory";
+            return false;
+        }
+
+        var relative = Path.GetRelativePath(filesystemRoot, root);
+        if (relative == ".") { cause = ""; detail = ""; return true; }
+        foreach (var segment in relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            state = Inspect(current);
+            if (state.Error is not null) { detail = state.Error; return false; }
+            if (!state.Exists) { detail = "repository root ancestor is missing"; return false; }
+            if (state.IsSymlink || !state.IsDirectory)
+            {
+                cause = "ruling-unsafe-path";
+                detail = "repository root ancestor is not a safe directory";
+                return false;
+            }
+        }
+
+        cause = "";
+        detail = "";
+        return true;
     }
 
     private void EnsureDirectoryParents(string directory, List<string> created)

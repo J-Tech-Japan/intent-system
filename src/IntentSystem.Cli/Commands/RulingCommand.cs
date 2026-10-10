@@ -150,7 +150,7 @@ internal static class RulingCommand
                 return Emit(writer, parsed.Format, ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
                 { Disposition = "refused", Cause = candidateEval.Cause, Detail = candidateEval.Detail, ArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = existing.ExpiresAt is not null && now >= existing.ExpiresAt.Value, RecoveryHint = "Review current graph status; replay does not reactivate an inactive record." });
             var idem = ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
-            { Disposition = "idempotent", Status = "active", Cause = "", Detail = "identical active record already exists", Idempotent = true, ArtifactPath = existing.RelativePath, PlannedArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = false };
+            { Disposition = "idempotent", Status = "active", Cause = "", Detail = "identical active record already exists", Idempotent = true, ArtifactPath = existing.RelativePath, PlannedArtifactPath = null, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = false };
             return Emit(writer, parsed.Format, idem);
         }
         if (candidateEval.Status != "active")
