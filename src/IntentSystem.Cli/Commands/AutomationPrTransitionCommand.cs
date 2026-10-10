@@ -67,6 +67,7 @@ internal static class AutomationPrTransitionCommand
                 out var format,
                 out var headSha,
                 out var executionUnit,
+                out var approvalPostingOverride,
                 out var error))
         {
             writer.WriteLine(error);
@@ -74,12 +75,34 @@ internal static class AutomationPrTransitionCommand
             return 1;
         }
 
-        var resolvedWorkdir = WorkdirResolver.Resolve(context, workdir);
+        string resolvedWorkdir;
+        try
+        {
+            resolvedWorkdir = WorkdirResolver.Resolve(context, workdir);
+        }
+        catch (Exception exception) when (
+            approvalPostingOverride is not null
+            && exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return ApprovalPostingOverride.WriteEarlyRefusal(
+                approvalPostingOverride with { Repo = repo! },
+                "workdir-unavailable",
+                $"The requested working directory could not be resolved: {exception.Message}",
+                writer);
+        }
         if (string.IsNullOrWhiteSpace(repo)
             && !AutomationCheckCommand.TryInferGitHubRepo(resolvedWorkdir, out repo, out error))
         {
             writer.WriteLine(error);
             return 1;
+        }
+
+        if (approvalPostingOverride is not null)
+        {
+            return ApprovalPostingOverride.Execute(
+                context with { RepoRoot = resolvedWorkdir },
+                approvalPostingOverride with { Repo = repo! },
+                writer);
         }
 
         var plan = PlanTransition(transition!);
@@ -644,7 +667,7 @@ internal static class AutomationPrTransitionCommand
                 currentHead);
     }
 
-    private static bool TryReadCurrentHead(string repo, int pr, out string? currentHead, out string? error)
+    internal static bool TryReadCurrentHead(string repo, int pr, out string? currentHead, out string? error)
     {
         currentHead = null;
         error = null;
@@ -679,6 +702,7 @@ internal static class AutomationPrTransitionCommand
             SupersededInvalidReviewIds = evaluation.SupersededInvalidReviewIds,
             UnscopableReviewIds = evaluation.UnscopableReviewIds,
             RepairUnavailableReason = evaluation.RepairUnavailableReason,
+            MissingRelations = evaluation.MissingRelations,
         };
 
     private static SoloConductorReviewTransitionOutcome SoloRefused(
@@ -702,6 +726,7 @@ internal static class AutomationPrTransitionCommand
             SupersededInvalidReviewIds = evaluation?.SupersededInvalidReviewIds ?? [],
             UnscopableReviewIds = evaluation?.UnscopableReviewIds ?? [],
             RepairUnavailableReason = evaluation?.RepairUnavailableReason,
+            MissingRelations = evaluation?.MissingRelations,
         };
 
     private static CrossRuntimeReviewTransitionOutcome Outcome(
@@ -732,7 +757,7 @@ internal static class AutomationPrTransitionCommand
         return (plan.AddLabels, plan.RemoveLabels);
     }
 
-    private static TransitionPlan PlanTransition(string transition) =>
+    internal static TransitionPlan PlanTransition(string transition) =>
         transition switch
         {
             TransitionReviewStart => new TransitionPlan(
@@ -806,7 +831,7 @@ internal static class AutomationPrTransitionCommand
             _ => throw new ArgumentOutOfRangeException(nameof(transition), transition, "Unsupported PR transition."),
         };
 
-    private static IReadOnlyList<string> ResolveRemoveLabelsForMode(
+    internal static IReadOnlyList<string> ResolveRemoveLabelsForMode(
         string transition,
         string mode,
         IReadOnlyList<string> plannedRemoveLabels,
@@ -860,10 +885,12 @@ internal static class AutomationPrTransitionCommand
         out string format,
         out string? headSha,
         out string? executionUnit,
+        out ApprovalPostingOverrideRequest? approvalPostingOverride,
         out string error)
     {
         headSha = null;
         executionUnit = null;
+        approvalPostingOverride = null;
         repo = null;
         workdir = null;
         pr = null;
@@ -871,6 +898,19 @@ internal static class AutomationPrTransitionCommand
         mode = WorkerClaimCompleteConstants.Modes.DryRun;
         format = FormatText;
         error = string.Empty;
+        var repoExplicit = false;
+        var headShaExplicit = false;
+        var executionUnitExplicit = false;
+        var overrideFlag = false;
+        var overrideFlagSeen = false;
+        var reasonSeen = false;
+        var overrideIdSeen = false;
+        var actorSeen = false;
+        var teamSeen = false;
+        string? reason = null;
+        string? overrideId = null;
+        string? actor = null;
+        string? team = null;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -884,6 +924,7 @@ internal static class AutomationPrTransitionCommand
                         return false;
                     }
                     repo = args[index + 1].Trim();
+                    repoExplicit = true;
                     index++;
                     break;
 
@@ -931,6 +972,7 @@ internal static class AutomationPrTransitionCommand
                         return false;
                     }
                     headSha = args[index + 1];
+                    headShaExplicit = true;
                     index++;
                     break;
 
@@ -942,7 +984,78 @@ internal static class AutomationPrTransitionCommand
                         return false;
                     }
                     executionUnit = args[index + 1];
+                    executionUnitExplicit = true;
                     index++;
+                    break;
+
+                case "--override-loop-evidence":
+                    if (overrideFlagSeen)
+                    {
+                        error = "--override-loop-evidence may be supplied only once.";
+                        return false;
+                    }
+                    overrideFlagSeen = true;
+                    overrideFlag = true;
+                    break;
+
+                case "--reason":
+                    if (reasonSeen)
+                    {
+                        error = "--reason may be supplied only once for --override-loop-evidence.";
+                        return false;
+                    }
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--reason requires a nonblank value for --override-loop-evidence.";
+                        return false;
+                    }
+                    reasonSeen = true;
+                    reason = args[++index].Trim();
+                    break;
+
+                case "--override-id":
+                    if (overrideIdSeen)
+                    {
+                        error = "--override-id may be supplied only once for --override-loop-evidence.";
+                        return false;
+                    }
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--override-id requires a UUID for --override-loop-evidence.";
+                        return false;
+                    }
+                    overrideIdSeen = true;
+                    overrideId = args[++index].Trim();
+                    break;
+
+                case "--actor":
+                    if (actorSeen)
+                    {
+                        error = "--actor may be supplied only once for --override-loop-evidence.";
+                        return false;
+                    }
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--actor requires a builder role value for --override-loop-evidence.";
+                        return false;
+                    }
+                    actorSeen = true;
+                    actor = args[++index].Trim();
+                    break;
+
+                case "--team":
+                    if (teamSeen)
+                    {
+                        error = "--team may be supplied only once for --override-loop-evidence.";
+                        return false;
+                    }
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        error = "--team requires a nonblank value for --override-loop-evidence.";
+                        return false;
+                    }
+                    teamSeen = true;
+                    team = args[++index].Trim();
                     break;
 
                 case "--write":
@@ -988,6 +1101,74 @@ internal static class AutomationPrTransitionCommand
             return false;
         }
 
+        var hasExceptionArguments = overrideFlagSeen || reasonSeen || overrideIdSeen || actorSeen || teamSeen;
+        if (!overrideFlag && hasExceptionArguments)
+        {
+            error = "--reason, --override-id, --actor, and --team require --override-loop-evidence.";
+            return false;
+        }
+
+        if (overrideFlag)
+        {
+            if (!string.Equals(transition, TransitionApproved, StringComparison.Ordinal))
+            {
+                error = "--override-loop-evidence is supported only with --transition approved.";
+                return false;
+            }
+            if (!repoExplicit || string.IsNullOrWhiteSpace(repo))
+            {
+                error = "--override-loop-evidence requires an explicit --repo <owner/repo>.";
+                return false;
+            }
+            if (pr is null || !executionUnitExplicit || string.IsNullOrWhiteSpace(executionUnit))
+            {
+                error = "--override-loop-evidence requires explicit --pr <n> and --execution-unit <unit>.";
+                return false;
+            }
+            if (!headShaExplicit || string.IsNullOrWhiteSpace(headSha))
+            {
+                error = "--override-loop-evidence requires explicit --head-sha <full-head-sha>.";
+                return false;
+            }
+            if (!reasonSeen || string.IsNullOrWhiteSpace(reason))
+            {
+                error = "--override-loop-evidence requires a nonblank --reason.";
+                return false;
+            }
+            if (!overrideIdSeen || !Guid.TryParse(overrideId, out var parsedOverrideId))
+            {
+                error = "--override-loop-evidence requires a valid --override-id UUID.";
+                return false;
+            }
+            if (!actorSeen
+                || !LogicalRoleNormalizer.TryNormalize(actor, out var normalizedActor, out _)
+                || !string.Equals(normalizedActor, LogicalRoleNormalizer.Builder, StringComparison.Ordinal))
+            {
+                error = "--override-loop-evidence requires --actor to normalize to builder (implementation is accepted).";
+                return false;
+            }
+            if (!teamSeen || string.IsNullOrWhiteSpace(team))
+            {
+                error = "--override-loop-evidence requires explicit --team <team>.";
+                return false;
+            }
+
+            approvalPostingOverride = new ApprovalPostingOverrideRequest
+            {
+                Repo = repo,
+                PullRequest = pr.Value,
+                Transition = transition,
+                Mode = mode,
+                Format = format,
+                HeadSha = headSha.ToLowerInvariant(),
+                ExecutionUnit = executionUnit,
+                Actor = actor!,
+                Team = team!,
+                Reason = reason!,
+                OverrideId = parsedOverrideId.ToString("D").ToLowerInvariant(),
+            };
+        }
+
         return true;
     }
 
@@ -1025,7 +1206,7 @@ internal static class AutomationPrTransitionCommand
         $"Refused host PR transition '{transition}' on PR #{pr} in {repo}: "
         + $"{(string.IsNullOrWhiteSpace(cause) ? "(cause unrecorded)" : cause)}. No labels were changed.";
 
-    private static void WriteText(TextWriter writer, AutomationPrTransitionResult result)
+    internal static void WriteText(TextWriter writer, AutomationPrTransitionResult result)
     {
         writer.WriteLine(result.Error ?? result.Summary);
         writer.WriteLine($"mode: {result.Mode}");
@@ -1090,6 +1271,29 @@ internal static class AutomationPrTransitionCommand
             }
         }
 
+        if (result.ApprovalPostingOverride is { } approvalOverride)
+        {
+            writer.WriteLine("approval_posting_override: "
+                + $"requested={approvalOverride.Requested.ToString().ToLowerInvariant()} "
+                + $"override_id={approvalOverride.OverrideId ?? "(unavailable)"} "
+                + $"disposition={approvalOverride.Disposition} "
+                + $"cause={approvalOverride.Cause ?? "(none)"} "
+                + $"prepared_published={approvalOverride.PreparedPublished.ToString().ToLowerInvariant()} "
+                + $"outcome_published={approvalOverride.OutcomePublished.ToString().ToLowerInvariant()} "
+                + $"mutation_attempted={approvalOverride.MutationAttempted.ToString().ToLowerInvariant()} "
+                + $"may_have_applied={approvalOverride.MayHaveApplied.ToString().ToLowerInvariant()} "
+                + $"label_state_observed={approvalOverride.LabelStateObserved.ToString().ToLowerInvariant()}");
+            if (approvalOverride.Reason is not null) writer.WriteLine($"approval_posting_override_reason: {approvalOverride.Reason}");
+            if (approvalOverride.PreparedPath is not null) writer.WriteLine($"approval_posting_override_prepared_path: {approvalOverride.PreparedPath}");
+            if (approvalOverride.ObservedPath is not null) writer.WriteLine($"approval_posting_override_observed_path: {approvalOverride.ObservedPath}");
+            if (approvalOverride.SelectedRunLogPath is not null) writer.WriteLine($"approval_posting_override_selected_run_log_path: {approvalOverride.SelectedRunLogPath}");
+            if (approvalOverride.PreparedCommit is not null) writer.WriteLine($"approval_posting_override_prepared_commit: {approvalOverride.PreparedCommit}");
+            if (approvalOverride.OutcomeCommit is not null) writer.WriteLine($"approval_posting_override_outcome_commit: {approvalOverride.OutcomeCommit}");
+            if (approvalOverride.CurrentHead is not null) writer.WriteLine($"approval_posting_override_current_head: {approvalOverride.CurrentHead}");
+            if (approvalOverride.AuthorizationBasis is not null) writer.WriteLine($"approval_posting_override_authorization_basis: {approvalOverride.AuthorizationBasis}");
+            if (approvalOverride.RecoveryCommand is not null) writer.WriteLine($"approval_posting_override_recovery_command: {approvalOverride.RecoveryCommand}");
+        }
+
         // G535 review repair: phase-aware ambiguity reporting — only ever
         // emitted for a failed mutation whose outcome on GitHub is unknown.
         if (result.MayHaveApplied)
@@ -1117,6 +1321,7 @@ internal static class AutomationPrTransitionCommand
     {
         writer.WriteLine("automation pr-transition");
         writer.WriteLine("Usage: intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition <review-start|request-update|approved|review-release> [--head-sha <sha>] [--execution-unit <unit>] [--write] [--dry-run] [--format text|json]");
+        writer.WriteLine("Approved transition only: --override-loop-evidence --reason <text> --override-id <uuid> --actor <builder|implementation> --team <team>. Requires explicit --repo, --pr, --execution-unit, and --head-sha; applies only when the declared G834 local gate is satisfied and G856 reports review-missing solely for absent canonical posting on the same queue-bound unit/repo/PR. Publishes a prepared audit before labels; it never posts a review comment or bypasses another refusal.");
         writer.WriteLine("Supported transitions:");
         writer.WriteLine("- review-start");
         writer.WriteLine("- request-update");
@@ -1189,7 +1394,7 @@ internal static class AutomationPrTransitionCommand
             };
     }
 
-    private sealed record TransitionPlan(
+    internal sealed record TransitionPlan(
         IReadOnlyList<string> AddLabels,
         IReadOnlyList<string> RemoveLabels);
 }
@@ -1292,6 +1497,10 @@ internal sealed record AutomationPrTransitionResult
     [JsonPropertyName("solo_conductor_review")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SoloConductorReviewTransitionOutcome? SoloConductorReview { get; init; }
+
+    [JsonPropertyName("approval_posting_override")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ApprovalPostingOverrideResult? ApprovalPostingOverride { get; init; }
 }
 
 internal sealed record SoloConductorReviewTransitionOutcome
@@ -1337,6 +1546,10 @@ internal sealed record SoloConductorReviewTransitionOutcome
     [JsonPropertyName("repair_unavailable_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RepairUnavailableReason { get; init; }
+
+    /// <summary>Private typed evidence used only by the G861 exception evaluator.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string>? MissingRelations { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewTransitionOutcome

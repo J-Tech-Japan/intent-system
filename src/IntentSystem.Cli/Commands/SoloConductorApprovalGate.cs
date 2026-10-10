@@ -217,7 +217,8 @@ internal static class SoloConductorApprovalGate
                         + ". Post the rendered canonical review body for the deciding local record.",
                     currentApprovals,
                     obligations,
-                    supersededInvalidIds);
+                    supersededInvalidIds,
+                    missingRelations);
             }
         }
 
@@ -419,7 +420,8 @@ internal static class SoloConductorApprovalGate
         string detail,
         IReadOnlyList<SoloConductorQualifyingReview>? approvals = null,
         IReadOnlyList<SoloConductorReviewObligation>? obligations = null,
-        IEnumerable<long>? supersededInvalidIds = null) => new()
+        IEnumerable<long>? supersededInvalidIds = null,
+        IReadOnlyList<string>? missingRelations = null) => new()
         {
             Decision = DecisionRefused,
             Cause = cause,
@@ -428,6 +430,7 @@ internal static class SoloConductorApprovalGate
             Obligations = obligations ?? [],
             UnscopableReviewIds = [],
             SupersededInvalidReviewIds = SortIds(supersededInvalidIds ?? []),
+            MissingRelations = missingRelations,
         };
 
     private static IReadOnlyList<SoloConductorQualifyingReview> SortApprovals(IEnumerable<SoloConductorQualifyingReview> approvals) =>
@@ -460,6 +463,15 @@ internal sealed record SoloConductorApprovalEvaluation
     public IReadOnlyList<long?> UnscopableReviewIds { get; init; } = [];
     public IReadOnlyList<long> SupersededInvalidReviewIds { get; init; } = [];
     public string? RepairUnavailableReason { get; init; }
+
+    /// <summary>
+    /// Typed G861 evidence for the only approved-transition exception: local
+    /// G834 is satisfied, but a deciding canonical posted approve is missing
+    /// for one or both existing review relations. This remains private policy
+    /// data and is never included in the ordinary G856 result wire format.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string>? MissingRelations { get; init; }
 }
 
 internal sealed record SoloConductorQualifyingReview

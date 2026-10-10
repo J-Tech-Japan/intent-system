@@ -1,5 +1,8 @@
 path	token	count
 src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.cs	Process	5
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	HostStateGitRetryRunner	2
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Process	1
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ProcessStartInfo	1
 src/IntentSystem.Cli/Commands/AtomicAppendWriter.cs	DllImport	4
 src/IntentSystem.Cli/Commands/AutomationClarificationStopCommand.cs	NestedProviderLauncher	1
 src/IntentSystem.Cli/Commands/AutomationCompleteCommand.cs	NestedProviderLauncher	1

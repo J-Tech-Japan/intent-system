@@ -344,6 +344,34 @@ implementation claim releases after closeout.
 solo approval. Update every host binary that can approve PR transitions before
 relying on this boundary.
 
+## Audited missing-posting exception for declared teams (G861 — preview-through-1.x)
+
+G861 adds a reasoned exception only to the `approved` PR transition for a
+currently recorded solo-conductor team that satisfies the declared G834 local
+gate and has only G856's `review-missing` posting result left. The canonical
+queue identity must bind the same unit, repository and PR. The exception never
+substitutes for local approvals or clears negative, unknown, stale-head,
+ownership, malformed or unavailable evidence.
+
+Publish the deciding review files and configuration to the canonical host
+branch first; `--override-loop-evidence` does not publish those caller-local
+files or create a GitHub comment. The explicit request uses the held builder
+actor/team, full child head, specific reason and UUID. intent-cli checks
+applicability and current bindings, not external authorization or reason
+quality. In write mode it publishes a create-only prepared audit and selected
+run event before changing labels, then rereads head and labels and publishes a
+second immutable outcome only after verified observation.
+
+The prepared record identifies its original host snapshot. A same-ID retry
+re-reads canonical state and may accept a newer compatible snapshot, but cannot
+change the request, claim epoch, child head, queue identity or deciding-record
+digests. Inspect `prepared_published`, `label_state_observed`,
+`outcome_published` and the recovery command after uncertainty. The command
+never blindly repeats a label action or rolls labels back; GitHub cannot
+atomically compare a head SHA with a label update, so merge with
+`--match-head-commit`. The audit preserves G834's satisfied local result and
+G856's `review-missing` posting result. Older binaries reject the flag.
+
 ## Published solo-conductor completion before claim release (G857 — preview-through-1.x)
 
 The solo-conductor loop's step 10 runs only after the PR is merged and the
