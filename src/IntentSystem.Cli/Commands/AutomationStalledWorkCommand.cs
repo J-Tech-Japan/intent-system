@@ -562,7 +562,7 @@ internal static class AutomationStalledWorkCommand
     };
 
     private const string UsageLine =
-        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--role <architect|orchestrator|builder|reviewer|steward|design|orchestration|implementation|review>] [--stale-minutes <m>] [--review-verdict-ahead-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
+        "Usage: intent-cli automation stalled-work --domain <name> --repo <owner/repo> [--team <name>] [--role <architect|orchestrator|builder|reviewer|steward|design|orchestration|implementation|review>] [--stale-minutes <m>] [--review-verdict-ahead-minutes <m>] [--claimed-silent-minutes <m>] [--backlog-idle-minutes <m>] [--repair-silent-minutes <m>] [--since <iso-8601>] [--knowledge-writeback-since <iso-8601>] [--guide-reachability-since <iso-8601>] [--format json|markdown]";
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
     {
@@ -576,7 +576,7 @@ internal static class AutomationStalledWorkCommand
             return 0;
         }
 
-        if (!TryParseArguments(args, out var domain, out var repo, out var team, out var recordingRole, out var staleMinutes, out var reviewVerdictAheadMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
+        if (!TryParseArguments(args, out var domain, out var repo, out var team, out var recordingRole, out var staleMinutes, out var reviewVerdictAheadMinutes, out var claimedSilentMinutes, out var backlogIdleMinutes, out var repairSilentMinutes, out var since, out var knowledgeWriteBackSince, out var guideReachabilitySince, out var format, out var error))
         {
             writer.WriteLine(error);
             writer.WriteLine(UsageLine);
@@ -586,7 +586,7 @@ internal static class AutomationStalledWorkCommand
         AutomationStalledWorkResult result;
         try
         {
-            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince, team, recordingRole, reviewVerdictAheadMinutes);
+            result = Analyze(context, domain!, repo!, staleMinutes, claimedSilentMinutes, backlogIdleMinutes, repairSilentMinutes, knowledgeWriteBackSince, guideReachabilitySince, team, recordingRole, reviewVerdictAheadMinutes, since);
         }
         catch (TeamModeResolutionException exception)
         {
@@ -639,16 +639,37 @@ internal static class AutomationStalledWorkCommand
         DateTimeOffset? guideReachabilitySince = null,
         string? team = null,
         string? recordingRole = null,
-        int reviewVerdictAheadMinutes = DefaultReviewVerdictAheadMinutes)
+        int reviewVerdictAheadMinutes = DefaultReviewVerdictAheadMinutes,
+        DateTimeOffset? since = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(domain);
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
 
-        var capabilityMatrix = TeamModeCapabilityMatrix.Resolve(context.RepoRoot, domain, team);
+        // G858: resolve the invoking checkout's mode exactly once. The same
+        // resolution drives both capability filtering and the local debt
+        // adoption boundary; it does not fetch or create a snapshot.
+        var modeResolution = TeamModeStore.Resolve(context.RepoRoot, domain, team);
+        var capabilityMatrix = TeamModeCapabilityMatrix.FromResolution(modeResolution);
         var now = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var warnings = new List<string>();
         PacketParseWarningTracker = new PacketYamlParseWarningTracker(warnings);
+        var debtWindow = StalledWorkAdoptionWindow.Create(
+            context.RepoRoot,
+            domain,
+            repo,
+            team,
+            context.GetRunLogPath(),
+            modeResolution,
+            since,
+            now,
+            warnings);
+        var knowledgeCloseoutSince = debtWindow is null
+            ? knowledgeWriteBackSince ?? KnowledgeWriteBackActivationUtc
+            : knowledgeWriteBackSince;
+        var guideCloseoutSince = debtWindow is null
+            ? guideReachabilitySince ?? GuideReachabilityActivationUtc
+            : guideReachabilitySince;
         var checkoutFreshness = CaptureCheckoutFreshness(context, warnings);
         GitHubApiRequestException? githubApiFailure = null;
         GitHubApiDegradedState? githubApiDegradedState = null;
@@ -818,9 +839,11 @@ internal static class AutomationStalledWorkCommand
             candidateDomains,
             repo,
             now,
-            knowledgeWriteBackSince ?? KnowledgeWriteBackActivationUtc,
+            knowledgeCloseoutSince,
+            debtWindow,
             items,
             excluded,
+            warnings,
             recordingRole);
         CollectGuideReachabilityPending(
             context,
@@ -828,7 +851,8 @@ internal static class AutomationStalledWorkCommand
             candidateDomains,
             repo,
             now,
-            guideReachabilitySince ?? GuideReachabilityActivationUtc,
+            guideCloseoutSince,
+            debtWindow,
             items,
             excluded,
             warnings,
@@ -896,6 +920,7 @@ internal static class AutomationStalledWorkCommand
             Items = resultItems,
             Excluded = excluded,
             Warnings = warnings,
+            DebtWindow = debtWindow?.BuildSummary(knowledgeCloseoutSince, guideCloseoutSince),
             // G727: current checkouts stay silent; stale and unknown
             // observations carry their structured evidence and warning.
             CheckoutFreshness = checkoutFreshness is { Status: not CheckoutFreshnessProbe.Current }
@@ -4034,9 +4059,11 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<string> candidateDomains,
         string repo,
         DateTimeOffset now,
-        DateTimeOffset since,
+        DateTimeOffset? since,
+        StalledWorkAdoptionWindow? debtWindow,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded,
+        List<string> warnings,
         string? recordingRole = null)
     {
         var runLogPath = context.GetRunLogPath();
@@ -4082,7 +4109,7 @@ internal static class AutomationStalledWorkCommand
 
         foreach (var (executionUnit, closedAt) in closeouts)
         {
-            if (closedAt < since)
+            if (since is { } closeoutCutoff && closedAt < closeoutCutoff)
             {
                 // Closed out before this detection shipped: out of scope by
                 // contract (see KnowledgeWriteBackActivationUtc).
@@ -4210,37 +4237,47 @@ internal static class AutomationStalledWorkCommand
                     .ToList();
             if (recordEntries.Count > 0 && consideredEntries.Count > 0)
             {
-                foreach (var (recordPath, record) in consideredEntries)
+                var uncommittedEntries = consideredEntries
+                    .Select(entry => (entry.Path, entry.Record, RelativePath: Path.GetRelativePath(context.RepoRoot, entry.Path)
+                        .Replace(Path.DirectorySeparatorChar, '/')))
+                    .Where(entry => IsGitPathUncommitted(context.RepoRoot, entry.RelativePath))
+                    .ToArray();
+                if (uncommittedEntries.Length == 0)
                 {
-                    var relativeRecordPath = Path.GetRelativePath(context.RepoRoot, recordPath)
-                        .Replace(Path.DirectorySeparatorChar, '/');
-                    if (IsGitPathUncommitted(context.RepoRoot, relativeRecordPath))
-                    {
-                        items.Add(new StalledWorkItem
-                        {
-                            Kind = KindKnowledgeWritebackRecordedUncommitted,
-                            ExecutionUnit = executionUnit,
-                            Issue = null,
-                            Pr = null,
-                            AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(closedAt, now), now),
-                            IsInformational = false,
-                            DeclaredWriteBackTargets = declaration.DeclaredTargets,
-                            RecordPath = relativeRecordPath,
-                            RecordingRole = recordingRole,
-                            RecordedRoles = recordEntries
-                                .Select(entry => CloseoutRecordRole.Display(entry.Record.Role))
-                                .Distinct(StringComparer.Ordinal)
-                                .OrderBy(role => role, StringComparer.Ordinal)
-                                .ToArray(),
-                            RecommendedAction =
-                                $"commit and push `{relativeRecordPath}` in the host repo, then re-run stalled-work. "
-                                + "The record exists only in this checkout until both steps complete; intent-cli never auto-commits.",
-                        });
-                    }
+                    // A committed record discharges the obligation. A role-scoped
+                    // scan considers only the requested recorder role.
+                    continue;
                 }
 
-                // A committed record discharges the obligation. A role-scoped
-                // scan considers only the requested recorder role.
+                if (debtWindow is not null
+                    && !debtWindow.ReportDecision(executionUnit, KindKnowledgeWritebackRecordedUncommitted, excluded, warnings))
+                {
+                    continue;
+                }
+
+                foreach (var (recordPath, record, relativeRecordPath) in uncommittedEntries)
+                {
+                    items.Add(new StalledWorkItem
+                    {
+                        Kind = KindKnowledgeWritebackRecordedUncommitted,
+                        ExecutionUnit = executionUnit,
+                        Issue = null,
+                        Pr = null,
+                        AgeMinutes = ComputeAgeMinutesFromInstant(ClampToNow(closedAt, now), now),
+                        IsInformational = false,
+                        DeclaredWriteBackTargets = declaration.DeclaredTargets,
+                        RecordPath = relativeRecordPath,
+                        RecordingRole = recordingRole,
+                        RecordedRoles = recordEntries
+                            .Select(entry => CloseoutRecordRole.Display(entry.Record.Role))
+                            .Distinct(StringComparer.Ordinal)
+                            .OrderBy(role => role, StringComparer.Ordinal)
+                            .ToArray(),
+                        RecommendedAction =
+                            $"commit and push `{relativeRecordPath}` in the host repo, then re-run stalled-work. "
+                            + "The record exists only in this checkout until both steps complete; intent-cli never auto-commits.",
+                    });
+                }
                 continue;
             }
 
@@ -4249,6 +4286,12 @@ internal static class AutomationStalledWorkCommand
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(role => role, StringComparer.Ordinal)
                 .ToArray();
+
+            if (debtWindow is not null
+                && !debtWindow.ReportDecision(executionUnit, KindKnowledgeWritebackPending, excluded, warnings))
+            {
+                continue;
+            }
 
             items.Add(new StalledWorkItem
             {
@@ -4356,7 +4399,8 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<string> candidateDomains,
         string repo,
         DateTimeOffset now,
-        DateTimeOffset since,
+        DateTimeOffset? since,
+        StalledWorkAdoptionWindow? debtWindow,
         List<StalledWorkItem> items,
         List<StalledWorkExcluded> excluded,
         List<string> warnings,
@@ -4400,7 +4444,7 @@ internal static class AutomationStalledWorkCommand
 
         foreach (var (executionUnit, closedAt) in closeouts)
         {
-            if (closedAt < since)
+            if (since is { } closeoutCutoff && closedAt < closeoutCutoff)
             {
                 continue;
             }
@@ -4541,6 +4585,7 @@ internal static class AutomationStalledWorkCommand
                             $"'{executionUnit}': guide-reachability record '{existingPath}' could not be read: "
                             + $"{exception.Message}. An unreadable record is not evidence of clearance.",
                     });
+                    recordEntries.Clear();
                     recordReadFailed = true;
                     break;
                 }
@@ -4569,6 +4614,12 @@ internal static class AutomationStalledWorkCommand
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(role => role, StringComparer.Ordinal)
                 .ToArray();
+
+            if (debtWindow is not null
+                && !debtWindow.ReportDecision(executionUnit, KindGuideReachabilityPending, excluded, warnings))
+            {
+                continue;
+            }
 
             items.Add(new StalledWorkItem
             {
@@ -4903,6 +4954,10 @@ internal static class AutomationStalledWorkCommand
         @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)(?![A-Za-z0-9])",
         System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    private static readonly System.Text.RegularExpressions.Regex FullIso8601InstantPattern = new(
+        @"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,7})?(?:Z|[+-][0-9]{2}:[0-9]{2})\z",
+        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     private static string ExecutionUnitFromTitle(string title)
     {
         if (string.IsNullOrWhiteSpace(title))
@@ -5105,6 +5160,7 @@ internal static class AutomationStalledWorkCommand
         out int claimedSilentMinutes,
         out int backlogIdleMinutes,
         out int repairSilentMinutes,
+        out DateTimeOffset? since,
         out DateTimeOffset? knowledgeWriteBackSince,
         out DateTimeOffset? guideReachabilitySince,
         out string format,
@@ -5119,6 +5175,7 @@ internal static class AutomationStalledWorkCommand
         claimedSilentMinutes = DefaultClaimedSilentMinutes;
         backlogIdleMinutes = DefaultBacklogIdleMinutes;
         repairSilentMinutes = DefaultRepairSilentMinutes;
+        since = null;
         knowledgeWriteBackSince = null;
         guideReachabilitySince = null;
         format = FormatMarkdown;
@@ -5225,6 +5282,28 @@ internal static class AutomationStalledWorkCommand
                     repairSilentMinutes = parsedRepairSilentMinutes;
                     index++;
                     break;
+                // G858: an explicit inclusive start boundary for the two
+                // closeout-debt populations. It does not change lane-specific
+                // closeout cutoffs or any live stalled-work lane.
+                case "--since":
+                    if (index + 1 >= args.Length)
+                    {
+                        error = "--since requires an ISO-8601 instant (e.g. 2026-09-16T08:26:32Z).";
+                        return false;
+                    }
+
+                    var startSinceText = args[index + 1].Trim();
+                    if (!FullIso8601InstantPattern.IsMatch(startSinceText)
+                        || !DateTimeOffset.TryParse(startSinceText, System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsedStartSince))
+                    {
+                        error = "--since requires an ISO-8601 instant (e.g. 2026-09-16T08:26:32Z).";
+                        return false;
+                    }
+
+                    since = parsedStartSince.ToUniversalTime();
+                    index++;
+                    break;
                 // G564: deliberate opt-in to scanning closeouts older than the
                 // activation floor. Retroactive detection is never a default.
                 case "--knowledge-writeback-since":
@@ -5287,6 +5366,9 @@ internal static class AutomationStalledWorkCommand
         return true;
     }
 
+    private static string FormatWindowCutoff(DateTimeOffset? cutoff) =>
+        cutoff?.ToUniversalTime().ToString("O") ?? "none";
+
     private static void WriteMarkdown(TextWriter writer, AutomationStalledWorkResult result)
     {
         writer.WriteLine($"# automation stalled-work — `{result.Domain}` / `{result.Repo}`");
@@ -5301,6 +5383,28 @@ internal static class AutomationStalledWorkCommand
         writer.WriteLine($"- stalled: {(result.Stalled ? "true" : "false")}");
         writer.WriteLine($"- items: {result.Items.Count}");
         writer.WriteLine($"- excluded: {result.Excluded.Count}");
+        if (result.DebtWindow is { } debtWindow)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Debt window");
+            writer.WriteLine($"- policy: {debtWindow.Policy}");
+            writer.WriteLine($"- cutoff: {(debtWindow.Cutoff.HasValue ? debtWindow.Cutoff.Value.ToUniversalTime().ToString("O") : "unavailable")}");
+            if (debtWindow.UnavailableReason is { } unavailableReason)
+            {
+                writer.WriteLine($"- unavailable_reason: {unavailableReason}");
+            }
+            writer.WriteLine($"- resolved_domain: {debtWindow.ResolvedDomain}");
+            writer.WriteLine($"- resolved_team: {debtWindow.ResolvedTeam ?? "(none)"}");
+            writer.WriteLine($"- requested_team: {debtWindow.RequestedTeam ?? "(omitted)"}");
+            writer.WriteLine($"- resolved_scope: {debtWindow.ResolvedScope}");
+            writer.WriteLine($"- team_mode: {debtWindow.TeamMode}");
+            writer.WriteLine($"- mode_source: {debtWindow.ModeSource}");
+            writer.WriteLine($"- mode_path: {debtWindow.ModePath}");
+            writer.WriteLine($"- legacy_run_log_path: {debtWindow.LegacyRunLogPath}");
+            writer.WriteLine($"- knowledge_writeback_closeout_cutoff: {FormatWindowCutoff(debtWindow.KnowledgeWritebackCloseoutCutoff)}");
+            writer.WriteLine($"- guide_reachability_closeout_cutoff: {FormatWindowCutoff(debtWindow.GuideReachabilityCloseoutCutoff)}");
+            writer.WriteLine($"- decision_counts: candidates={debtWindow.DecisionCounts.CandidateUnits}, included={debtWindow.DecisionCounts.IncludedUnits}, historical={debtWindow.DecisionCounts.HistoricalUnits}, unknown={debtWindow.DecisionCounts.UnknownUnits}, foreign_team={debtWindow.DecisionCounts.ForeignTeamUnits}");
+        }
         if (result.OperatorAttentionStatus is not null)
         {
             writer.WriteLine($"- operator_attention_status: {result.OperatorAttentionStatus}");
@@ -5540,6 +5644,23 @@ internal static class AutomationStalledWorkCommand
             foreach (var item in result.Excluded)
             {
                 writer.WriteLine($"- `{item.ExecutionUnit}` ({item.Kind}, {item.Reason}): {item.Detail}");
+                if (item.DebtWindowEvidenceKind is { } evidenceKind)
+                {
+                    writer.WriteLine($"  - debt_window_status: {item.DebtWindowStatus}");
+                    writer.WriteLine($"  - evidence_kind: {evidenceKind}");
+                }
+                if (item.DebtWindowEvidencePath is { } evidencePath)
+                {
+                    writer.WriteLine($"  - evidence_path: {evidencePath}");
+                }
+                if (item.DebtWindowEvidenceAt is { } evidenceAt)
+                {
+                    writer.WriteLine($"  - evidence_at: {evidenceAt.ToUniversalTime():O}");
+                }
+                if (item.DebtWindowCutoff is { } debtCutoff)
+                {
+                    writer.WriteLine($"  - debt_window_cutoff: {debtCutoff.ToUniversalTime():O}");
+                }
             }
             writer.WriteLine();
         }
@@ -5585,6 +5706,11 @@ internal sealed record AutomationStalledWorkResult
     [JsonPropertyName("capability_matrix")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TeamModeCapabilityMatrix? CapabilityMatrix { get; init; }
+
+    /// <summary>G858: local provenance for the debt-only start window; absent when inactive.</summary>
+    [JsonPropertyName("debt_window")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StalledWorkDebtWindowSummary? DebtWindow { get; init; }
 
     [JsonPropertyName("repo")]
     public required string Repo { get; init; }
@@ -6039,6 +6165,26 @@ internal sealed record StalledWorkExcluded
 
     [JsonPropertyName("detail")]
     public required string Detail { get; init; }
+
+    [JsonPropertyName("debt_window_status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DebtWindowStatus { get; init; }
+
+    [JsonPropertyName("debt_window_evidence_kind")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DebtWindowEvidenceKind { get; init; }
+
+    [JsonPropertyName("debt_window_evidence_path")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DebtWindowEvidencePath { get; init; }
+
+    [JsonPropertyName("debt_window_evidence_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? DebtWindowEvidenceAt { get; init; }
+
+    [JsonPropertyName("debt_window_cutoff")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? DebtWindowCutoff { get; init; }
 }
 
 internal sealed record StalledWorkRef

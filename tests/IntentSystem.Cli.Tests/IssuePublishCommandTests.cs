@@ -1,3 +1,4 @@
+using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
 using IntentSystem.Supervisor.Models;
@@ -11,6 +12,32 @@ namespace IntentSystem.Cli.Tests;
 [Collection(RunSubmitCommandCollection.Name)]
 public sealed class IssuePublishCommandTests
 {
+    internal static int ExecuteWriterFixture(
+        CliContext context,
+        string[] args,
+        TextWriter output,
+        IQueueDispatchPublisher publisher,
+        IGitRemoteCommandRunner git,
+        DateTimeOffset at)
+    {
+        var originalPublisherFactory = IssuePublishCommand.PublisherFactory;
+        var originalGitCommandRunnerFactory = IssuePublishCommand.GitCommandRunnerFactory;
+        var originalTimestampFactory = IssuePublishCommand.TimestampFactory;
+        try
+        {
+            IssuePublishCommand.PublisherFactory = () => publisher;
+            IssuePublishCommand.GitCommandRunnerFactory = () => git;
+            IssuePublishCommand.TimestampFactory = () => at;
+            return IssuePublishCommand.Execute(context, args, output);
+        }
+        finally
+        {
+            IssuePublishCommand.PublisherFactory = originalPublisherFactory;
+            IssuePublishCommand.GitCommandRunnerFactory = originalGitCommandRunnerFactory;
+            IssuePublishCommand.TimestampFactory = originalTimestampFactory;
+        }
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("issue-created")]

@@ -41,6 +41,8 @@ src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	IGitHubCommandRunner	
 src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	SoloConductorReviewReadRequest	2
 src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	SoloConductorReviewReadResult	10
 src/IntentSystem.Cli/Commands/SoloConductorReviewReader.cs	SoloConductorReviewReader	2
+src/IntentSystem.Cli/Commands/StalledWorkAdoptionWindow.cs	ClaimCommand	1
+src/IntentSystem.Cli/Commands/StalledWorkAdoptionWindow.cs	StalledWorkExcluded	3
 src/IntentSystem.Cli/Commands/UnitStatusCommand.cs	UnitStatusReadAdapter	1
 src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	ClaimCommand	1
 src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	ClaimHistoryRecord	1
