@@ -132,10 +132,10 @@ internal static class RulingCommand
             var existingBytes = RulingArtifact.Serialize(existing);
             if (!existingBytes.AsSpan().SequenceEqual(bytes))
                 return Emit(writer, parsed.Format, ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
-                { Disposition = "refused", Status = "conflict", Cause = "ruling-content-conflict", Detail = "ID is immutable; supplied content differs from existing bytes.", ArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, RecoveryHint = "Choose a new ID or record an explicit successor; existing bytes are immutable." });
+                { Disposition = "refused", Status = "conflict", Cause = "ruling-content-conflict", Detail = "ID is immutable; supplied content differs from existing bytes.", ArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = existing.ExpiresAt is not null && now >= existing.ExpiresAt.Value, RecoveryHint = "Choose a new ID or record an explicit successor; existing bytes are immutable." });
             if (candidateEval.Status != "active")
                 return Emit(writer, parsed.Format, ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
-                { Disposition = "refused", Cause = candidateEval.Cause, Detail = candidateEval.Detail, ArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, RecoveryHint = "Review current graph status; replay does not reactivate an inactive record." });
+                { Disposition = "refused", Cause = candidateEval.Cause, Detail = candidateEval.Detail, ArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = existing.ExpiresAt is not null && now >= existing.ExpiresAt.Value, RecoveryHint = "Review current graph status; replay does not reactivate an inactive record." });
             var idem = ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
             { Disposition = "idempotent", Status = "active", Cause = "", Detail = "identical active record already exists", Idempotent = true, ArtifactPath = existing.RelativePath, PlannedArtifactPath = existing.RelativePath, ContentSha256 = existing.Sha256, NormalizedRecord = JsonDocument.Parse(existingBytes).RootElement.Clone(), TimestampSource = timestampSource, Expired = false };
             return Emit(writer, parsed.Format, idem);
@@ -148,7 +148,9 @@ internal static class RulingCommand
                 Disposition = candidateEval.Status == "unavailable" && candidateEval.Cause != "ruling-future-recorded-at" ? "unavailable" : "refused",
                 TimestampSource = timestampSource,
                 NormalizedRecord = JsonDocument.Parse(bytes).RootElement.Clone(),
-                ContentSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
+                ContentSha256 = null,
+                ArtifactPath = null,
+                Expired = null,
                 PlannedArtifactPath = record.RelativePath,
                 RecoveryHint = capacity
                     ? "The exact-scope ruling inventory is at capacity; ask the responsible host operator to resolve scope capacity. Do not partially merge or archive records."
@@ -172,7 +174,9 @@ internal static class RulingCommand
 
         if (!store.TryWrite(record, bytes, now, out var wrote, out var idempotent, out cause, out detail, out var createdDirectories))
         {
-            var current = store.Evaluate(record.Domain, record.Team, record.Id, now, record, forAdmission: true);
+            // Re-read only disk state after a failed create. The proposed record must
+            // never appear as evidence merely because it was supplied to admission.
+            var current = store.Evaluate(record.Domain, record.Team, record.Id, now);
             var knownConflict = cause is "ruling-content-conflict" or "ruling-identity-conflict" or
                 "ruling-supersession-conflict" or "ruling-incomplete-merge" or "ruling-successor-conflict";
             var storedTarget = current.Records.FirstOrDefault(x => x.Id == record.Id);
@@ -180,6 +184,7 @@ internal static class RulingCommand
                 ? current.Status
                 : knownConflict ? "conflict" : "unavailable";
             var knownInactive = cause == "ruling-inactive-target" && status is ("expired" or "superseded");
+            var evidenceRecord = wrote ? record : storedTarget;
             var failure = ResultFromEvaluation("record", parsed, now, current, "write") with
             {
                 Disposition = wrote ? "unavailable" : knownConflict || knownInactive ? "refused" : "unavailable",
@@ -188,19 +193,20 @@ internal static class RulingCommand
                 Detail = detail,
                 Wrote = wrote,
                 Idempotent = idempotent,
-                ContentSha256 = storedTarget?.Sha256 ?? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
-                ArtifactPath = wrote ? record.RelativePath : storedTarget?.RelativePath,
+                ContentSha256 = evidenceRecord?.Sha256,
+                ArtifactPath = evidenceRecord?.RelativePath,
                 PlannedArtifactPath = record.RelativePath,
-                NormalizedRecord = JsonDocument.Parse(storedTarget is null ? bytes : RulingArtifact.Serialize(storedTarget)).RootElement.Clone(),
+                NormalizedRecord = evidenceRecord is null ? JsonDocument.Parse(bytes).RootElement.Clone() : JsonDocument.Parse(RulingArtifact.Serialize(evidenceRecord)).RootElement.Clone(),
                 CreatedDirectories = createdDirectories,
                 TimestampSource = timestampSource,
+                Expired = evidenceRecord is null ? null : evidenceRecord.ExpiresAt is not null && now >= evidenceRecord.ExpiresAt.Value,
                 RecoveryHint = "Inspect the exact target and scoped inventory; never overwrite a ruling."
             };
             return Emit(writer, parsed.Format, failure);
         }
         var after = store.Evaluate(record.Domain, record.Team, record.Id, now);
         var written = ResultFromEvaluation("record", parsed, now, after, "write") with
-        { Disposition = idempotent ? "idempotent" : "written", Status = after.Status, Cause = after.Cause, Detail = after.Detail, Wrote = wrote, Idempotent = idempotent, ArtifactPath = record.RelativePath, PlannedArtifactPath = record.RelativePath, ContentSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(), NormalizedRecord = JsonDocument.Parse(bytes).RootElement.Clone(), TimestampSource = timestampSource, CreatedDirectories = createdDirectories, Expired = after.Status == "expired", RecoveryHint = null };
+        { Disposition = idempotent ? "idempotent" : "written", Status = after.Status, Cause = after.Cause, Detail = after.Detail, Wrote = wrote, Idempotent = idempotent, ArtifactPath = record.RelativePath, PlannedArtifactPath = record.RelativePath, ContentSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(), NormalizedRecord = JsonDocument.Parse(bytes).RootElement.Clone(), TimestampSource = timestampSource, CreatedDirectories = createdDirectories, Expired = record.ExpiresAt is not null && now >= record.ExpiresAt.Value, RecoveryHint = null };
         if (after.Status != "active") written = written with
         { Disposition = after.Status == "unavailable" ? "unavailable" : "refused", Wrote = wrote, Idempotent = idempotent, RecoveryHint = "The local file state is retained, but complete post-write evaluation did not verify an active record." };
         return Emit(writer, parsed.Format, written);

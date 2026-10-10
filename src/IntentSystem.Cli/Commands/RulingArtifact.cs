@@ -132,7 +132,12 @@ internal sealed record RulingArtifact
             // Validate byte encoding independently from JSON syntax so malformed UTF-8 has
             // one stable parser result across runtimes.
             _ = new UTF8Encoding(false, true).GetString(bytes);
-            RejectDuplicateKeysAndDepth(bytes);
+            if (!RejectDuplicateKeysAndDepth(bytes))
+            {
+                cause = "ruling-depth-limit";
+                detail = "JSON nesting exceeds the maximum depth of 16";
+                return false;
+            }
             using var document = JsonDocument.Parse(bytes.ToArray(), new JsonDocumentOptions
             {
                 AllowTrailingCommas = false,
@@ -205,8 +210,7 @@ internal sealed record RulingArtifact
         }
         catch (JsonException ex)
         {
-            cause = ex.BytePositionInLine >= 0 && ex.Message.Contains("depth", StringComparison.OrdinalIgnoreCase)
-                ? "ruling-depth-limit" : "ruling-invalid-json";
+            cause = "ruling-invalid-json";
             detail = ex.Message;
             return false;
         }
@@ -294,20 +298,25 @@ internal sealed record RulingArtifact
         return false;
     }
 
-    private static void RejectDuplicateKeysAndDepth(ReadOnlySpan<byte> bytes)
+    private static bool RejectDuplicateKeysAndDepth(ReadOnlySpan<byte> bytes)
     {
-        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { AllowTrailingCommas = false, CommentHandling = JsonCommentHandling.Disallow, MaxDepth = 16 });
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { AllowTrailingCommas = false, CommentHandling = JsonCommentHandling.Disallow, MaxDepth = 17 });
         var stack = new Stack<HashSet<string>>();
         while (reader.Read())
         {
-            if (reader.TokenType == JsonTokenType.StartObject) stack.Push(new HashSet<string>(StringComparer.Ordinal));
-            else if (reader.TokenType == JsonTokenType.EndObject) stack.Pop();
+            if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+            {
+                if (stack.Count >= 16) return false;
+                stack.Push(reader.TokenType == JsonTokenType.StartObject ? new HashSet<string>(StringComparer.Ordinal) : null!);
+            }
+            else if (reader.TokenType is JsonTokenType.EndObject or JsonTokenType.EndArray) stack.Pop();
             else if (reader.TokenType == JsonTokenType.PropertyName)
             {
                 var name = GetReaderString(ref reader);
-                if (stack.Count == 0 || !stack.Peek().Add(name)) throw new JsonException("duplicate JSON object key");
+                if (stack.Count == 0 || stack.Peek() is not { } properties || !properties.Add(name)) throw new JsonException("duplicate JSON object key");
             }
         }
+        return true;
     }
 
     public bool SameApplicability(RulingArtifact other) =>
