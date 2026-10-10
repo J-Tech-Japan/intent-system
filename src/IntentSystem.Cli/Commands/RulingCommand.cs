@@ -12,10 +12,18 @@ internal static class RulingCommand
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.Never };
 
     internal static int ExecuteRecord(CliContext context, string[] args, TextWriter writer) => Execute(context, args, writer, "record");
+    internal static int ExecuteRecord(CliContext context, string[] args, TextWriter writer,
+        Action<string, string>? beforeOperation, DateTimeOffset? nowOverride) =>
+        Execute(context, args, writer, "record", beforeOperation, nowOverride);
     internal static int ExecuteShow(CliContext context, string[] args, TextWriter writer) => Execute(context, args, writer, "show");
+    internal static int ExecuteShow(CliContext context, string[] args, TextWriter writer, DateTimeOffset nowOverride) =>
+        Execute(context, args, writer, "show", nowOverride: nowOverride);
     internal static int ExecuteValidate(CliContext context, string[] args, TextWriter writer) => Execute(context, args, writer, "validate");
+    internal static int ExecuteValidate(CliContext context, string[] args, TextWriter writer, DateTimeOffset nowOverride) =>
+        Execute(context, args, writer, "validate", nowOverride: nowOverride);
 
-    private static int Execute(CliContext context, string[] args, TextWriter writer, string operation)
+    private static int Execute(CliContext context, string[] args, TextWriter writer, string operation,
+        Action<string, string>? beforeOperation = null, DateTimeOffset? nowOverride = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(args);
@@ -28,7 +36,7 @@ internal static class RulingCommand
             return 1;
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = nowOverride ?? DateTimeOffset.UtcNow;
         if (!RulingArtifact.TryIdentifier(parsed.Id, out var idError))
             return Emit(writer, parsed.Format, Refused(operation, parsed, now, "ruling-invalid-id", "id: " + idError));
         if (!RulingArtifact.TryIdentifier(parsed.Domain, out var domainError))
@@ -36,7 +44,7 @@ internal static class RulingCommand
         if (!RulingArtifact.TryIdentifier(parsed.Team, out var teamError))
             return Emit(writer, parsed.Format, Refused(operation, parsed, now, "ruling-invalid-team", "team: " + teamError));
 
-        var store = new RulingArtifactStore(context.RepoRoot);
+        var store = new RulingArtifactStore(context.RepoRoot, beforeOperation);
         if (operation == "record") return Record(context, store, parsed, now, writer);
         var evaluation = store.Evaluate(parsed.Domain!, parsed.Team!, parsed.Id!, now);
         var result = ResultFromEvaluation(operation, parsed, now, evaluation, operation == "show" ? "read-only" : "read-only");
@@ -48,7 +56,7 @@ internal static class RulingCommand
             NormalizedRecord = JsonDocument.Parse(RulingArtifact.Serialize(record)).RootElement.Clone(),
             ContentSha256 = record.Sha256,
             ArtifactPath = record.RelativePath,
-            TimestampSource = "existing",
+            TimestampSource = null,
             Expired = record.ExpiresAt is not null && now >= record.ExpiresAt.Value,
             AuthorityStatus = record.AuthorityRole == "operator" ? "supplied-not-authenticated" : "supplied-not-authenticated",
             Status = evaluation.Status,
@@ -81,7 +89,12 @@ internal static class RulingCommand
         {
             var unavailable = Refused("record", parsed, now,
                 readFailure == CrossRuntimeReviewFileReadFailure.TooLarge ? "ruling-size-limit" : "ruling-input-unavailable",
-                $"{readFailure}: {readError}") with { Disposition = "unavailable", Status = "unavailable", RecoveryHint = "Provide a readable regular UTF-8 JSON file within 1 MiB." };
+                $"{readFailure}: {readError}") with
+            {
+                Disposition = readFailure == CrossRuntimeReviewFileReadFailure.TooLarge ? "refused" : "unavailable",
+                Status = "unavailable",
+                RecoveryHint = "Provide a readable regular UTF-8 JSON file within 1 MiB."
+            };
             return Emit(writer, parsed.Format, unavailable);
         }
         if (!RulingArtifact.TryParse(input, false, out var supplied, out var cause, out var detail) || supplied is null)
@@ -128,20 +141,61 @@ internal static class RulingCommand
             return Emit(writer, parsed.Format, idem);
         }
         if (candidateEval.Status != "active")
+        {
+            var capacity = candidateEval.Cause == "ruling-inventory-limit";
             return Emit(writer, parsed.Format, ResultFromEvaluation("record", parsed, now, candidateEval, parsed.Write ? "write" : "dry-run") with
-            { Disposition = candidateEval.Status == "unavailable" && candidateEval.Cause != "ruling-future-recorded-at" ? "unavailable" : "refused", TimestampSource = timestampSource, NormalizedRecord = JsonDocument.Parse(bytes).RootElement.Clone(), PlannedArtifactPath = record.RelativePath, RecoveryHint = "Review expiry and the complete exact-scope graph; no record was written." });
+            {
+                Disposition = candidateEval.Status == "unavailable" && candidateEval.Cause != "ruling-future-recorded-at" ? "unavailable" : "refused",
+                TimestampSource = timestampSource,
+                NormalizedRecord = JsonDocument.Parse(bytes).RootElement.Clone(),
+                ContentSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
+                PlannedArtifactPath = record.RelativePath,
+                RecoveryHint = capacity
+                    ? "The exact-scope ruling inventory is at capacity; ask the responsible host operator to resolve scope capacity. Do not partially merge or archive records."
+                    : "Review expiry and the complete exact-scope graph; no record was written."
+            });
+        }
 
         if (!parsed.Write)
         {
             var preview = ResultFromEvaluation("record", parsed, now, candidateEval, "dry-run") with
-            { Disposition = "preview", Status = "active", TimestampSource = timestampSource, NormalizedRecord = JsonDocument.Parse(bytes).RootElement.Clone(), ContentSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(), PlannedArtifactPath = record.RelativePath, RecoveryHint = "A generated preview timestamp is a proposal, not a reservation; supply recorded_at to reproduce these bytes." };
+            {
+                Disposition = "preview", Status = "active", TimestampSource = timestampSource,
+                Detail = timestampSource == "generated" ? "A generated timestamp is a proposal, not a reservation; supply recorded_at to reproduce these bytes." : candidateEval.Detail,
+                NormalizedRecord = JsonDocument.Parse(bytes).RootElement.Clone(),
+                ContentSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
+                PlannedArtifactPath = record.RelativePath,
+                RecoveryHint = null
+            };
             return Emit(writer, parsed.Format, preview);
         }
 
         if (!store.TryWrite(record, bytes, now, out var wrote, out var idempotent, out cause, out detail, out var createdDirectories))
         {
-            var failure = ResultFromEvaluation("record", parsed, now, candidateEval, "write") with
-            { Disposition = wrote ? "unavailable" : cause == "ruling-content-conflict" ? "refused" : "unavailable", Status = cause == "ruling-content-conflict" ? "conflict" : "unavailable", Cause = cause, Detail = detail, Wrote = wrote, Idempotent = idempotent, ContentSha256 = wrote ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant() : null, ArtifactPath = wrote ? record.RelativePath : null, PlannedArtifactPath = record.RelativePath, CreatedDirectories = createdDirectories, TimestampSource = timestampSource, RecoveryHint = "Inspect the exact target and scoped inventory; never overwrite a ruling." };
+            var current = store.Evaluate(record.Domain, record.Team, record.Id, now, record, forAdmission: true);
+            var knownConflict = cause is "ruling-content-conflict" or "ruling-identity-conflict" or
+                "ruling-supersession-conflict" or "ruling-incomplete-merge" or "ruling-successor-conflict";
+            var storedTarget = current.Records.FirstOrDefault(x => x.Id == record.Id);
+            var status = cause == "ruling-inactive-target" && current.Status is ("expired" or "superseded")
+                ? current.Status
+                : knownConflict ? "conflict" : "unavailable";
+            var knownInactive = cause == "ruling-inactive-target" && status is ("expired" or "superseded");
+            var failure = ResultFromEvaluation("record", parsed, now, current, "write") with
+            {
+                Disposition = wrote ? "unavailable" : knownConflict || knownInactive ? "refused" : "unavailable",
+                Status = status,
+                Cause = cause,
+                Detail = detail,
+                Wrote = wrote,
+                Idempotent = idempotent,
+                ContentSha256 = storedTarget?.Sha256 ?? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
+                ArtifactPath = wrote ? record.RelativePath : storedTarget?.RelativePath,
+                PlannedArtifactPath = record.RelativePath,
+                NormalizedRecord = JsonDocument.Parse(storedTarget is null ? bytes : RulingArtifact.Serialize(storedTarget)).RootElement.Clone(),
+                CreatedDirectories = createdDirectories,
+                TimestampSource = timestampSource,
+                RecoveryHint = "Inspect the exact target and scoped inventory; never overwrite a ruling."
+            };
             return Emit(writer, parsed.Format, failure);
         }
         var after = store.Evaluate(record.Domain, record.Team, record.Id, now);
@@ -197,7 +251,7 @@ internal static class RulingCommand
             Expired = target is null ? null : target.ExpiresAt is not null && now >= target.ExpiresAt.Value,
             NormalizedRecord = target is null ? null : JsonDocument.Parse(RulingArtifact.Serialize(target)).RootElement.Clone(),
             ContentSha256 = target?.Sha256, ArtifactPath = target?.RelativePath,
-            TimestampSource = target is null ? null : "existing",
+            TimestampSource = operation == "record" && target is not null ? "existing" : null,
             SupersededBy = evaluation.SupersededBy,
             ReplacementIds = evaluation.ReplacementIds, Diagnostics = evaluation.Diagnostics,
             RecoveryHint = evaluation.Status is "unavailable" or "conflict" ? "Repair the exact-scope record graph through the responsible host process; do not rewrite history." : evaluation.Status == "missing" ? "Check the exact --domain, --team and ID." : null,

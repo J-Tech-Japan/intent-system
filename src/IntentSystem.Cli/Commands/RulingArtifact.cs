@@ -342,6 +342,17 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
     private const string RulingsRoot = RulingArtifact.RootRelativePath;
     public string ScopeDirectory(string domain, string team) => Path.Combine(repoRoot, RulingsRoot, domain, team);
 
+    internal static bool HasCaseInsensitiveIdentifierCollision(IEnumerable<string> identifiers)
+    {
+        var seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var identifier in identifiers)
+        {
+            if (seen.TryGetValue(identifier, out var prior) && !string.Equals(prior, identifier, StringComparison.Ordinal)) return true;
+            seen[identifier] = identifier;
+        }
+        return false;
+    }
+
     public RulingEvaluation Evaluate(string domain, string team, string id, DateTimeOffset now,
         RulingArtifact? candidate = null, bool forAdmission = false)
     {
@@ -366,6 +377,11 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
             else
             {
                 var entries = Directory.EnumerateFileSystemEntries(directory).ToArray();
+                var artifactIds = entries.Select(entry => Path.GetFileName(entry))
+                    .Where(name => name is not null && name.EndsWith(".json", StringComparison.Ordinal))
+                    .Select(name => name![..^5]);
+                if (HasCaseInsensitiveIdentifierCollision(artifactIds))
+                    return Conflict("ruling-identity-conflict", "scoped inventory contains case-insensitive ruling ID aliases", records, diagnostics, directory);
                 foreach (var entry in entries.Order(StringComparer.Ordinal))
                 {
                     var name = Path.GetFileName(entry);
@@ -502,6 +518,16 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
             }
             phase = "rename";
             beforeOperation?.Invoke("rename", final);
+            var immediatelyBeforeCreate = Evaluate(record.Domain, record.Team, record.Id, now, record, forAdmission: true);
+            if (immediatelyBeforeCreate.Status != "active")
+            {
+                cause = immediatelyBeforeCreate.Cause.Length == 0 ? "ruling-supersession-conflict" : immediatelyBeforeCreate.Cause;
+                detail = immediatelyBeforeCreate.Detail;
+                phase = "owned-temp-cleanup";
+                detail = CleanupOwnedTempPreservingFailure(detail);
+                createdDirectories = created;
+                return false;
+            }
             var link = TryCreateAtomicHardLink(ownedTemp, final);
             if (link.Success)
             {
@@ -768,13 +794,15 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         return new("active", "", "ruling is an active terminal record", [], [], records, diagnostics);
     }
 
-    private static RulingEvaluation Unavailable(string cause, string detail, IReadOnlyList<RulingArtifact> records,
+    private RulingEvaluation Unavailable(string cause, string detail, IReadOnlyList<RulingArtifact> records,
         IReadOnlyList<RulingDiagnostic> diagnostics, string path) =>
-        new("unavailable", cause, detail, [], [], records, diagnostics.Append(new(cause, path, detail)).ToArray());
+        new("unavailable", cause, detail, [], [], records, diagnostics.Append(new(cause, RelativeDiagnosticPath(path), detail)).ToArray());
 
-    private static RulingEvaluation Conflict(string cause, string detail, IReadOnlyList<RulingArtifact> records,
+    private RulingEvaluation Conflict(string cause, string detail, IReadOnlyList<RulingArtifact> records,
         IReadOnlyList<RulingDiagnostic> diagnostics, string path) =>
-        new("conflict", cause, detail, [], [], records, diagnostics.Append(new(cause, path, detail)).ToArray());
+        new("conflict", cause, detail, [], [], records, diagnostics.Append(new(cause, RelativeDiagnosticPath(path), detail)).ToArray());
+
+    private string RelativeDiagnosticPath(string path) => Path.GetRelativePath(repoRoot, path).Replace('\\', '/');
 
     private static (bool Exists, bool IsDirectory, bool IsSymlink, string? Error) Inspect(string path)
     {

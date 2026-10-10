@@ -58,6 +58,9 @@ public sealed class GuideCommandsListCommandTests
 
         // worker is the child-implementation surface.
         Assert.Equal("child-implementation", byName["worker"].GetProperty("role").GetString());
+        Assert.Contains("ruling", byName.Keys);
+        Assert.Equal("design", byName["ruling"].GetProperty("role").GetString());
+        Assert.Contains("Local immutable operator-ruling", byName["ruling"].GetProperty("purpose").GetString(), StringComparison.Ordinal);
 
         // Loop-prompt creation surfaces are discoverable in the catalog —
         // prompt-template AND prompt-matrix each as their own role-categorized
@@ -74,6 +77,37 @@ public sealed class GuideCommandsListCommandTests
         Assert.Contains("fewer dependencies", sessionLayerPurpose, StringComparison.Ordinal);
         Assert.Contains("deprecated `agmsg` + herdr", sessionLayerPurpose, StringComparison.Ordinal); // G829: supersedes "supported, non-retired"
         Assert.DoesNotContain("`agmsg` remains PRIMARY", sessionLayerPurpose, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SoloConductorGuideRouteAndCommandCatalogExposeTheRulingReadFlow()
+    {
+        using var catalogWriter = new StringWriter();
+        Assert.Equal(0, CommandRouter.Execute(["guide", "commands", "list", "--format", "json"], CreateContext(), catalogWriter));
+        using var catalog = JsonDocument.Parse(catalogWriter.ToString());
+        Assert.Contains(catalog.RootElement.GetProperty("groups").EnumerateArray(), group =>
+            group.GetProperty("name").GetString() == "ruling"
+            && group.GetProperty("purpose").GetString()!.Contains("Local immutable operator-ruling", StringComparison.Ordinal));
+
+        using var soloWriter = new StringWriter();
+        Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", "json"], CreateContext(), soloWriter));
+        using var solo = JsonDocument.Parse(soloWriter.ToString());
+        Assert.Equal("intent-cli guide solo-conductor", solo.RootElement.GetProperty("route").GetString());
+        Assert.Contains("architect", solo.RootElement.GetProperty("model").GetProperty("summary").GetString(), StringComparison.Ordinal);
+        Assert.Contains("orchestrator", solo.RootElement.GetProperty("model").GetProperty("summary").GetString(), StringComparison.Ordinal);
+        var rulingStep = solo.RootElement.GetProperty("loop").EnumerateArray()
+            .Single(step => step.GetProperty("id").GetString() == "bug-chain-or-ruling");
+        var instruction = rulingStep.GetProperty("instruction").GetString()!;
+        Assert.Contains("local immutable record only", instruction, StringComparison.Ordinal);
+        Assert.Contains("Commit and plain-push the artifact separately", instruction, StringComparison.Ordinal);
+        Assert.Contains("verify it from a fresh clone", instruction, StringComparison.Ordinal);
+        Assert.Contains("does not satisfy packet publication, unit-status, approval, or release gates", instruction, StringComparison.Ordinal);
+        var commands = rulingStep.GetProperty("commands").EnumerateArray()
+            .Select(command => command.GetProperty("command").GetString()!).ToArray();
+        var recordIndex = Array.FindIndex(commands, command => command.StartsWith("intent-cli ruling record ", StringComparison.Ordinal));
+        var showIndex = Array.FindIndex(commands, command => command.StartsWith("intent-cli ruling show ", StringComparison.Ordinal));
+        var validateIndex = Array.FindIndex(commands, command => command.StartsWith("intent-cli ruling validate ", StringComparison.Ordinal));
+        Assert.True(recordIndex >= 0 && showIndex > recordIndex && validateIndex > recordIndex);
     }
 
     [Fact]
