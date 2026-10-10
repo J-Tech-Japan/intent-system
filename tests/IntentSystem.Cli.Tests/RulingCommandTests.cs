@@ -29,8 +29,13 @@ public sealed class RulingCommandTests
         Assert.Equal("2026-10-10T12:00:00.1000000Z", record!.NormalizedRecordedAt);
         Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), record.Sha256);
 
-        Assert.False(RulingArtifact.TryParse(Encoding.UTF8.GetBytes(RecordJson("R-DUP", "2026-10-10T12:00:00Z", "[]")
-            .Replace("\"id\": \"R-DUP\",", "\"id\": \"R-DUP\",\n  \"id\": \"R-DUP\",")), false, out _, out _, out _));
+        var duplicateBaseline = Encoding.UTF8.GetBytes(RecordJson("R-DUP", "2026-10-10T12:00:00Z", "[\"G862\"]"));
+        Assert.True(RulingArtifact.TryParse(duplicateBaseline, false, out _, out _, out _));
+        var duplicateRootKey = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(duplicateBaseline)
+            .Replace("  \"id\": \"R-DUP\",", "  \"id\": \"R-DUP\",\n  \"id\": \"R-DUP\",", StringComparison.Ordinal));
+        Assert.False(RulingArtifact.TryParse(duplicateRootKey, false, out _, out var duplicateCause, out var duplicateDetail));
+        Assert.Equal("ruling-invalid-json", duplicateCause);
+        Assert.Contains("duplicate", duplicateDetail, StringComparison.OrdinalIgnoreCase);
         Assert.False(RulingArtifact.TryParse(Encoding.UTF8.GetBytes(RecordJson("R-NULL", "2026-10-10T12:00:00Z", "null")), false, out _, out _, out _));
         Assert.False(RulingArtifact.TryParse(Encoding.UTF8.GetBytes(RecordJson("R-TIME", "12:00")), false, out _, out _, out _));
         Assert.False(RulingArtifact.TryParse(Encoding.UTF8.GetBytes(RecordJson("R-UNKNOWN", "2026-10-10T12:00:00Z").Replace("\"supersedes\": []", "\"supersedes\": [], \"unexpected\": true", StringComparison.Ordinal)), false, out _, out _, out _));
@@ -483,6 +488,156 @@ public sealed class RulingCommandTests
     }
 
     [Fact]
+    public void StrictPayloadShapeMatrix_UsesSingleMutationsAndRefusesBothFormatsWithoutWrites()
+    {
+        var timestamp = DateTimeOffset.UtcNow.AddHours(-1).ToUniversalTime()
+            .ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
+        const string id = "R-S04-MATRIX";
+        var valid = RecordJson(id, timestamp);
+        var validBytes = Encoding.UTF8.GetBytes(valid);
+        Assert.True(RulingArtifact.TryParse(validBytes, false, out _, out _, out _));
+
+        using (var previewWorkspace = new TemporaryWorkspace())
+        {
+            var path = previewWorkspace.Write("valid-execution-units.json", valid);
+            var preview = Invoke(CreateContext(previewWorkspace.Root), ["ruling", "record", "--id", id, "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", path, "--authority-role", "operator", "--format", "json"]);
+            Assert.Equal(0, preview.ExitCode);
+            using var output = JsonDocument.Parse(preview.Output);
+            Assert.Equal("preview", output.RootElement.GetProperty("disposition").GetString());
+            Assert.Equal("active", output.RootElement.GetProperty("status").GetString());
+            Assert.False(output.RootElement.GetProperty("wrote").GetBoolean());
+            Assert.False(Directory.Exists(Path.Combine(previewWorkspace.Root, ".intent-cli")));
+        }
+
+        var rows = new List<(string Name, string Json, string Cause, string Detail)>();
+        void Add(string name, string json, string detail, string cause = "ruling-invalid-input")
+        {
+            Assert.NotEqual(valid, json);
+            rows.Add((name, json, cause, detail));
+        }
+        string ReplaceOnce(string token, string replacement)
+        {
+            var index = valid.IndexOf(token, StringComparison.Ordinal);
+            Assert.True(index >= 0, $"Missing single-mutation token: {token}");
+            Assert.Equal(index, valid.LastIndexOf(token, StringComparison.Ordinal));
+            return valid[..index] + replacement + valid[(index + token.Length)..];
+        }
+
+        foreach (var (name, json) in new[]
+        {
+            ("root-null", "null"), ("root-array", "[]"), ("root-string", "\"scalar\""), ("root-boolean", "false"), ("root-number", "7"),
+        }) Add(name, json, "root must be an object");
+
+        const string scopeToken = "\"scope\": { \"target_repo\": \"J-Tech-Japan/intent-system\", \"kind\": \"execution-units\", \"execution_units\": [\"G862\"] }";
+        foreach (var (name, json) in new[]
+        {
+            ("scope-null", "null"), ("scope-array", "[]"), ("scope-string", "\"scope\""), ("scope-boolean", "false"), ("scope-number", "7"),
+        }) Add(name, ReplaceOnce(scopeToken, "\"scope\": " + json), "scope must be an object");
+
+        var scalarFields = new (string Name, string Token, string Key, string Detail)[]
+        {
+            ("schema-version", "\"schema_version\": \"1\"", "schema_version", "schema_version must be the string '1'"),
+            ("id", "\"id\": \"R-S04-MATRIX\"", "id", "id must be a canonical identifier"),
+            ("domain", "\"domain\": \"intent-cli\"", "domain", "domain must be a canonical identifier"),
+            ("team", "\"team\": \"intent-cli-dev\"", "team", "team must be a canonical identifier"),
+            ("authority-role", "\"authority_role\": \"operator\"", "authority_role", "authority_role must be a string"),
+            ("scope-target-repo", "\"target_repo\": \"J-Tech-Japan/intent-system\"", "target_repo", "scope.target_repo must be owner/repository"),
+            ("scope-kind", "\"kind\": \"execution-units\"", "kind", "scope.kind must be repository or execution-units"),
+            ("decision", "\"decision\": \"Keep the bounded choice.\"", "decision", "decision must be nonblank text"),
+            ("rationale", "\"rationale\": \"The evidence supports this scope.\"", "rationale", "rationale must be nonblank text"),
+            ("recorded-at", "\"recorded_at\": \"" + timestamp + "\"", "recorded_at", "recorded_at must be a full UTC timestamp"),
+        };
+        foreach (var (name, token, key, detail) in scalarFields)
+        foreach (var invalidType in new[] { (Name: "null", Json: "null"), (Name: "object", Json: "{}"), (Name: "array", Json: "[]"), (Name: "boolean", Json: "false"), (Name: "number", Json: "7") })
+            Add(name + "-" + invalidType.Name, ReplaceOnce(token, "\"" + key + "\": " + invalidType.Json), detail);
+
+        foreach (var invalidType in new[] { (Name: "object", Json: "{}"), (Name: "array", Json: "[]"), (Name: "string", Json: "\"not-a-timestamp\""), (Name: "boolean", Json: "false"), (Name: "number", Json: "7") })
+            Add("expires-at-" + invalidType.Name, ReplaceOnce("\"expires_at\": null", "\"expires_at\": " + invalidType.Json), "expires_at must be null or a full UTC timestamp");
+
+        var arrayFields = new (string Name, string Token, string Key, string Detail)[]
+        {
+            ("execution-units", "\"execution_units\": [\"G862\"]", "execution_units", "scope.execution_units must be a string array of at most 128 entries"),
+            ("evidence-refs", "\"evidence_refs\": [\"https://github.com/J-Tech-Japan/intent-system/issues/1885\"]", "evidence_refs", "evidence_refs must contain 1–64 unique nonblank strings"),
+            ("supersedes", "\"supersedes\": []", "supersedes", "supersedes must contain at most 500 unique canonical identifiers"),
+        };
+        foreach (var (name, token, key, detail) in arrayFields)
+        foreach (var invalidType in new[] { (Name: "null", Json: "null"), (Name: "object", Json: "{}"), (Name: "string", Json: "\"scalar\""), (Name: "boolean", Json: "false"), (Name: "number", Json: "7") })
+            Add(name + "-collection-" + invalidType.Name, ReplaceOnce(token, "\"" + key + "\": " + invalidType.Json), detail);
+
+        var itemFields = new (string Name, string Token, string Key, string Detail, string ValidItem)[]
+        {
+            ("execution-unit", "\"execution_units\": [\"G862\"]", "execution_units", "scope.execution_units must be a string array of at most 128 entries", "G862"),
+            ("evidence-ref", "\"evidence_refs\": [\"https://github.com/J-Tech-Japan/intent-system/issues/1885\"]", "evidence_refs", "evidence_refs must contain 1–64 unique nonblank strings", "https://github.com/J-Tech-Japan/intent-system/issues/1885"),
+            ("supersedes-item", "\"supersedes\": []", "supersedes", "supersedes must contain at most 500 unique canonical identifiers", "R-S04-PREVIOUS"),
+        };
+        foreach (var (name, token, key, detail, validItem) in itemFields)
+        foreach (var invalidItem in new[] { (Name: "null", Json: "null"), (Name: "object", Json: "{}"), (Name: "array", Json: "[]"), (Name: "boolean", Json: "false"), (Name: "number", Json: "7") })
+        {
+            var collection = key == "supersedes" ? "[\"R-S04-PREVIOUS\"]" : "[\"" + validItem + "\"]";
+            var currentToken = key == "supersedes" ? token : "\"" + key + "\": " + collection;
+            Add(name + "-item-" + invalidItem.Name, ReplaceOnce(currentToken, "\"" + key + "\": [" + invalidItem.Json + "]"), detail);
+        }
+
+        Add("missing-required-key", ReplaceOnce("  \"schema_version\": \"1\",\n", ""), "required field 'schema_version' is missing");
+        Add("unknown-root-key", ReplaceOnce("  \"supersedes\": []", "  \"supersedes\": [],\n  \"unexpected\": true"), "unknown field 'unexpected'");
+        Add("unknown-scope-key", ReplaceOnce("\"scope\": { \"target_repo\":", "\"scope\": { \"unexpected\": true, \"target_repo\":"), "scope: unknown field 'unexpected'");
+        Add("duplicate-root-key", ReplaceOnce("  \"id\": \"R-S04-MATRIX\",", "  \"id\": \"R-S04-MATRIX\",\n  \"id\": \"R-S04-MATRIX\","), "duplicate JSON object key", "ruling-invalid-json");
+        Add("duplicate-scope-key", ReplaceOnce("\"kind\": \"execution-units\"", "\"kind\": \"execution-units\", \"kind\": \"repository\""), "duplicate JSON object key", "ruling-invalid-json");
+        Add("duplicate-units", ReplaceOnce("\"execution_units\": [\"G862\"]", "\"execution_units\": [\"G862\", \"G862\"]"), "scope.execution_units contains an invalid or duplicate identifier");
+        Add("duplicate-evidence-refs", ReplaceOnce("\"evidence_refs\": [\"https://github.com/J-Tech-Japan/intent-system/issues/1885\"]", "\"evidence_refs\": [\"same\", \"same\"]"), "evidence_refs must contain 1–64 unique nonblank strings");
+        Add("duplicate-supersedes", ReplaceOnce("\"supersedes\": []", "\"supersedes\": [\"R-S04-PREVIOUS\", \"R-S04-PREVIOUS\"]"), "supersedes must contain at most 500 unique canonical identifiers");
+        Add("empty-evidence-refs", ReplaceOnce("\"evidence_refs\": [\"https://github.com/J-Tech-Japan/intent-system/issues/1885\"]", "\"evidence_refs\": []"), "evidence_refs must contain 1–64 unique nonblank strings");
+        Add("empty-execution-units", ReplaceOnce("\"execution_units\": [\"G862\"]", "\"execution_units\": []"), "execution-units scope requires at least one unit");
+
+        var repositoryEmptyUnits = ReplaceOnce("\"kind\": \"execution-units\", \"execution_units\": [\"G862\"]", "\"kind\": \"repository\", \"execution_units\": []");
+        Assert.True(RulingArtifact.TryParse(Encoding.UTF8.GetBytes(repositoryEmptyUnits), false, out _, out _, out _));
+        using (var repositoryWorkspace = new TemporaryWorkspace())
+        {
+            var repositoryInput = repositoryWorkspace.Write("repository.json", repositoryEmptyUnits);
+            var repositoryNow = DateTimeOffset.Parse(timestamp, System.Globalization.CultureInfo.InvariantCulture).AddSeconds(1);
+            var repositoryPreview = InvokeRecordAt(CreateContext(repositoryWorkspace.Root),
+                ["ruling", "record", "--id", id, "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", repositoryInput, "--authority-role", "operator", "--format", "json"], repositoryNow);
+            Assert.True(repositoryPreview.ExitCode == 0, repositoryPreview.Output);
+            using var output = JsonDocument.Parse(repositoryPreview.Output);
+            Assert.Equal("preview", output.RootElement.GetProperty("disposition").GetString());
+            Assert.Equal("repository", output.RootElement.GetProperty("normalized_record").GetProperty("scope").GetProperty("kind").GetString());
+            Assert.Empty(output.RootElement.GetProperty("normalized_record").GetProperty("scope").GetProperty("execution_units").EnumerateArray());
+            Assert.False(Directory.Exists(Path.Combine(repositoryWorkspace.Root, ".intent-cli")));
+        }
+        var omittedTimestamp = valid.Replace("  \"recorded_at\": \"" + timestamp + "\",\n", "", StringComparison.Ordinal);
+        Assert.True(RulingArtifact.TryParse(Encoding.UTF8.GetBytes(omittedTimestamp), false, out _, out _, out _));
+        Assert.True(RulingArtifact.TryParse(validBytes, false, out _, out _, out _), "null expires_at and empty supersedes are valid controls");
+
+        foreach (var (name, json, expectedCause, expectedDetail) in rows)
+        {
+            var mutated = Encoding.UTF8.GetBytes(json);
+            Assert.False(RulingArtifact.TryParse(mutated, false, out _, out var parseCause, out var parseDetail), name);
+            Assert.Equal(expectedCause, parseCause);
+            Assert.Contains(expectedDetail, parseDetail, StringComparison.OrdinalIgnoreCase);
+
+            foreach (var format in new[] { "json", "markdown" })
+            {
+                using var workspace = new TemporaryWorkspace();
+                var input = workspace.Write(name + ".json", json);
+                var args = new[] { "ruling", "record", "--id", id, "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", input, "--authority-role", "operator", "--write", "--format", format };
+                var result = Invoke(CreateContext(workspace.Root), args);
+                Assert.Equal(1, result.ExitCode);
+                using var output = format == "json" ? JsonDocument.Parse(result.Output) : StructuredJsonFromMarkdown(result.Output);
+                Assert.Equal("refused", output.RootElement.GetProperty("disposition").GetString());
+                Assert.Equal("unavailable", output.RootElement.GetProperty("status").GetString());
+                Assert.Equal(expectedCause, output.RootElement.GetProperty("cause").GetString());
+                Assert.Contains(expectedDetail, output.RootElement.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+                Assert.False(output.RootElement.GetProperty("wrote").GetBoolean());
+                Assert.False(output.RootElement.GetProperty("idempotent").GetBoolean());
+                Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("artifact_path").ValueKind);
+                Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("content_sha256").ValueKind);
+                Assert.False(Directory.Exists(Path.Combine(workspace.Root, ".intent-cli")));
+            }
+        }
+        Assert.True(rows.Count >= 100, $"S04 matrix unexpectedly has only {rows.Count} cases.");
+    }
+
+    [Fact]
     public void SupersededRulingStaysSupersededWhenItsSuccessorExpires()
     {
         using var workspace = new TemporaryWorkspace();
@@ -904,27 +1059,291 @@ public sealed class RulingCommandTests
     [Fact]
     public void IdentityAliasAndEmbeddedMismatchAreRefusedAsConflicts()
     {
-        using var workspace = new TemporaryWorkspace();
-        var alias = Path.Combine(workspace.Root, ".intent-cli", "rulings", "Intent-CLI", "intent-cli-dev");
-        Directory.CreateDirectory(alias);
-        var collision = new RulingArtifactStore(workspace.Root).Evaluate("intent-cli", "intent-cli-dev", "R-ALIAS", T0);
-        Assert.Equal("conflict", collision.Status);
-        Assert.Equal("ruling-identity-conflict", collision.Cause);
+        using (var aliasWorkspace = new TemporaryWorkspace())
+        {
+            var alias = Path.Combine(aliasWorkspace.Root, ".intent-cli", "rulings", "Intent-CLI", "intent-cli-dev");
+            Directory.CreateDirectory(alias);
+            var collision = new RulingArtifactStore(aliasWorkspace.Root).Evaluate("intent-cli", "intent-cli-dev", "R-ALIAS", T0);
+            Assert.Equal("conflict", collision.Status);
+            Assert.Equal("ruling-identity-conflict", collision.Cause);
+        }
 
-        var scope = Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev");
-        Directory.CreateDirectory(scope);
-        var mismatched = Artifact("R-EMBEDDED", T0, []) with { Team = "other-team" };
-        File.WriteAllBytes(Path.Combine(scope, "R-EMBEDDED.json"), RulingArtifact.Serialize(mismatched));
-        var embedded = new RulingArtifactStore(workspace.Root).Evaluate("intent-cli", "intent-cli-dev", "R-EMBEDDED", T0);
-        Assert.Equal("conflict", embedded.Status);
-        Assert.Equal("ruling-identity-conflict", embedded.Cause);
+        foreach (var mismatch in new[] { "id", "domain", "team" })
+        using (var workspace = new TemporaryWorkspace())
+        {
+            var scope = Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev");
+            Directory.CreateDirectory(scope);
+            var mismatched = Artifact("R-EMBEDDED", T0, []) with
+            {
+                Id = mismatch == "id" ? "R-OTHER" : "R-EMBEDDED",
+                Domain = mismatch == "domain" ? "other-domain" : "intent-cli",
+                Team = mismatch == "team" ? "other-team" : "intent-cli-dev",
+            };
+            var artifactPath = Path.Combine(scope, "R-EMBEDDED.json");
+            File.WriteAllBytes(artifactPath, RulingArtifact.Serialize(mismatched));
+            var before = File.ReadAllBytes(artifactPath);
 
-        var input = workspace.Write("wrong-identity.json", RecordJson("R-OTHER", "2026-10-10T12:00:00Z"));
-        var command = Invoke(CreateContext(workspace.Root), ["ruling", "record", "--id", "R-EXPECTED", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", input, "--authority-role", "operator", "--write", "--format", "json"]);
-        using var output = JsonDocument.Parse(command.Output);
-        Assert.Equal("refused", output.RootElement.GetProperty("disposition").GetString());
-        Assert.Equal("conflict", output.RootElement.GetProperty("status").GetString());
-        Assert.Equal("ruling-identity-conflict", output.RootElement.GetProperty("cause").GetString());
+            foreach (var format in new[] { "json", "markdown" })
+            foreach (var operation in new[] { "show", "validate" })
+            {
+                var result = Invoke(CreateContext(workspace.Root), ["ruling", operation, "R-EMBEDDED", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", format]);
+                Assert.Equal(1, result.ExitCode);
+                using var output = format == "json" ? JsonDocument.Parse(result.Output) : StructuredJsonFromMarkdown(result.Output);
+                var root = output.RootElement;
+                Assert.Equal("refused", root.GetProperty("disposition").GetString());
+                Assert.Equal("conflict", root.GetProperty("status").GetString());
+                Assert.Equal("ruling-identity-conflict", root.GetProperty("cause").GetString());
+                Assert.Contains("filename and embedded domain/team/id disagree", root.GetProperty("detail").GetString(), StringComparison.Ordinal);
+                var diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
+                Assert.Equal(".intent-cli/rulings/intent-cli/intent-cli-dev/R-EMBEDDED.json", diagnostic.GetProperty("path").GetString());
+                Assert.Equal("ruling-identity-conflict", diagnostic.GetProperty("cause").GetString());
+                Assert.Equal(before, File.ReadAllBytes(artifactPath));
+            }
+        }
+
+        using var inputWorkspace = new TemporaryWorkspace();
+        var input = inputWorkspace.Write("wrong-identity.json", RecordJson("R-OTHER", "2026-10-10T12:00:00Z"));
+        var command = Invoke(CreateContext(inputWorkspace.Root), ["ruling", "record", "--id", "R-EXPECTED", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", input, "--authority-role", "operator", "--write", "--format", "json"]);
+        using var commandOutput = JsonDocument.Parse(command.Output);
+        Assert.Equal("refused", commandOutput.RootElement.GetProperty("disposition").GetString());
+        Assert.Equal("conflict", commandOutput.RootElement.GetProperty("status").GetString());
+        Assert.Equal("ruling-identity-conflict", commandOutput.RootElement.GetProperty("cause").GetString());
+    }
+
+    [Fact]
+    public void SupersededAndExpiredReadCommandsRetainDiskEvidenceAndDoNotChangeBytes()
+    {
+        static void AssertNormalizedMatches(JsonElement output, byte[] expected)
+        {
+            Assert.True(RulingArtifact.TryParse(Encoding.UTF8.GetBytes(output.GetRawText()), false, out var normalized, out var cause, out var detail), $"{cause}: {detail}");
+            Assert.Equal(expected, RulingArtifact.Serialize(normalized!));
+        }
+
+        foreach (var format in new[] { "json", "markdown" })
+        using (var workspace = new TemporaryWorkspace())
+        {
+            var context = CreateContext(workspace.Root);
+            var originalPath = Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", "R-S13-A.json");
+            var aInput = workspace.Write("a.json", RecordJson("R-S13-A", T0.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")));
+            var aArgs = new[] { "ruling", "record", "--id", "R-S13-A", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", aInput, "--authority-role", "operator", "--write", "--format", "json" };
+            Assert.Equal(0, InvokeRecordAt(context, aArgs, T0).ExitCode);
+            var aBytes = File.ReadAllBytes(originalPath);
+            var aHash = Convert.ToHexString(SHA256.HashData(aBytes)).ToLowerInvariant();
+
+            var bInput = workspace.Write("b.json", RecordJson("R-S13-B", T0.AddMinutes(1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"))
+                .Replace("\"supersedes\": []", "\"supersedes\": [\"R-S13-A\"]", StringComparison.Ordinal));
+            var bArgs = new[] { "ruling", "record", "--id", "R-S13-B", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", bInput, "--authority-role", "operator", "--write", "--format", "json" };
+            Assert.Equal(0, InvokeRecordAt(context, bArgs, T0.AddMinutes(1)).ExitCode);
+
+            var expiry = T0.AddSeconds(10);
+            var eInput = workspace.Write("e.json", RecordJson("R-S13-E", T0.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"))
+                .Replace("\"expires_at\": null", $"\"expires_at\": \"{expiry:yyyy-MM-dd'T'HH:mm:ss'Z'}\"", StringComparison.Ordinal));
+            var eArgs = new[] { "ruling", "record", "--id", "R-S13-E", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", eInput, "--authority-role", "operator", "--write", "--format", "json" };
+            Assert.Equal(0, InvokeRecordAt(context, eArgs, T0).ExitCode);
+            var ePath = Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", "R-S13-E.json");
+            var eBytes = File.ReadAllBytes(ePath);
+            var eHash = Convert.ToHexString(SHA256.HashData(eBytes)).ToLowerInvariant();
+
+            var superseded = InvokeReadAt(context, "validate", ["ruling", "validate", "R-S13-A", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", format], T0.AddMinutes(2));
+            Assert.Equal(1, superseded.ExitCode);
+            using (var output = format == "json" ? JsonDocument.Parse(superseded.Output) : StructuredJsonFromMarkdown(superseded.Output))
+            {
+                var root = output.RootElement;
+                Assert.Equal("refused", root.GetProperty("disposition").GetString());
+                Assert.Equal("superseded", root.GetProperty("status").GetString());
+                Assert.Equal("R-S13-A", root.GetProperty("normalized_record").GetProperty("id").GetString());
+                Assert.Equal(aHash, root.GetProperty("content_sha256").GetString());
+                Assert.Equal(".intent-cli/rulings/intent-cli/intent-cli-dev/R-S13-A.json", root.GetProperty("artifact_path").GetString());
+                Assert.False(root.GetProperty("expired").GetBoolean());
+                Assert.Equal(JsonValueKind.Null, root.GetProperty("timestamp_source").ValueKind);
+                AssertNormalizedMatches(root.GetProperty("normalized_record"), aBytes);
+            }
+            var expiredValidate = InvokeReadAt(context, "validate", ["ruling", "validate", "R-S13-E", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", format], expiry);
+            Assert.Equal(1, expiredValidate.ExitCode);
+            using (var output = format == "json" ? JsonDocument.Parse(expiredValidate.Output) : StructuredJsonFromMarkdown(expiredValidate.Output))
+            {
+                var root = output.RootElement;
+                Assert.Equal("refused", root.GetProperty("disposition").GetString());
+                Assert.Equal("expired", root.GetProperty("status").GetString());
+                Assert.Equal("R-S13-E", root.GetProperty("normalized_record").GetProperty("id").GetString());
+                Assert.Equal(eHash, root.GetProperty("content_sha256").GetString());
+                Assert.Equal(".intent-cli/rulings/intent-cli/intent-cli-dev/R-S13-E.json", root.GetProperty("artifact_path").GetString());
+                Assert.True(root.GetProperty("expired").GetBoolean());
+                Assert.Equal(JsonValueKind.Null, root.GetProperty("timestamp_source").ValueKind);
+                AssertNormalizedMatches(root.GetProperty("normalized_record"), eBytes);
+            }
+            var expiredShow = InvokeReadAt(context, "show", ["ruling", "show", "R-S13-E", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", format], expiry);
+            Assert.Equal(0, expiredShow.ExitCode);
+            using (var output = format == "json" ? JsonDocument.Parse(expiredShow.Output) : StructuredJsonFromMarkdown(expiredShow.Output))
+            {
+                var root = output.RootElement;
+                Assert.Equal("shown", root.GetProperty("disposition").GetString());
+                Assert.Equal("expired", root.GetProperty("status").GetString());
+                Assert.Equal(eHash, root.GetProperty("content_sha256").GetString());
+                Assert.Equal(".intent-cli/rulings/intent-cli/intent-cli-dev/R-S13-E.json", root.GetProperty("artifact_path").GetString());
+                Assert.True(root.GetProperty("expired").GetBoolean());
+                Assert.Equal(JsonValueKind.Null, root.GetProperty("timestamp_source").ValueKind);
+                AssertNormalizedMatches(root.GetProperty("normalized_record"), eBytes);
+            }
+
+            var replayArgs = aArgs.ToArray();
+            replayArgs[^1] = format;
+            var replay = InvokeRecordAt(context, replayArgs, T0.AddMinutes(2));
+            Assert.Equal(1, replay.ExitCode);
+            using (var output = format == "json" ? JsonDocument.Parse(replay.Output) : StructuredJsonFromMarkdown(replay.Output))
+            {
+                var root = output.RootElement;
+                Assert.Equal("refused", root.GetProperty("disposition").GetString());
+                Assert.Equal("superseded", root.GetProperty("status").GetString());
+                Assert.False(root.GetProperty("wrote").GetBoolean());
+                Assert.False(root.GetProperty("idempotent").GetBoolean());
+                Assert.Equal(aHash, root.GetProperty("content_sha256").GetString());
+                Assert.Equal(".intent-cli/rulings/intent-cli/intent-cli-dev/R-S13-A.json", root.GetProperty("artifact_path").GetString());
+                AssertNormalizedMatches(root.GetProperty("normalized_record"), aBytes);
+            }
+            Assert.Equal(aBytes, File.ReadAllBytes(originalPath));
+            Assert.Equal(eBytes, File.ReadAllBytes(ePath));
+        }
+    }
+
+    [Fact]
+    public void SameIdInForeignScopesNeverBecomesCurrentScopeEvidence()
+    {
+        foreach (var foreign in new[] { (Domain: "other-domain", Team: "intent-cli-dev"), (Domain: "intent-cli", Team: "other-team") })
+        using (var workspace = new TemporaryWorkspace())
+        {
+            const string id = "R-S03-SAME-ID";
+            var context = CreateContext(workspace.Root);
+            var json = RecordJson(id, T0.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"))
+                .Replace("\"domain\": \"intent-cli\"", $"\"domain\": \"{foreign.Domain}\"", StringComparison.Ordinal)
+                .Replace("\"team\": \"intent-cli-dev\"", $"\"team\": \"{foreign.Team}\"", StringComparison.Ordinal);
+            var input = workspace.Write("foreign.json", json);
+            var args = new[] { "ruling", "record", "--id", id, "--domain", foreign.Domain, "--team", foreign.Team, "--from-file", input, "--authority-role", "operator", "--write", "--format", "json" };
+            Assert.Equal(0, InvokeRecordAt(context, args, T0).ExitCode);
+            var foreignPath = Path.Combine(workspace.Root, ".intent-cli", "rulings", foreign.Domain, foreign.Team, id + ".json");
+            var bytes = File.ReadAllBytes(foreignPath);
+            var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+            foreach (var format in new[] { "json", "markdown" })
+            foreach (var operation in new[] { "show", "validate" })
+            {
+                var read = InvokeReadAt(context, operation, ["ruling", operation, id, "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", format], T0.AddMinutes(1));
+                Assert.Equal(1, read.ExitCode);
+                using var output = format == "json" ? JsonDocument.Parse(read.Output) : StructuredJsonFromMarkdown(read.Output);
+                Assert.Equal("missing", output.RootElement.GetProperty("status").GetString());
+                Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("artifact_path").ValueKind);
+                Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("content_sha256").ValueKind);
+                Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("normalized_record").ValueKind);
+            }
+            Assert.Equal(digest, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(foreignPath))).ToLowerInvariant());
+            Assert.Equal(bytes, File.ReadAllBytes(foreignPath));
+            Assert.False(File.Exists(Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", id + ".json")));
+        }
+    }
+
+    [Fact]
+    public void TargetAndNonrequestedArtifactSymlinksAreRefusedWithoutFollowingThem()
+    {
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using (var targetWorkspace = new TemporaryWorkspace())
+            {
+                var scope = Path.Combine(targetWorkspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev");
+                Directory.CreateDirectory(scope);
+                Directory.CreateDirectory(Path.Combine(targetWorkspace.Root, "outside"));
+                var sentinelPath = targetWorkspace.Write(Path.Combine("outside", "sentinel.json"), "sentinel bytes must remain untouched\n");
+                var sentinelBytes = File.ReadAllBytes(sentinelPath);
+                var linkPath = Path.Combine(scope, "R-LINK.json");
+                File.CreateSymbolicLink(linkPath, sentinelPath);
+                var linkTarget = new FileInfo(linkPath).LinkTarget;
+                var input = targetWorkspace.Write("target-link.json", RecordJson("R-LINK", T0.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")));
+
+                foreach (var operation in new[] { "show", "validate" })
+                {
+                    var result = Invoke(CreateContext(targetWorkspace.Root), ["ruling", operation, "R-LINK", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", format]);
+                    Assert.Equal(1, result.ExitCode);
+                    using var output = format == "json" ? JsonDocument.Parse(result.Output) : StructuredJsonFromMarkdown(result.Output);
+                    Assert.Equal("unavailable", output.RootElement.GetProperty("status").GetString());
+                    Assert.Equal("unavailable", output.RootElement.GetProperty("disposition").GetString());
+                    Assert.Equal("ruling-unsafe-path", output.RootElement.GetProperty("cause").GetString());
+                    Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("artifact_path").ValueKind);
+                    Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("content_sha256").ValueKind);
+                }
+
+                var recordArgs = new[] { "ruling", "record", "--id", "R-LINK", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--from-file", input, "--authority-role", "operator", "--write", "--format", format };
+                var reads = new List<string>();
+                using var writer = new StringWriter();
+                var exit = RulingCommand.ExecuteRecord(CreateContext(targetWorkspace.Root), recordArgs.Skip(2).ToArray(), writer,
+                    (operation, path) => { if (operation == "read") reads.Add(path); }, T0);
+                Assert.Equal(1, exit);
+                using (var output = format == "json" ? JsonDocument.Parse(writer.ToString()) : StructuredJsonFromMarkdown(writer.ToString()))
+                {
+                    Assert.Equal("unavailable", output.RootElement.GetProperty("disposition").GetString());
+                    Assert.Equal("unavailable", output.RootElement.GetProperty("status").GetString());
+                    Assert.Equal("ruling-unsafe-path", output.RootElement.GetProperty("cause").GetString());
+                    Assert.False(output.RootElement.GetProperty("wrote").GetBoolean());
+                    Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("artifact_path").ValueKind);
+                    Assert.Equal(JsonValueKind.Null, output.RootElement.GetProperty("content_sha256").ValueKind);
+                }
+                Assert.Empty(reads);
+                Assert.True(new FileInfo(linkPath).Exists);
+                Assert.Equal(linkTarget, new FileInfo(linkPath).LinkTarget);
+                Assert.Equal(sentinelBytes, File.ReadAllBytes(sentinelPath));
+                Assert.Empty(Directory.GetFiles(scope, "*.tmp"));
+                Assert.Single(Directory.GetFiles(scope));
+            }
+
+            using (var inventoryWorkspace = new TemporaryWorkspace())
+            {
+                var context = CreateContext(inventoryWorkspace.Root);
+                var goodInput = inventoryWorkspace.Write("good.json", RecordJson("R-GOOD", T0.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")));
+                var goodWrite = InvokeRecordAt(context, ["ruling", "record", "--id", "R-GOOD", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", goodInput, "--authority-role", "operator", "--write", "--format", "json"], T0);
+                Assert.Equal(0, goodWrite.ExitCode);
+                var scope = Path.Combine(inventoryWorkspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev");
+                var goodPath = Path.Combine(scope, "R-GOOD.json");
+                var goodBytes = File.ReadAllBytes(goodPath);
+                Directory.CreateDirectory(Path.Combine(inventoryWorkspace.Root, "outside"));
+                var sentinelPath = inventoryWorkspace.Write(Path.Combine("outside", "inventory-sentinel.json"), "inventory sentinel\n");
+                var sentinelBytes = File.ReadAllBytes(sentinelPath);
+                var linkPath = Path.Combine(scope, "A-LINK.json");
+                File.CreateSymbolicLink(linkPath, sentinelPath);
+                var linkTarget = new FileInfo(linkPath).LinkTarget;
+
+                foreach (var operation in new[] { "show", "validate" })
+                {
+                    var result = Invoke(context, ["ruling", operation, "R-GOOD", "--domain", "intent-cli", "--team", "intent-cli-dev", "--format", format]);
+                    Assert.Equal(1, result.ExitCode);
+                    using var output = format == "json" ? JsonDocument.Parse(result.Output) : StructuredJsonFromMarkdown(result.Output);
+                    Assert.Equal("unavailable", output.RootElement.GetProperty("disposition").GetString());
+                    Assert.Equal("unavailable", output.RootElement.GetProperty("status").GetString());
+                    Assert.Equal("ruling-unsafe-path", output.RootElement.GetProperty("cause").GetString());
+                    Assert.Contains(output.RootElement.GetProperty("diagnostics").EnumerateArray(), item => item.GetProperty("path").GetString() == Path.GetRelativePath(inventoryWorkspace.Root, linkPath).Replace(Path.DirectorySeparatorChar, '/'));
+                }
+
+                var newInput = inventoryWorkspace.Write("new.json", RecordJson("R-NEW", T0.AddMinutes(1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")));
+                var recordArgs = new[] { "ruling", "record", "--id", "R-NEW", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--from-file", newInput, "--authority-role", "operator", "--write", "--format", format };
+                var reads = new List<string>();
+                using var writer = new StringWriter();
+                var exit = RulingCommand.ExecuteRecord(context, recordArgs.Skip(2).ToArray(), writer,
+                    (operation, path) => { if (operation == "read") reads.Add(path); }, T0.AddMinutes(1));
+                Assert.Equal(1, exit);
+                using (var output = format == "json" ? JsonDocument.Parse(writer.ToString()) : StructuredJsonFromMarkdown(writer.ToString()))
+                {
+                    Assert.Equal("unavailable", output.RootElement.GetProperty("disposition").GetString());
+                    Assert.Equal("unavailable", output.RootElement.GetProperty("status").GetString());
+                    Assert.Equal("ruling-unsafe-path", output.RootElement.GetProperty("cause").GetString());
+                    Assert.False(output.RootElement.GetProperty("wrote").GetBoolean());
+                }
+                Assert.Empty(reads);
+                Assert.Equal(goodBytes, File.ReadAllBytes(goodPath));
+                Assert.Equal(sentinelBytes, File.ReadAllBytes(sentinelPath));
+                Assert.Equal(linkTarget, new FileInfo(linkPath).LinkTarget);
+                Assert.False(File.Exists(Path.Combine(scope, "R-NEW.json")));
+                Assert.Empty(Directory.GetFiles(scope, "*.tmp"));
+            }
+        }
     }
 
     [Fact]
@@ -2026,6 +2445,8 @@ public sealed class RulingCommandTests
             (RulingNativePlatform.Linux, 31, "ruling-write-failed"),
             (RulingNativePlatform.MacOS, 1, "ruling-write-failed"),
             (RulingNativePlatform.MacOS, 13, "ruling-write-failed"),
+            (RulingNativePlatform.MacOS, 18, "ruling-write-failed"),
+            (RulingNativePlatform.MacOS, 31, "ruling-write-failed"),
             (RulingNativePlatform.Windows, 5, "ruling-write-failed"),
         };
 
