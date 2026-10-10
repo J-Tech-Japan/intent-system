@@ -243,6 +243,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "ruling",
+            Role = RoleDesign,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityMixed,
+            RecommendedCaller = CallerOperator,
+            Purpose = "Local immutable operator-ruling record and bounded read surfaces: `ruling record|show|validate` require explicit domain/team and record only the supplied authority assertion. They do not authenticate authority, publish to Git, or satisfy packet, status, approval, or release gates."
+        },
+        new CommandGroupEntry
+        {
             Name = "queue",
             Role = RoleRecoveryDiagnostics,
             Classification = ClassificationSupport,

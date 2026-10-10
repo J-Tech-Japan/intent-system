@@ -5034,3 +5034,23 @@ may mechanically answer only an exact dialog/action match already approved by
 the human through the session layer, with the human as decision actor and no
 per-action class generalization; every unapproved, unknown-origin, uncertain,
 or mismatching dialog goes through design to the human with grounds.
+
+## Local operator rulings (G862)
+
+Use `intent-cli ruling record` when the operator has explicitly supplied a
+scoped decision that should be retained for later inspection. Its `operator`
+field records the caller's assertion; it is not an authentication check, a
+conversation-to-authority inference, or approval for a workflow gate. The
+record/read surface is local and does not yet connect ruling references to
+packets, worker decisions, or other consumers.
+
+Records are immutable. A later decision must use a new ID and explicitly name
+the predecessor IDs in `supersedes`. If independent clones create competing
+successors, inspect the conflict and write a deliberate merge ruling naming
+every terminal tip in that connected component; expiry does not choose a
+branch or restore an older ruling. Never treat a local file as remote proof.
+
+After a successful local write, the operator separately commits and plain-pushes
+the exact artifact. Verify visibility from a fresh clone with `ruling show` or
+`ruling validate`; the command itself always reports publication as
+`not-verified`. See the [ruling command reference](08-command-reference.md).

@@ -928,6 +928,78 @@ or reason quality. `canonical_snapshot_oid` identifies the evaluated canonical
 host commit, not the child PR head. This flag is unavailable for other
 operations, non-`execution-unit` scopes, and non-solo-conductor modes.
 
+### Local operator rulings (G862 — preview-through-1.x)
+
+`ruling record|show|validate` stores and inspects an explicitly supplied,
+immutable local ruling under `.intent-cli/rulings/<domain>/<team>/<id>.json`.
+The caller must provide domain and team; there is no default scope. `record`
+defaults to a dry-run, and `--write` creates a new record only. An identical
+active record is idempotent; different content for the same ID is a conflict.
+Existing bytes are never replaced. `repository` scope means exactly the named
+repository; `execution-units` scope names an explicit unit set.
+
+```bash
+intent-cli ruling record --id <id> --domain <domain> --team <team> \
+  --from-file <ruling.json> --authority-role operator --format json
+intent-cli ruling record --id <id> --domain <domain> --team <team> \
+  --from-file <ruling.json> --authority-role operator --write --format json
+intent-cli ruling show <id> --domain <domain> --team <team> --format markdown
+intent-cli ruling validate <id> --domain <domain> --team <team> --format json
+```
+
+This canonical on-disk example uses the literal `operator` assertion. It is
+valid for the command reference's fixed identifiers and repository scope:
+
+```json
+{
+  "schema_version": "1",
+  "id": "R-EXAMPLE",
+  "domain": "intent-cli",
+  "team": "intent-cli-dev",
+  "authority_role": "operator",
+  "scope": {
+    "target_repo": "J-Tech-Japan/intent-system",
+    "kind": "repository",
+    "execution_units": []
+  },
+  "decision": "Retain the explicitly supplied local ruling for inspection.",
+  "rationale": "The cited evidence supports this scoped record.",
+  "evidence_refs": [
+    "https://github.com/J-Tech-Japan/intent-system/issues/1885"
+  ],
+  "recorded_at": "2026-01-01T00:00:00.0000000Z",
+  "expires_at": null,
+  "supersedes": []
+}
+```
+
+These are exact artifact bytes: UTF-8 without BOM, two-space indentation, LF
+line endings, and exactly one final LF. Do not allow `core.autocrlf` or an
+editor to convert the file to CRLF; any byte difference makes it
+noncanonical.
+
+The literal `operator` value is an unauthenticated, supplied assertion. The
+command does not infer authority from a role, conversation, reason, or evidence
+reference, and it does not grant approval or satisfy another command's gate.
+Record a successor with explicit `supersedes` IDs. If concurrent branches leave
+multiple terminal rulings, status remains conflicted until a new ruling names
+all tips in the connected component; an expired successor does not revive its
+predecessor. No history is repaired or replaced implicitly.
+
+Results report local write facts and exact artifact digests. They always use
+`publication_status=not-verified`: the command does not run Git, publish to a
+remote, contact GitHub or providers, or mutate claims, queues, or run logs.
+`--write` publishes a complete same-directory temporary file with a no-replace
+hard link. An unsupported filesystem returns
+`ruling-atomic-create-unavailable`; there is no copy, overwrite, or rename
+fallback. If publication succeeds but owned-temp cleanup or readback fails,
+the error result retains `wrote=true` and the artifact path; inspect that path
+before retrying.
+After a successful local write, explicitly commit and plain-push the artifact,
+then use a fresh clone with `ruling show` or `ruling validate` to verify remote
+visibility. This record/read foundation does not add ruling references to
+packets or gates; source issue #1867 and parent #1857 remain unfinished.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by

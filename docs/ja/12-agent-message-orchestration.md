@@ -4334,3 +4334,19 @@ keystroke は generic な design relay ではなく、G701 `dialog-answering/v1`
 mechanical に実行し、decision actor は human のままです。per-action approval を class に一般化
 しません。unapproved、unknown-origin、uncertain、または mismatch の dialog はすべて grounds を
 示して design 経由で human にエスカレーションします。
+
+## local operator ruling（G862）
+
+operator が明示的に渡した scope 付き decision を後から確認する必要がある場合は
+`intent-cli ruling record` を使います。`operator` field は caller の assertion を記録するだけで、認証、
+conversation からの権限の推定、workflow gate に対する approval ではありません。この record/read
+surface は local のみで、ruling reference を packet、worker decision、その他 consumer にまだ接続しません。
+
+record は immutable です。後の decision は別 ID を使い、`supersedes` に predecessor ID を明示します。
+独立 clone が競合する successor を作った場合は conflict を確認し、接続 component の terminal tip をすべて
+列挙した merge ruling を明示的に記録します。expiry は branch を選ばず、古い ruling も復活させません。
+local file を remote proof として扱ってはいけません。
+
+local write 成功後、operator が正確な artifact の Git commit を作成し、GitHub へ公開した後、fresh clone の
+`ruling show` / `ruling validate` で visibility を確認します。command 自身は常に publication を
+`not-verified` と報告します。詳細は [ruling command reference](08-command-reference.md) を参照してください。

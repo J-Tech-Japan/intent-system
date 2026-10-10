@@ -761,6 +761,68 @@ CLI が確認するのは現在 holder の actor/team が完全一致するこ�
 外部承認の有無や reason の妥当性は検証しません。`canonical_snapshot_oid` は評価対象の canonical host commit の OID であり、child PR head の OID ではありません。
 この flag は他の operation、`execution-unit` 以外の scope、solo-conductor 以外の mode では使用できません。
 
+### local operator ruling（G862 — preview-through-1.x）
+
+`ruling record|show|validate` は、明示的に渡された ruling を
+`.intent-cli/rulings/<domain>/<team>/<id>.json` に immutable artifact として記録・確認します。
+domain と team は必須で、default scope はありません。`record` は dry-run が既定で、`--write` は新規 ID の
+create-only write です。同一の active record は idempotent、同一 ID の異なる内容は conflict です。
+既存 bytes は置き換えません。`repository` scope は名前付き repository だけを、`execution-units` scope は
+明示された unit 集合だけを対象にします。
+
+```bash
+intent-cli ruling record --id <id> --domain <domain> --team <team> \
+  --from-file <ruling.json> --authority-role operator --format json
+intent-cli ruling record --id <id> --domain <domain> --team <team> \
+  --from-file <ruling.json> --authority-role operator --write --format json
+intent-cli ruling show <id> --domain <domain> --team <team> --format markdown
+intent-cli ruling validate <id> --domain <domain> --team <team> --format json
+```
+
+次は literal な `operator` assertion を使う canonical on-disk example です。command reference の固定された
+identifier と repository scope に対して valid です。
+
+```json
+{
+  "schema_version": "1",
+  "id": "R-EXAMPLE",
+  "domain": "intent-cli",
+  "team": "intent-cli-dev",
+  "authority_role": "operator",
+  "scope": {
+    "target_repo": "J-Tech-Japan/intent-system",
+    "kind": "repository",
+    "execution_units": []
+  },
+  "decision": "Retain the explicitly supplied local ruling for inspection.",
+  "rationale": "The cited evidence supports this scoped record.",
+  "evidence_refs": [
+    "https://github.com/J-Tech-Japan/intent-system/issues/1885"
+  ],
+  "recorded_at": "2026-01-01T00:00:00.0000000Z",
+  "expires_at": null,
+  "supersedes": []
+}
+```
+
+これは exact artifact bytes の例です。UTF-8（BOMなし）、2-space indentation、LF line ending、末尾の LF は
+1 個です。`core.autocrlf` や editor が CRLF へ変換しないようにしてください。byte が異なると noncanonical です。
+
+literal な `operator` は未認証の supplied assertion です。role、conversation、reason、evidence reference から
+権限を推定せず、approval を付与したり別 command の gate を満たしたりしません。後継 ruling は
+`supersedes` ID を明示します。複数 branch に terminal ruling が残る場合、接続 component のすべての tip を
+新しい record が列挙するまで conflict のままです。後継が expired になっても predecessor は復活しません。
+履歴を暗黙に修復・置換する動作はありません。
+
+result は local write の事実と正確な artifact digest を返し、`publication_status=not-verified` を示します。
+Git を実行せず、remote への publish、GitHub/provider への連絡、claim/queue/run log の変更も行いません。
+`--write` は同じ directory 内の complete temporary file を no-replace hard link で公開します。未対応 filesystem は
+`ruling-atomic-create-unavailable` で拒否し、copy、overwrite、rename の fallback はありません。公開後に owned-temp
+cleanup または readback が失敗しても、error result は `wrote=true` と artifact path を保持します。retry 前にその path を確認してください。
+local write 後は operator が明示的に commit と plain push を行い、fresh clone で `ruling show` または
+`ruling validate` を使って remote visibility を確認します。この record/read foundation は packet や gate に
+ruling reference を追加しません。source issue #1867 と parent #1857 は未完了のままです。
+
 ### 貼り付け evidence gate（G785）
 
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`
