@@ -671,11 +671,13 @@ public sealed class SoloConductorClaimReleaseG857Tests
             File.Delete(active);
             absent.PublishIntentChanges(absent.Writer, "main");
             var before = Git(absent.Bare, "rev-parse", "refs/heads/main").Trim();
-            var output = new StringWriter();
-            Assert.Equal(1, RunOverrideCli(absent.Reader, output, write: write));
-            using var result = JsonDocument.Parse(output.ToString());
-            Assert.Equal("not-held", result.RootElement.GetProperty("status").GetString());
-            Assert.Equal(before, Git(absent.Bare, "rev-parse", "refs/heads/main").Trim());
+            foreach (var format in new[] { "json", "markdown" })
+            {
+                var output = new StringWriter();
+                Assert.Equal(1, RunOverrideCli(absent.Reader, output, write: write, format: format));
+                AssertOwnershipRefusalOutput(output.ToString(), format, "not-held", "claim-not-held");
+                Assert.Equal(before, Git(absent.Bare, "rev-parse", "refs/heads/main").Trim());
+            }
             Assert.Empty(ClaimHistory(absent.CloneForInspection()));
             Assert.DoesNotContain(Git(absent.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main"),
                 $".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal);
@@ -684,12 +686,33 @@ public sealed class SoloConductorClaimReleaseG857Tests
         {
             PrepareActualOverrideSnapshot(wrongTeam, "knowledge-architect");
             var before = Git(wrongTeam.Bare, "rev-parse", "refs/heads/main").Trim();
-            var output = new StringWriter();
-            Assert.Equal(1, RunOverrideCli(wrongTeam.Reader, output, team: "another-team", write: write));
-            using var result = JsonDocument.Parse(output.ToString());
-            Assert.Equal("held", result.RootElement.GetProperty("status").GetString());
-            Assert.Equal(Team, result.RootElement.GetProperty("holder_team").GetString());
-            Assert.Equal(before, Git(wrongTeam.Bare, "rev-parse", "refs/heads/main").Trim());
+            foreach (var (actor, team) in new[] { ("implementation", "another-team"), ("builder", Team) })
+            {
+                foreach (var format in new[] { "json", "markdown" })
+                {
+                    var output = new StringWriter();
+                    Assert.Equal(1, RunOverrideCli(wrongTeam.Reader, output, actor: actor, team: team, write: write, format: format));
+                    AssertOwnershipRefusalOutput(output.ToString(), format, "held", "holder-identity-mismatch");
+                    if (format == "json")
+                    {
+                        using var result = JsonDocument.Parse(output.ToString());
+                        Assert.Equal(Team, result.RootElement.GetProperty("holder_team").GetString());
+                    }
+                    else
+                    {
+                        Assert.Contains($"- holder_team: {Team}", output.ToString(), StringComparison.Ordinal);
+                    }
+                    Assert.Equal(before, Git(wrongTeam.Bare, "rev-parse", "refs/heads/main").Trim());
+                }
+            }
+
+            foreach (var format in new[] { "json", "markdown" })
+            {
+                var output = new StringWriter();
+                Assert.Equal(1, RunOverrideCli(wrongTeam.Reader, output, team: "another-team", write: false,
+                    format: format, overrideLoopEvidence: false));
+                AssertOwnershipRefusalOmitsOverride(output.ToString(), format, "held");
+            }
             Assert.Empty(ClaimHistory(wrongTeam.CloneForInspection()));
             Assert.DoesNotContain(Git(wrongTeam.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main"),
                 $".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal);
@@ -1367,6 +1390,16 @@ public sealed class SoloConductorClaimReleaseG857Tests
             {
                 Assert.Equal("held", root.GetProperty("status").GetString());
                 Assert.Equal("different-builder", root.GetProperty("holder").GetString());
+                var overrideResult = root.GetProperty("loop_evidence_override");
+                Assert.True(overrideResult.GetProperty("requested").GetBoolean());
+                Assert.Equal("refused", overrideResult.GetProperty("disposition").GetString());
+                Assert.Equal("holder-identity-mismatch", overrideResult.GetProperty("cause").GetString());
+                Assert.False(overrideResult.GetProperty("published").GetBoolean());
+                Assert.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/",
+                    overrideResult.GetProperty("audit_path").GetString(), StringComparison.Ordinal);
+                Assert.StartsWith(".intent-cli/claims/history/",
+                    overrideResult.GetProperty("history_path").GetString(), StringComparison.Ordinal);
+                Assert.Equal(runsRelative, overrideResult.GetProperty("run_log_path").GetString());
             }
             if (changedState == "receipt-unavailable")
             {
@@ -4803,11 +4836,10 @@ public sealed class SoloConductorClaimReleaseG857Tests
             Assert.False(root.GetProperty("push_succeeded").GetBoolean());
             Assert.NotEqual(attempted[1].Split(':')[0], Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
             Assert.Equal(Git(repos.Bare, "rev-parse", "refs/heads/main").Trim(), independentCommit);
-            if (root.TryGetProperty("loop_evidence_override", out var waiver))
-            {
-                Assert.NotEqual("applied", waiver.GetProperty("disposition").GetString());
-                Assert.False(waiver.GetProperty("published").GetBoolean());
-            }
+            var waiver = root.GetProperty("loop_evidence_override");
+            Assert.True(waiver.GetProperty("requested").GetBoolean());
+            Assert.Equal("refused", waiver.GetProperty("disposition").GetString());
+            Assert.False(waiver.GetProperty("published").GetBoolean());
             var tree = Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main");
             Assert.DoesNotContain($".intent-cli/loop-evidence-overrides/{Unit}/", tree, StringComparison.Ordinal);
             var runLog = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
@@ -4916,16 +4948,73 @@ public sealed class SoloConductorClaimReleaseG857Tests
         string team = Team,
         bool write = true,
         string format = "json",
-        int? maxAttempts = null) => ClaimCommand.ExecuteRelease(
-        Context(repoRoot),
-        [
+        int? maxAttempts = null,
+        bool overrideLoopEvidence = true)
+    {
+        var arguments = new List<string>
+        {
             "--scope", $"execution-unit:{Unit}", "--actor", actor, "--team", team,
-            "--reason", "deliberate-fixture-waiver", "--override-loop-evidence",
-            .. (maxAttempts is null ? [] : new[] { "--max-attempts", maxAttempts.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) }),
-            .. (write ? new[] { "--write" } : []),
-            "--format", format,
-        ],
-        output);
+            "--reason", "deliberate-fixture-waiver",
+        };
+        if (overrideLoopEvidence) arguments.Add("--override-loop-evidence");
+        if (maxAttempts is not null)
+            arguments.AddRange(["--max-attempts", maxAttempts.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
+        if (write) arguments.Add("--write");
+        arguments.AddRange(["--format", format]);
+        return ClaimCommand.ExecuteRelease(Context(repoRoot), arguments.ToArray(), output);
+    }
+
+    private static void AssertOwnershipRefusalOutput(string output, string format, string status, string cause)
+    {
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(status, document.RootElement.GetProperty("status").GetString());
+        }
+        else
+        {
+            Assert.Contains($"# Claim {status}", output, StringComparison.Ordinal);
+        }
+
+        var evidence = LoopOverrideFromOutput(output, format);
+        Assert.True(evidence.GetProperty("requested").GetBoolean());
+        Assert.Equal("refused", evidence.GetProperty("disposition").GetString());
+        Assert.Equal(cause, evidence.GetProperty("cause").GetString());
+        Assert.False(evidence.GetProperty("published").GetBoolean());
+    }
+
+    private static void AssertOwnershipRefusalOmitsOverride(string output, string format, string status)
+    {
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(status, document.RootElement.GetProperty("status").GetString());
+            Assert.False(document.RootElement.TryGetProperty("loop_evidence_override", out _));
+        }
+        else
+        {
+            Assert.Contains($"# Claim {status}", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("## Loop-evidence override", output, StringComparison.Ordinal);
+        }
+    }
+
+    private static JsonElement LoopOverrideFromOutput(string output, string format)
+    {
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(output);
+            return document.RootElement.GetProperty("loop_evidence_override").Clone();
+        }
+
+        var heading = string.Join(Environment.NewLine, "## Loop-evidence override", string.Empty, "```json", string.Empty);
+        var start = output.IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(start >= 0, "Markdown must include the loop-evidence override JSON section.");
+        start += heading.Length;
+        var end = output.IndexOf(Environment.NewLine + "```", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Markdown must close the loop-evidence override JSON section.");
+        using var markdown = JsonDocument.Parse(output[start..end]);
+        return markdown.RootElement.Clone();
+    }
 
     private static string InstallRacerAdvanceOnFirstPush(ClaimRepositories repos, string racer, string suffix)
     {

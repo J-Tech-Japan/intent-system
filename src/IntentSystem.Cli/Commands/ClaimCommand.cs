@@ -582,6 +582,13 @@ internal static class ClaimCommand
                         {
                             GitWriteRetry = lastGitWriteRetry,
                             TargetRef = targetRef,
+                            LoopEvidenceOverride = request.OverrideLoopEvidence
+                                ? OverrideResult("refused", "holder-identity-mismatch",
+                                    overrideEligibility?.SkippedDuties ?? [],
+                                    overrideWrite is null ? null : new ClaimLoopEvidenceOverridePaths(
+                                        overrideWrite.HistoryPath, overrideWrite.AuditPath, overrideWrite.RunLogPath),
+                                    false)
+                                : null,
                         };
                     }
                 }
@@ -731,6 +738,9 @@ internal static class ClaimCommand
                     "not-held", request.Scope, relativeClaimPath, false, 1,
                     null, null, null, "No active claim exists for this scope.")
                 {
+                    LoopEvidenceOverride = request.OverrideLoopEvidence
+                        ? OverrideResult("refused", "claim-not-held", [], null, false)
+                        : null,
                     TargetRef = targetRef,
                 };
             }
@@ -740,6 +750,9 @@ internal static class ClaimCommand
                 return Held(request, relativeClaimPath, 1, current,
                     "Only the complete attributed holder identity (actor and team) may release; use explicit takeover otherwise.") with
                 {
+                    LoopEvidenceOverride = request.OverrideLoopEvidence
+                        ? OverrideResult("refused", "holder-identity-mismatch", [], null, false)
+                        : null,
                     TargetRef = targetRef,
                 };
             }
