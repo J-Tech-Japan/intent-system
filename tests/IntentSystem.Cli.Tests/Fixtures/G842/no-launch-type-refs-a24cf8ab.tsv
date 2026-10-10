@@ -9,8 +9,8 @@ src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.cs	ParsedOption	19
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingCheckout	23
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverride	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideDecidingRecord	5
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideRequest	26
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideResult	3
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideRequest	27
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideResult	4
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingPacketIdentity	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingPathInspection	12
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Assessment	15
@@ -20,8 +20,8 @@ src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	CanonicalTarget	9
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ClaimCommand	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ClaimProcessResult	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ClaimRecord	3
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	CrossRuntimeReviewTransitionOutcome	6
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ExecutionFacts	2
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	CrossRuntimeReviewTransitionOutcome	7
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ExecutionFacts	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ExistingPair	7
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	GhCliGitHubLabelMutator	4
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	HistoricalPairReport	14
@@ -31,7 +31,7 @@ src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	IGitHubLabelMutator	6
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Kinds	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Labels	28
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ObservedAudit	12
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	PreparedAudit	20
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	PreparedAudit	21
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ProcessResult	5
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	PublicationResult	24
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorApprovalGate	8
@@ -39,7 +39,7 @@ src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorQualifying
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewReadRequest	1
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewReadResult	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewReader	3
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewTransitionOutcome	6
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewTransitionOutcome	7
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	WriterOperationsHooks	4
 src/IntentSystem.Cli/Commands/AtomicAppendWriter.cs	AtomicAppendWriter	1
 src/IntentSystem.Cli/Commands/AutomationCheckCommand.cs	WorkerNextActionCommand	1

@@ -74,6 +74,21 @@ internal static class ApprovalPostingOverride
         }
 
         var sticky = new ExecutionFacts(request);
+
+        int WriteResultWithHistory(
+            ApprovalPostingOverrideRequest resultRequest,
+            ApprovalPostingOverrideResult overrideResult,
+            IReadOnlyList<string> currentLabels,
+            SoloConductorReviewTransitionOutcome? solo,
+            CrossRuntimeReviewTransitionOutcome? crossRuntime,
+            bool applied,
+            bool ciWaitCleared,
+            TextWriter resultWriter,
+            string? ciWaitWarning = null,
+            bool observedOnly = false) =>
+            WriteResult(resultRequest, overrideResult, currentLabels, solo, crossRuntime, applied, ciWaitCleared,
+                resultWriter, ciWaitWarning, observedOnly, sticky);
+
         try
         {
             using var initial = ApprovalPostingCheckout.Open(target);
@@ -92,7 +107,7 @@ internal static class ApprovalPostingOverride
             sticky.RecordPair(pair);
             if (!pair.Valid)
             {
-                return WriteResult(request, Facts(request, "refused", pair.Cause!, pair.Detail!,
+                return WriteResultWithHistory(request, Facts(request, "refused", pair.Cause!, pair.Detail!,
                     preparedPublished: pair.PreparedExists,
                     outcomePublished: pair.ObservedExists,
                     preparedPath: pair.PreparedExists ? preparedPath : null,
@@ -107,7 +122,7 @@ internal static class ApprovalPostingOverride
                 return WriteAssessmentRefusal(request, first, writer);
             if (pair.Prepared is not null && !Matches(pair.Prepared, first, request))
             {
-                return WriteResult(request, Facts(request, "refused", "override-binding-conflict",
+                return WriteResultWithHistory(request, Facts(request, "refused", "override-binding-conflict",
                     "The existing prepared UUID is not bound to the current request, claim epoch, host layout, or deciding local review records.",
                     preparedPublished: true, outcomePublished: pair.Observed is not null,
                     preparedPath: preparedPath, observedPath: pair.Observed is null ? null : observedPath,
@@ -138,7 +153,7 @@ internal static class ApprovalPostingOverride
                     {
                         var detail = previewMutatorError ?? previewReadError
                             ?? "The observed UUID is already consumed, but the exact requested head and intended labels are no longer converged.";
-                        return WriteResult(request, Facts(request, "refused", "override-binding-conflict", detail,
+                        return WriteResultWithHistory(request, Facts(request, "refused", "override-binding-conflict", detail,
                             preparedPublished: true, outcomePublished: true,
                             preparedPath: preparedPath, observedPath: observedPath, runPath: first.RunPath,
                             preparedCommit: pair.PreparedCommit, outcomeCommit: pair.ObservedCommit,
@@ -146,7 +161,7 @@ internal static class ApprovalPostingOverride
                             previewLabels ?? first.Labels, first.Solo, first.CrossRuntime, false, false, writer);
                     }
                 }
-                return WriteResult(request,
+                return WriteResultWithHistory(request,
                     Facts(request, "eligible-preview",
                         pair.Prepared is null ? "eligible-missing-posting" : "prepared-binding-current",
                         pair.Prepared is null
@@ -172,11 +187,14 @@ internal static class ApprovalPostingOverride
                 if (!publication.Published || publication.Audit is null)
                 {
                     sticky.RecordPreparedPublication(publication);
-                    return WriteResult(request, Facts(request, "unresolved",
+                    var uncertainPublication = publication.Confidence == PublicationConfidence.Unconfirmed;
+                    return WriteResultWithHistory(request, Facts(request, uncertainPublication ? "unresolved" : "refused",
                         publication.Cause ?? "prepared-publication-unconfirmed",
                         publication.Detail ?? "The prepared audit could not be confirmed on the canonical host branch.",
-                        preparedPath: publication.Path, runPath: publication.RunPath, preparedCommit: publication.Commit,
-                        recoveryCommand: Recovery(request)),
+                        preparedPath: uncertainPublication ? publication.Path : null,
+                        runPath: uncertainPublication ? publication.RunPath : null,
+                        preparedCommit: uncertainPublication ? publication.Commit : null,
+                        recoveryCommand: uncertainPublication ? Recovery(request) : null),
                         first.Labels, first.Solo, first.CrossRuntime, false, false, writer);
                 }
                 prepared = publication.Audit;
@@ -188,7 +206,7 @@ internal static class ApprovalPostingOverride
 
             if (preparedCommit is null)
             {
-                return WriteResult(request, Facts(request, "unresolved", "prepared-publication-commit-unavailable",
+                return WriteResultWithHistory(request, Facts(request, "unresolved", "prepared-publication-commit-unavailable",
                     "The prepared audit/event pair is present, but its exact transaction commit could not be verified.",
                     preparedPublished: true, preparedPath: prepared.PreparedPath,
                     runPath: prepared.SelectedRunLogPath, recoveryCommand: Recovery(request)),
@@ -200,7 +218,7 @@ internal static class ApprovalPostingOverride
             sticky.RecordAssessment(beforeLabels);
             if (!beforeLabels.Readable || !Matches(prepared, beforeLabels, request) || !CanContinue(prepared, beforeLabels))
             {
-                return WriteResult(request, Facts(request, "refused",
+                return WriteResultWithHistory(request, Facts(request, "refused",
                     beforeLabels.Cause ?? "prepared-binding-no-longer-authorizes",
                     beforeLabels.Detail ?? "Current ownership, mode, local approvals, posted evidence, or PR head no longer matches the prepared permission.",
                     preparedPublished: true, preparedPath: prepared.PreparedPath,
@@ -213,7 +231,7 @@ internal static class ApprovalPostingOverride
             sticky.RecordPair(livePair);
             if (!livePair.Valid)
             {
-                return WriteResult(request, Facts(request, "unresolved", livePair.Cause!, livePair.Detail!,
+                return WriteResultWithHistory(request, Facts(request, "unresolved", livePair.Cause!, livePair.Detail!,
                     preparedPublished: true, preparedPath: prepared.PreparedPath,
                     runPath: prepared.SelectedRunLogPath, preparedCommit: preparedCommit,
                     recoveryCommand: Recovery(request)),
@@ -225,7 +243,7 @@ internal static class ApprovalPostingOverride
                     || livePair.Observed.PreparedPublicationCommit != livePair.PreparedCommit
                     || !Converged(beforeLabels.Labels, prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
                 {
-                    return WriteResult(request, Facts(request, "refused", "override-binding-conflict",
+                    return WriteResultWithHistory(request, Facts(request, "refused", "override-binding-conflict",
                         "The UUID already has an observed outcome, but current head or labels diverged; a consumed UUID cannot authorize another mutation.",
                         preparedPublished: true, outcomePublished: true,
                         preparedPath: prepared.PreparedPath, observedPath: prepared.ObservedPath,
@@ -239,7 +257,7 @@ internal static class ApprovalPostingOverride
 
             if (!TryGetMutator(out var mutator, out var mutatorError))
             {
-                return WriteResult(request, Facts(request, "refused", "github-label-reader-unavailable", mutatorError!,
+                return WriteResultWithHistory(request, Facts(request, "refused", "github-label-reader-unavailable", mutatorError!,
                     preparedPublished: true, preparedPath: prepared.PreparedPath,
                     runPath: prepared.SelectedRunLogPath, preparedCommit: preparedCommit),
                     beforeLabels.Labels, beforeLabels.Solo, beforeLabels.CrossRuntime, false, false, writer);
@@ -272,7 +290,7 @@ internal static class ApprovalPostingOverride
 
             if (!TryObserve(request, mutator, out var observedHead, out var observedLabels, out var observeError))
             {
-                return WriteResult(request, Facts(request, "unresolved", "post-mutation-observation-unavailable",
+                return WriteResultWithHistory(request, Facts(request, "unresolved", "post-mutation-observation-unavailable",
                     mutationError is null ? observeError! : mutationError + "; " + observeError,
                     preparedPublished: true, preparedPath: prepared.PreparedPath,
                     runPath: prepared.SelectedRunLogPath, preparedCommit: preparedCommit,
@@ -286,7 +304,7 @@ internal static class ApprovalPostingOverride
             if (!string.Equals(observedHead, request.HeadSha, StringComparison.OrdinalIgnoreCase)
                 || !Converged(observedLabels!, prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
             {
-                return WriteResult(request, Facts(request, "unresolved", "label-state-unconfirmed",
+                return WriteResultWithHistory(request, Facts(request, "unresolved", "label-state-unconfirmed",
                     mutationError ?? "The exact requested PR head and approved labels were not observed after the one permitted label action.",
                     preparedPublished: true, preparedPath: prepared.PreparedPath,
                     runPath: prepared.SelectedRunLogPath, preparedCommit: preparedCommit,
@@ -302,7 +320,7 @@ internal static class ApprovalPostingOverride
             if (!outcomeAssessment.Readable || !Matches(prepared, outcomeAssessment, request)
                 || !CanContinue(prepared, outcomeAssessment))
             {
-                return WriteResult(request, Facts(request, "unresolved",
+                return WriteResultWithHistory(request, Facts(request, "unresolved",
                     outcomeAssessment.Cause ?? "post-mutation-binding-unavailable",
                     outcomeAssessment.Detail ?? "Canonical authorization changed after labels were observed; no observed outcome was published.",
                     preparedPublished: true, preparedPath: prepared.PreparedPath,
@@ -314,12 +332,12 @@ internal static class ApprovalPostingOverride
             }
 
             var outcome = BuildObserved(prepared, outcomeAssessment, observedLabels!, preparedCommit,
-                outcomeAssessment.Basis ?? "missing-posting-eligible", mutationAttempted, mayHaveApplied);
+                livePair.PreparedSha256!, outcomeAssessment.Basis ?? "missing-posting-eligible", mutationAttempted, mayHaveApplied);
             var publicationResult = PublishObserved(target, request, prepared, outcome);
             sticky.RecordObservedPublication(publicationResult);
             if (!publicationResult.Published)
             {
-                return WriteResult(request, Facts(request, "unresolved",
+                return WriteResultWithHistory(request, Facts(request, "unresolved",
                     publicationResult.Cause ?? "outcome-publication-unconfirmed",
                     publicationResult.Detail ?? "Labels were observed, but the immutable observed result is not confirmed on the canonical branch.",
                     preparedPublished: true, preparedPath: prepared.PreparedPath,
@@ -342,7 +360,7 @@ internal static class ApprovalPostingOverride
                 || !string.Equals(finalHead, request.HeadSha, StringComparison.OrdinalIgnoreCase)
                 || !Converged(finalLabels ?? [], prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
             {
-                return WriteResult(request, Facts(request, "unresolved",
+                return WriteResultWithHistory(request, Facts(request, "unresolved",
                     final.Cause ?? "final-observation-changed",
                     final.Detail ?? finalReadError ?? "Head, labels, or authorization changed after the observed pair was published.",
                     preparedPublished: true, outcomePublished: true,
@@ -379,7 +397,7 @@ internal static class ApprovalPostingOverride
                 labelStateObserved: sticky.LabelStateObserved,
                 authorizationBasis: sticky.AuthorizationBasis,
                 recoveryCommand: unresolved ? Recovery(request) : null);
-            return WriteResult(request, result, sticky.Labels, sticky.Solo, sticky.CrossRuntime,
+            return WriteResultWithHistory(request, result, sticky.Labels, sticky.Solo, sticky.CrossRuntime,
                 false, false, writer);
         }
     }
@@ -624,8 +642,23 @@ internal static class ApprovalPostingOverride
         bool ciWaitCleared,
         TextWriter writer,
         string? ciWaitWarning = null,
-        bool observedOnly = false)
+        bool observedOnly = false,
+        ExecutionFacts? publicationHistory = null)
     {
+        if (publicationHistory is not null)
+        {
+            overrideResult = overrideResult with
+            {
+                PreparedPublished = overrideResult.PreparedPublished || publicationHistory.PreparedPublished,
+                OutcomePublished = overrideResult.OutcomePublished || publicationHistory.OutcomePublished,
+                PreparedPath = overrideResult.PreparedPath ?? (publicationHistory.PreparedPublished ? publicationHistory.PreparedPath : null),
+                ObservedPath = overrideResult.ObservedPath ?? (publicationHistory.OutcomePublished ? publicationHistory.ObservedPath : null),
+                SelectedRunLogPath = overrideResult.SelectedRunLogPath ?? publicationHistory.RunPath,
+                PreparedCommit = overrideResult.PreparedCommit ?? publicationHistory.PreparedCommit,
+                OutcomeCommit = overrideResult.OutcomeCommit ?? publicationHistory.OutcomeCommit,
+            };
+        }
+
         var plan = AutomationPrTransitionCommand.PlanTransition("approved");
         var remove = AutomationPrTransitionCommand.ResolveRemoveLabelsForMode(
             "approved", WorkerClaimCompleteConstants.Modes.Write, plan.RemoveLabels, currentLabels);
@@ -751,7 +784,7 @@ internal static class ApprovalPostingOverride
             return refused("canonical-config-unavailable", configFailure!);
         CliConfig config;
         try { config = CliConfigLoader.Load(configText!); }
-        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or FormatException)
+        catch (Exception exception) when (exception is Tomlyn.TomlException or InvalidOperationException or ArgumentException or FormatException)
         { return refused("canonical-config-invalid", exception.Message); }
         if (!config.CrossRuntimeReview.TryGetDeclared(packet.Domain, claim.Team, out var declaration)
             || !declaration.Repos.Contains(request.Repo, StringComparer.OrdinalIgnoreCase))
@@ -1474,8 +1507,8 @@ internal static class ApprovalPostingOverride
         && LabelSetsEqual(prepared.IntendedAddLabels, current.AddLabels)
         && LabelSetsEqual(prepared.IntendedRemoveLabels,
             AutomationPrTransitionCommand.PlanTransition("approved").RemoveLabels)
-        && (current.OrdinarySatisfied || prepared.MissingRelations.OrderBy(x => x, StringComparer.Ordinal)
-            .SequenceEqual(current.MissingRelations.OrderBy(x => x, StringComparer.Ordinal), StringComparer.Ordinal))
+        && (current.OrdinarySatisfied || current.MissingEligible
+            && current.MissingRelations.All(relation => prepared.MissingRelations.Contains(relation, StringComparer.Ordinal)))
         && prepared.DecidingRecords.OrderBy(x => x.File, StringComparer.Ordinal).SequenceEqual(current.DecidingRecords.OrderBy(x => x.File, StringComparer.Ordinal));
 
     private static bool CanContinue(PreparedAudit prepared, Assessment current) =>
@@ -1500,14 +1533,14 @@ internal static class ApprovalPostingOverride
         && observed.ClaimEpochClaimedAt == prepared.ClaimEpochClaimedAt;
 
     private static ObservedAudit BuildObserved(PreparedAudit prepared, Assessment current, IReadOnlyList<string> labels,
-        string preparedCommit, string basis, bool mutationAttempted, bool mayHaveApplied) => new()
+        string preparedCommit, string preparedSha256, string basis, bool mutationAttempted, bool mayHaveApplied) => new()
     {
         SchemaVersion = "1", Operation = Operation, OverrideId = prepared.OverrideId,
         ExecutionUnit = prepared.ExecutionUnit, Domain = prepared.Domain, Team = prepared.Team,
         Actor = prepared.Actor, Scope = prepared.Scope, ClaimEpochClaimedAt = prepared.ClaimEpochClaimedAt,
         TargetRepo = prepared.TargetRepo, PullRequest = prepared.PullRequest, RequestedHeadSha = prepared.RequestedHeadSha,
         PreparedPath = prepared.PreparedPath, ObservedPath = prepared.ObservedPath,
-        PreparedSha256 = Sha256Hex(SerializeAuditBytes(prepared)),
+        PreparedSha256 = preparedSha256,
         PreparedPublicationCommit = preparedCommit, ObservedAt = DateTimeOffset.UtcNow,
         HeadBeforeAction = prepared.RequestedHeadSha, HeadAfterAction = current.CurrentHead!,
         LabelsObserved = labels, AuthorizationBasis = basis,
@@ -1520,117 +1553,228 @@ internal static class ApprovalPostingOverride
         var path = AuditPath(request.ExecutionUnit, request.OverrideId, "prepared.json");
         var observedPath = AuditPath(request.ExecutionUnit, request.OverrideId, "observed.json");
         string? lastError = null;
+        bool mayHaveBeenPublished = false;
+        PreparedAudit? lastAttemptAudit = null;
+        byte[]? lastAttemptBytes = null;
+        string? lastAttemptRunPath = null;
+        string? lastAttemptCommit = null;
+
+        PublicationResult StopBeforeAnotherAttempt(string cause, string? detail, string? currentRunPath)
+        {
+            if (!mayHaveBeenPublished)
+                return new PublicationResult(false, cause, detail, path, currentRunPath, null);
+
+            if (lastAttemptAudit is not null && lastAttemptBytes is not null
+                && TryVerifyPreparedPublication(target, request, path, observedPath, lastAttemptRunPath!,
+                    Sha256Hex(lastAttemptBytes), lastAttemptCommit, out var verified))
+                return new PublicationResult(true, null, null, path, lastAttemptRunPath,
+                    verified.PreparedCommit, verified.Prepared);
+
+            try
+            {
+                using var checkout = ApprovalPostingCheckout.Open(target);
+                var pair = ReadPair(checkout, lastAttemptRunPath!, request, path, observedPath);
+                if (pair.Valid && !pair.PreparedExists && !pair.ObservedExists)
+                    return new PublicationResult(false, cause, detail, path, currentRunPath, null);
+            }
+            catch (Exception exception) when (Expected(exception)) { }
+
+            return new PublicationResult(false, "prepared-publication-unconfirmed",
+                "A previous prepared push may have reached canonical state but its exact audit/event pair could not be verified. "
+                + (detail ?? lastError ?? "The current guard prevented another publication attempt."),
+                path, lastAttemptRunPath, lastAttemptCommit, MayHaveBeenPublished: true);
+        }
+
         for (var attempt = 0; attempt < MaximumPublicationAttempts; attempt++)
         {
-            using var checkout = ApprovalPostingCheckout.Open(target);
-            var current = Assess(checkout, request);
-            if (!current.Readable || !current.MissingEligible)
-                return new PublicationResult(false, current.Cause ?? "eligibility-changed", current.Detail, path, current.RunPath, null);
-            var existing = ReadPair(checkout, current.RunPath!, request, path, observedPath);
-            if (!existing.Valid) return new PublicationResult(false, existing.Cause, existing.Detail, path, current.RunPath, null);
-            if (existing.Prepared is not null)
-                return existing.PreparedCommit is null
-                    ? new PublicationResult(false, "prepared-publication-commit-unavailable",
-                        "The existing prepared pair has no verifiable transaction commit.", path, current.RunPath, null)
-                    : new PublicationResult(true, null, null, path, current.RunPath, existing.PreparedCommit, existing.Prepared);
-            var audit = CreatePrepared(current, request, path, observedPath);
-            var relativeDirectory = Path.GetDirectoryName(Path.Combine(checkout.Root, path.Replace('/', Path.DirectorySeparatorChar)))!;
-            Directory.CreateDirectory(relativeDirectory);
-            var auditFull = Path.Combine(checkout.Root, path.Replace('/', Path.DirectorySeparatorChar));
-            using (var stream = new FileStream(auditFull, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            try
             {
-                var bytes = WriterOperations.SerializeAudit(path, () => SerializeAuditBytes(audit));
-                stream.Write(bytes);
-            }
-            if (!AppendRunEvent(checkout, current, request, new RunEvent
+                using var checkout = ApprovalPostingCheckout.Open(target);
+                var current = Assess(checkout, request);
+                if (!current.Readable || !current.MissingEligible)
+                    return StopBeforeAnotherAttempt(current.Cause ?? "eligibility-changed", current.Detail, current.RunPath);
+                var existing = ReadPair(checkout, current.RunPath!, request, path, observedPath);
+                if (!existing.Valid)
+                    return StopBeforeAnotherAttempt(existing.Cause ?? "override-audit-unavailable", existing.Detail, current.RunPath);
+                if (existing.Prepared is not null)
+                    return existing.PreparedCommit is null
+                        ? new PublicationResult(false, "prepared-publication-commit-unavailable",
+                            "The existing prepared pair has no verifiable transaction commit.", path, current.RunPath, null,
+                            MayHaveBeenPublished: true)
+                        : new PublicationResult(true, null, null, path, current.RunPath, existing.PreparedCommit, existing.Prepared);
+                var audit = CreatePrepared(current, request, path, observedPath);
+                var relativeDirectory = Path.GetDirectoryName(Path.Combine(checkout.Root, path.Replace('/', Path.DirectorySeparatorChar)))!;
+                Directory.CreateDirectory(relativeDirectory);
+                var auditFull = Path.Combine(checkout.Root, path.Replace('/', Path.DirectorySeparatorChar));
+                byte[] auditBytes;
+                using (var stream = new FileStream(auditFull, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    auditBytes = WriterOperations.SerializeAudit(path, () => SerializeAuditBytes(audit));
+                    stream.Write(auditBytes);
+                }
+                if (!AppendRunEvent(checkout, current, request, new RunEvent
                 {
                     Ts = DateTimeOffset.UtcNow, ExecutionUnit = request.ExecutionUnit, Event = PreparedEvent,
                     By = "intent-cli automation pr-transition", Repo = request.Repo, Pr = request.PullRequest,
                     LinkedPr = $"https://github.com/{request.Repo}/pull/{request.PullRequest}", Reason = request.Reason,
                     TeamMode = TeamMode.SoloConductor, ActorRole = LogicalRoleNormalizer.Builder, ResultRef = path,
                 }, out var appendError))
-                return new PublicationResult(false, "prepared-append-failed", appendError, path, current.RunPath, null);
-            if (!CommitAndPush(checkout, [path, current.RunPath!], "Record prepared approval posting override", out var commit, out lastError))
-            {
+                    return StopBeforeAnotherAttempt("prepared-append-failed", appendError, current.RunPath);
+                if (!CommitAndPush(checkout, [path, current.RunPath!], "Record prepared approval posting override", out var commit, out lastError))
+                {
+                    if (commit is not null)
+                    {
+                        lastAttemptAudit = audit;
+                        lastAttemptBytes = auditBytes;
+                        lastAttemptRunPath = current.RunPath;
+                        lastAttemptCommit = commit;
+                        mayHaveBeenPublished = true;
+                    }
+                    if (TryVerifyPreparedPublication(target, request, path, observedPath, current.RunPath!,
+                            Sha256Hex(auditBytes), commit, out var publishedPair))
+                        return new PublicationResult(true, null, null, path, current.RunPath,
+                            publishedPair.PreparedCommit, publishedPair.Prepared);
+                    if (attempt + 1 < MaximumPublicationAttempts) continue;
+                    return StopBeforeAnotherAttempt("prepared-publication-unconfirmed", lastError, current.RunPath);
+                }
+                lastAttemptAudit = audit;
+                lastAttemptBytes = auditBytes;
+                lastAttemptRunPath = current.RunPath;
+                lastAttemptCommit = commit;
+                mayHaveBeenPublished = true;
                 if (TryVerifyPreparedPublication(target, request, path, observedPath, current.RunPath!,
-                        Sha256Hex(SerializeAuditBytes(audit)), commit, out var publishedPair))
+                        Sha256Hex(auditBytes), commit, out var verifiedPair))
                     return new PublicationResult(true, null, null, path, current.RunPath,
-                        publishedPair.PreparedCommit, publishedPair.Prepared);
-                if (attempt + 1 < MaximumPublicationAttempts) continue;
-                break;
+                        verifiedPair.PreparedCommit, verifiedPair.Prepared);
+                lastError = "The canonical branch did not contain the exact prepared file, event, and transaction commit after push.";
             }
-            if (TryVerifyPreparedPublication(target, request, path, observedPath, current.RunPath!,
-                    Sha256Hex(SerializeAuditBytes(audit)), commit, out var verifiedPair))
-                return new PublicationResult(true, null, null, path, current.RunPath,
-                    verifiedPair.PreparedCommit, verifiedPair.Prepared);
-            lastError = "The canonical branch did not contain the exact prepared file, event, and transaction commit after push.";
+            catch (Exception exception) when (Expected(exception))
+            {
+                return StopBeforeAnotherAttempt("prepared-publication-failed", exception.Message, lastAttemptRunPath);
+            }
         }
-        return new PublicationResult(false, "prepared-publication-unconfirmed", lastError ?? "Canonical prepared publication was not confirmed.", path, null, null);
+        return StopBeforeAnotherAttempt(mayHaveBeenPublished ? "prepared-publication-unconfirmed" : "prepared-publication-failed",
+            lastError ?? "Canonical prepared publication was not confirmed.", lastAttemptRunPath);
     }
 
     private static PublicationResult PublishObserved(CanonicalTarget target, ApprovalPostingOverrideRequest request,
         PreparedAudit prepared, ObservedAudit observed)
     {
         string? lastError = null;
+        bool mayHaveBeenPublished = false;
+        byte[]? lastAttemptBytes = null;
+        string? lastAttemptRunPath = null;
+        string? lastAttemptCommit = null;
+        string? lastPreparedSha256 = null;
+
+        PublicationResult StopBeforeAnotherAttempt(string cause, string? detail, string? currentRunPath)
+        {
+            if (!mayHaveBeenPublished)
+                return new PublicationResult(false, cause, detail, prepared.ObservedPath, currentRunPath, null);
+
+            if (lastAttemptBytes is not null
+                && TryVerifyObservedPublication(target, request, prepared, lastPreparedSha256!, lastAttemptBytes,
+                    out var verifiedCommit, out _))
+                return new PublicationResult(true, null, null, prepared.ObservedPath, lastAttemptRunPath, verifiedCommit);
+
+            try
+            {
+                using var checkout = ApprovalPostingCheckout.Open(target);
+                var pair = ReadPair(checkout, lastAttemptRunPath!, request, prepared.PreparedPath, prepared.ObservedPath);
+                if (pair.Valid && pair.Prepared is not null && pair.Observed is null
+                    && !pair.ObservedExists && pair.PreparedSha256 == lastPreparedSha256)
+                    return new PublicationResult(false, cause, detail, prepared.ObservedPath, currentRunPath, null);
+            }
+            catch (Exception exception) when (Expected(exception)) { }
+
+            return new PublicationResult(false, "observed-publication-unconfirmed",
+                "A previous observed push may have reached canonical state but its exact audit/event pair could not be verified. "
+                + (detail ?? lastError ?? "The current guard prevented another publication attempt."),
+                prepared.ObservedPath, lastAttemptRunPath, lastAttemptCommit, MayHaveBeenPublished: true);
+        }
+
         for (var attempt = 0; attempt < MaximumPublicationAttempts; attempt++)
         {
-            using var checkout = ApprovalPostingCheckout.Open(target);
-            var current = Assess(checkout, request);
-            if (!current.Readable || !Matches(prepared, current, request) || !CanContinue(prepared, current))
-                return new PublicationResult(false, current.Cause ?? "outcome-binding-changed", current.Detail, prepared.ObservedPath, current.RunPath, null);
-            var pair = ReadPair(checkout, current.RunPath!, request, prepared.PreparedPath, prepared.ObservedPath);
-            if (!pair.Valid || pair.Prepared is null || pair.PreparedCommit is null)
-                return new PublicationResult(false, pair.Cause ?? "prepared-pair-unavailable", pair.Detail, prepared.ObservedPath, current.RunPath, null);
-            IGitHubLabelMutator? mutator = null;
-            string? mutatorError = null;
-            string? liveHead = null;
-            IReadOnlyList<string>? liveLabels = null;
-            string? liveError = null;
-            if (!TryGetMutator(out mutator, out mutatorError)
-                || !TryObserve(request, mutator!, out liveHead, out liveLabels, out liveError)
-                || !string.Equals(liveHead, request.HeadSha, StringComparison.OrdinalIgnoreCase)
-                || !Converged(liveLabels ?? [], prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
-                return new PublicationResult(false, "observed-live-state-unconfirmed",
-                    mutatorError ?? liveError ?? "The requested head and intended labels no longer converge.",
-                    prepared.ObservedPath, current.RunPath, null);
-            if (pair.Observed is not null)
+            try
             {
-                if (!MatchesObserved(pair.Observed, pair.Prepared, pair.PreparedSha256, current, request)
-                    || pair.Observed.PreparedPublicationCommit != pair.PreparedCommit
-                    || pair.ObservedCommit is null
-                    || !Converged(liveLabels!, prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
-                    return new PublicationResult(false, "observed-binding-conflict",
-                        "The existing observed audit no longer matches the exact prepared bytes or current live state.",
-                        prepared.ObservedPath, current.RunPath, pair.ObservedCommit);
-                return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, pair.ObservedCommit);
-            }
-            var refreshedObserved = BuildObserved(pair.Prepared, current, liveLabels!, pair.PreparedCommit,
-                observed.AuthorizationBasis, observed.MutationAttempted, observed.MayHaveApplied);
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(checkout.Root, prepared.ObservedPath.Replace('/', Path.DirectorySeparatorChar)))!);
-            var auditBytes = WriterOperations.SerializeAudit(prepared.ObservedPath, () => SerializeAuditBytes(refreshedObserved));
-            using (var stream = new FileStream(Path.Combine(checkout.Root, prepared.ObservedPath.Replace('/', Path.DirectorySeparatorChar)), FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            { stream.Write(auditBytes); }
-            if (!AppendRunEvent(checkout, current, request, new RunEvent
+                using var checkout = ApprovalPostingCheckout.Open(target);
+                var current = Assess(checkout, request);
+                if (!current.Readable || !Matches(prepared, current, request) || !CanContinue(prepared, current))
+                    return StopBeforeAnotherAttempt(current.Cause ?? "outcome-binding-changed", current.Detail, current.RunPath);
+                var pair = ReadPair(checkout, current.RunPath!, request, prepared.PreparedPath, prepared.ObservedPath);
+                if (!pair.Valid || pair.Prepared is null || pair.PreparedCommit is null)
+                    return StopBeforeAnotherAttempt(pair.Cause ?? "prepared-pair-unavailable", pair.Detail, current.RunPath);
+                IGitHubLabelMutator? mutator = null;
+                string? mutatorError = null;
+                string? liveHead = null;
+                IReadOnlyList<string>? liveLabels = null;
+                string? liveError = null;
+                if (!TryGetMutator(out mutator, out mutatorError)
+                    || !TryObserve(request, mutator!, out liveHead, out liveLabels, out liveError)
+                    || !string.Equals(liveHead, request.HeadSha, StringComparison.OrdinalIgnoreCase)
+                    || !Converged(liveLabels ?? [], prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
+                    return StopBeforeAnotherAttempt("observed-live-state-unconfirmed",
+                        mutatorError ?? liveError ?? "The requested head and intended labels no longer converge.",
+                        current.RunPath);
+                if (pair.Observed is not null)
                 {
-                    Ts = DateTimeOffset.UtcNow, ExecutionUnit = request.ExecutionUnit, Event = ObservedEvent,
-                    By = "intent-cli automation pr-transition", Repo = request.Repo, Pr = request.PullRequest,
-                    LinkedPr = $"https://github.com/{request.Repo}/pull/{request.PullRequest}", Reason = request.Reason,
-                    TeamMode = TeamMode.SoloConductor, ActorRole = LogicalRoleNormalizer.Builder, ResultRef = prepared.ObservedPath,
-                }, out var appendError))
-                return new PublicationResult(false, "observed-append-failed", appendError, prepared.ObservedPath, current.RunPath, null);
-            if (!CommitAndPush(checkout, [prepared.ObservedPath, current.RunPath!], "Record observed approval posting override", out var commit, out lastError))
-            {
-                if (TryVerifyObservedPublication(target, request, prepared, auditBytes, out var remoteCommit, out var remoteError))
-                    return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, remoteCommit);
-                lastError = remoteError ?? lastError;
-                if (attempt + 1 < MaximumPublicationAttempts) continue;
-                break;
+                    if (!MatchesObserved(pair.Observed, pair.Prepared, pair.PreparedSha256, current, request)
+                        || pair.Observed.PreparedPublicationCommit != pair.PreparedCommit
+                        || pair.ObservedCommit is null
+                        || !Converged(liveLabels!, prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
+                        return new PublicationResult(false, "observed-binding-conflict",
+                            "The existing observed audit no longer matches the exact prepared bytes or current live state.",
+                            prepared.ObservedPath, current.RunPath, pair.ObservedCommit);
+                    return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, pair.ObservedCommit);
+                }
+                var refreshedObserved = BuildObserved(pair.Prepared, current, liveLabels!, pair.PreparedCommit,
+                    pair.PreparedSha256!, observed.AuthorizationBasis, observed.MutationAttempted, observed.MayHaveApplied);
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(checkout.Root, prepared.ObservedPath.Replace('/', Path.DirectorySeparatorChar)))!);
+                var auditBytes = WriterOperations.SerializeAudit(prepared.ObservedPath, () => SerializeAuditBytes(refreshedObserved));
+                using (var stream = new FileStream(Path.Combine(checkout.Root, prepared.ObservedPath.Replace('/', Path.DirectorySeparatorChar)), FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                { stream.Write(auditBytes); }
+                if (!AppendRunEvent(checkout, current, request, new RunEvent
+                    {
+                        Ts = DateTimeOffset.UtcNow, ExecutionUnit = request.ExecutionUnit, Event = ObservedEvent,
+                        By = "intent-cli automation pr-transition", Repo = request.Repo, Pr = request.PullRequest,
+                        LinkedPr = $"https://github.com/{request.Repo}/pull/{request.PullRequest}", Reason = request.Reason,
+                        TeamMode = TeamMode.SoloConductor, ActorRole = LogicalRoleNormalizer.Builder, ResultRef = prepared.ObservedPath,
+                    }, out var appendError))
+                    return StopBeforeAnotherAttempt("observed-append-failed", appendError, current.RunPath);
+                if (!CommitAndPush(checkout, [prepared.ObservedPath, current.RunPath!], "Record observed approval posting override", out var commit, out lastError))
+                {
+                    if (commit is not null)
+                    {
+                        lastAttemptBytes = auditBytes;
+                        lastAttemptRunPath = current.RunPath;
+                        lastAttemptCommit = commit;
+                        lastPreparedSha256 = pair.PreparedSha256;
+                        mayHaveBeenPublished = true;
+                    }
+                    if (TryVerifyObservedPublication(target, request, prepared, pair.PreparedSha256!, auditBytes,
+                            out var remoteCommit, out var remoteError))
+                        return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, remoteCommit);
+                    lastError = remoteError ?? lastError;
+                    if (attempt + 1 < MaximumPublicationAttempts) continue;
+                    return StopBeforeAnotherAttempt("observed-publication-unconfirmed", lastError, current.RunPath);
+                }
+                lastAttemptBytes = auditBytes;
+                lastAttemptRunPath = current.RunPath;
+                lastAttemptCommit = commit;
+                lastPreparedSha256 = pair.PreparedSha256;
+                mayHaveBeenPublished = true;
+                if (TryVerifyObservedPublication(target, request, prepared, pair.PreparedSha256!, auditBytes,
+                        out var verifiedCommit, out var verifyError))
+                    return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, verifiedCommit);
+                lastError = verifyError ?? "The canonical branch did not contain the observed audit/event pair after push.";
             }
-            if (TryVerifyObservedPublication(target, request, prepared, auditBytes, out var verifiedCommit, out var verifyError))
-                return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, verifiedCommit);
-            lastError = verifyError ?? "The canonical branch did not contain the observed audit/event pair after push.";
+            catch (Exception exception) when (Expected(exception))
+            {
+                return StopBeforeAnotherAttempt("observed-publication-failed", exception.Message, lastAttemptRunPath);
+            }
         }
-        return new PublicationResult(false, "observed-publication-unconfirmed", lastError ?? "Canonical outcome publication was not confirmed.", prepared.ObservedPath, null, null);
+        return StopBeforeAnotherAttempt(mayHaveBeenPublished ? "observed-publication-unconfirmed" : "observed-publication-failed",
+            lastError ?? "Canonical outcome publication was not confirmed.", lastAttemptRunPath);
     }
 
     private static bool TryVerifyPreparedPublication(CanonicalTarget target, ApprovalPostingOverrideRequest request,
@@ -1655,7 +1799,8 @@ internal static class ApprovalPostingOverride
     }
 
     private static bool TryVerifyObservedPublication(CanonicalTarget target, ApprovalPostingOverrideRequest request,
-        PreparedAudit prepared, byte[] expectedObservedBytes, out string? commit, out string? error)
+        PreparedAudit prepared, string expectedPreparedSha256, byte[] expectedObservedBytes,
+        out string? commit, out string? error)
     {
         commit = null;
         error = null;
@@ -1666,7 +1811,7 @@ internal static class ApprovalPostingOverride
             if (!pair.Valid || pair.Prepared is null || pair.Observed is null
                 || pair.PreparedCommit is null || pair.ObservedCommit is null
                 || pair.ObservedSha256 != Sha256Hex(expectedObservedBytes)
-                || pair.PreparedSha256 != Sha256Hex(SerializeAuditBytes(prepared))
+                || pair.PreparedSha256 != expectedPreparedSha256
                 || !MatchesObservedImmutable(pair.Observed, pair.Prepared, pair.PreparedSha256, request)
                 || pair.Observed.PreparedPublicationCommit != pair.PreparedCommit)
             {
@@ -1811,14 +1956,17 @@ internal static class ApprovalPostingOverride
 
     private static bool Expected(Exception exception) => exception is IOException or UnauthorizedAccessException
         or InvalidOperationException or JsonException or ArgumentException or FormatException
-        or System.Security.SecurityException or YamlDotNet.Core.YamlException;
+        or System.ComponentModel.Win32Exception or System.Security.SecurityException or YamlDotNet.Core.YamlException;
 
     private static string Recovery(ApprovalPostingOverrideRequest request) =>
         "intent-cli automation pr-transition"
-        + $" --repo {request.Repo} --pr {request.PullRequest} --transition approved"
-        + $" --execution-unit {request.ExecutionUnit} --head-sha {request.HeadSha}"
-        + $" --actor {request.Actor} --team {request.Team} --reason '{request.Reason.Replace("'", "'\\''", StringComparison.Ordinal)}'"
-        + $" --override-loop-evidence --override-id {request.OverrideId} --write --format {request.Format}";
+        + $" --repo {ShellWord(request.Repo)} --pr {request.PullRequest} --transition approved"
+        + $" --execution-unit {ShellWord(request.ExecutionUnit)} --head-sha {ShellWord(request.HeadSha)}"
+        + $" --actor {ShellWord(request.Actor)} --team {ShellWord(request.Team)} --reason {ShellWord(request.Reason)}"
+        + $" --override-loop-evidence --override-id {ShellWord(request.OverrideId)} --write --format {ShellWord(request.Format)}";
+
+    private static string ShellWord(string value) =>
+        "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private static string AuditPath(string unit, string id, string file) => $"{AuditRoot}/{unit}/{id}/{file}";
 
@@ -1959,7 +2107,20 @@ internal static class ApprovalPostingOverride
         string? Path,
         string? RunPath,
         string? Commit,
-        PreparedAudit? Audit = null);
+        PreparedAudit? Audit = null,
+        bool MayHaveBeenPublished = false)
+    {
+        public PublicationConfidence Confidence => Published
+            ? PublicationConfidence.Published
+            : MayHaveBeenPublished ? PublicationConfidence.Unconfirmed : PublicationConfidence.NotPublished;
+    }
+
+    private enum PublicationConfidence
+    {
+        NotPublished,
+        Published,
+        Unconfirmed,
+    }
 }
 
 internal sealed record ApprovalPostingOverrideRequest

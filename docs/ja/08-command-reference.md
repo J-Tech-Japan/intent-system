@@ -673,6 +673,8 @@ G861 は、記録済み solo-conductor team の G834 local gate が満たされ�
 
 flag には明示的な repo、PR、execution unit、full head、現在保持している builder actor/team、空でない reason、UUID が必要です。reason は operator の記録であり、intent-cli は外部承認や reason の妥当性を検証しません。この flag は未公開の local review/config を公開せず、GitHub review/comment も作りません。先に必要な review record と config を canonical host branch へ公開します。その後 command が immutable prepared audit と選択済み run event を canonical branch に記録してから label を変更します:
 
+最初から通常の posting gate が満たされている場合は適用対象外であり、audit は作成しません。既存の prepared audit に結び付いた同じ UUID の retry だけが、以前 missing だった relation の投稿後に続行できます。その際、現在の missing set は audit に記録した slot の部分集合でなければなりません。これは元の missing-posting 例外を記録するもので、合成した review receipt は作りません。
+
 ```bash
 intent-cli automation pr-transition --repo <owner/repo> --pr <pr> \
   --transition approved --execution-unit <unit> --head-sha <full-head-sha> \

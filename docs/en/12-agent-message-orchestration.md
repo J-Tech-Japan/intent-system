@@ -362,6 +362,12 @@ quality. In write mode it publishes a create-only prepared audit and selected
 run event before changing labels, then rereads head and labels and publishes a
 second immutable outcome only after verified observation.
 
+An initially satisfied posting gate is not applicable and produces no audit.
+An existing same-ID prepared record may resume when a formerly missing review
+has since been posted, provided no relation outside the original missing slots
+is now missing. The audit retains the original missing-posting facts; no
+synthetic approval receipt is created.
+
 The prepared record identifies its original host snapshot. A same-ID retry
 re-reads canonical state and may accept a newer compatible snapshot, but cannot
 change the request, claim epoch, child head, queue identity or deciding-record

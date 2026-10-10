@@ -764,6 +764,13 @@ Publish the deciding review records and configuration to the canonical host
 branch first; the command then records a create-only prepared audit and one
 selected run event there before it changes labels:
 
+An initial request is not applicable when the ordinary posting gate is already
+satisfied, and it creates no audit. Only a same-ID retry with an existing
+prepared audit may continue after a previously missing relation is posted; the
+current missing set must remain a subset of the slots recorded in that audit.
+This records the original missing-posting exception and never creates a
+synthetic review receipt.
+
 ```bash
 intent-cli automation pr-transition --repo <owner/repo> --pr <pr> \
   --transition approved --execution-unit <unit> --head-sha <full-head-sha> \
