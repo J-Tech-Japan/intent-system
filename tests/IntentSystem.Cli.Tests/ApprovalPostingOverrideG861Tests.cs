@@ -272,6 +272,238 @@ solo_conductor_unscopable_review_ids: (none)
         Assert.Equal("owned", ClaimOwnershipVerifier.Verify(repos.Caller, $"execution-unit:{Unit}", Team).Status);
     }
 
+    [Fact]
+    public async Task PreparedPairDeletedBeforePrelabelReadCannotAuthorizeLabels_G861()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        var ciWaitPath = RecordCiWait(repos.Caller);
+        var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var preparedPath = AuditPath("prepared.json");
+        var runPath = ScopedRunPath(repos.Caller);
+        using var pause = new PauseBeforeAuditVerificationClone(repos.Bare, preparedPath, matchingClone: 2);
+        var removePair = Task.Run(() =>
+        {
+            Assert.True(pause.WaitUntilVerificationCloneStarts(TimeSpan.FromSeconds(20)),
+                "the prepared verifier clone and the subsequent prelabel clone must occur in order");
+            try
+            {
+                PublishCanonicalChange(repos, root =>
+                {
+                    File.Delete(Path.Combine(root, preparedPath.Replace('/', Path.DirectorySeparatorChar)));
+                    var runFile = Path.Combine(root, runPath.Replace('/', Path.DirectorySeparatorChar));
+                    var remaining = RunLogSerializer.DeserializeAll(File.ReadAllText(runFile))
+                        .Where(item => !(item.Event == "approval-evidence-override-prepared"
+                            && item.ExecutionUnit == Unit && item.ResultRef == preparedPath));
+                    File.WriteAllText(runFile, string.Join("\n", remaining.Select(RunLogSerializer.SerializeLine)) + "\n");
+                });
+            }
+            finally { pause.ReleaseVerificationClone(); }
+        });
+
+        var (exit, output) = Run(repos, OverrideId, write: true, flagged: true);
+        await removePair;
+
+        Assert.True(File.Exists(pause.Marker), "the canonical pair was removed after its publication verification and before prelabel re-read");
+        Assert.Equal(1, exit);
+        AssertOverrideFacts(output, "prepared-pair-unavailable", "unresolved", prepared: true, outcome: false, mutationAttempted: false);
+        Assert.Empty(mutator.Applied);
+        Assert.False(repos.HasPath("refs/heads/main", preparedPath));
+        Assert.DoesNotContain(repos.ReadEvents(), item => item.Event == "approval-evidence-override-prepared" && item.ResultRef == preparedPath);
+        Assert.DoesNotContain(repos.ReadEvents(), item => item.Event == "approval-evidence-override-observed");
+        Assert.Equal(claimBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
+    }
+
+    [Fact]
+    public async Task IdenticalPreparedBytesAtDifferentPathCommitCannotReplaceInvocationPin_G861()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        var ciWaitPath = RecordCiWait(repos.Caller);
+        var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var preparedPath = AuditPath("prepared.json");
+        using var pause = new PauseBeforeAuditVerificationClone(repos.Bare, preparedPath, matchingClone: 2);
+        var recommit = Task.Run(() =>
+        {
+            Assert.True(pause.WaitUntilVerificationCloneStarts(TimeSpan.FromSeconds(20)),
+                "the prepared publication must be confirmed before the same bytes are committed again");
+            try
+            {
+                var originalBytes = GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}");
+                var originalCommit = GitText(repos.Bare, "log", "-1", "--format=%H", "refs/heads/main", "--", preparedPath).Trim();
+                PublishCanonicalChange(repos, root =>
+                {
+                    var file = Path.Combine(root, preparedPath.Replace('/', Path.DirectorySeparatorChar));
+                    var audit = JsonNode.Parse(File.ReadAllText(file))!.AsObject();
+                    audit["actor"] = "temporary-builder";
+                    File.WriteAllText(file, audit.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                });
+                PublishCanonicalChange(repos, root => File.WriteAllBytes(
+                    Path.Combine(root, preparedPath.Replace('/', Path.DirectorySeparatorChar)), originalBytes));
+                Assert.Equal(originalBytes, GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}"));
+                Assert.NotEqual(originalCommit,
+                    GitText(repos.Bare, "log", "-1", "--format=%H", "refs/heads/main", "--", preparedPath).Trim());
+            }
+            finally { pause.ReleaseVerificationClone(); }
+        });
+
+        var (exit, output) = Run(repos, OverrideId, write: true, flagged: true);
+        await recommit;
+
+        Assert.True(File.Exists(pause.Marker));
+        Assert.Equal(1, exit);
+        AssertOverrideFacts(output, "prepared-binding-conflict", "unresolved", prepared: true, outcome: false, mutationAttempted: false);
+        Assert.Empty(mutator.Applied);
+        Assert.Equal(claimBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
+        Assert.DoesNotContain(repos.ReadEvents(), item => item.Event == "approval-evidence-override-observed");
+    }
+
+    [Fact]
+    public void PreparedAuditTamperAfterLabelActionCannotAuthorizeObservedPublication_G861()
+    {
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        var ciWaitPath = RecordCiWait(repos.Caller);
+        var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var preparedPath = AuditPath("prepared.json");
+        byte[]? preparedBefore = null;
+        mutator.BeforeApply = () => PublishCanonicalChange(repos, root =>
+        {
+            preparedBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}");
+            Assert.NotEmpty(preparedBefore);
+            var fullPath = Path.Combine(root, preparedPath.Replace('/', Path.DirectorySeparatorChar));
+            var audit = JsonNode.Parse(File.ReadAllText(fullPath))!.AsObject();
+            audit["actor"] = "builder";
+            File.WriteAllText(fullPath, audit.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        });
+
+        var (exit, output) = Run(repos, OverrideId, write: true, flagged: true);
+
+        Assert.Equal(1, exit);
+        AssertOverrideFacts(output, "prepared-binding-conflict", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
+        using (var result = JsonDocument.Parse(output))
+        {
+            var facts = result.RootElement.GetProperty("approval_posting_override");
+            Assert.True(facts.GetProperty("may_have_applied").GetBoolean());
+            Assert.True(facts.GetProperty("label_state_observed").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("ci_wait_cleared").GetBoolean());
+            Assert.NotNull(facts.GetProperty("recovery_command").GetString());
+        }
+        Assert.Single(mutator.Applied);
+        Assert.Contains("intent-pr-approved", mutator.Labels);
+        Assert.NotEqual(preparedBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}"));
+        Assert.Equal(claimBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
+        Assert.False(repos.HasPath("refs/heads/main", AuditPath("observed.json")));
+        Assert.DoesNotContain(repos.ReadEvents(), item => item.Event == "approval-evidence-override-observed");
+        Assert.Single(repos.ReadEvents(), item => item.Event == "approval-evidence-override-prepared" && item.ResultRef == preparedPath);
+    }
+
+    [Fact]
+    public async Task PreparedPairChangeAfterObservedVerificationCannotClearCiWait_G861()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        var ciWaitPath = RecordCiWait(repos.Caller);
+        var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var preparedPath = AuditPath("prepared.json");
+        var runPath = ScopedRunPath(repos.Caller);
+        using var pause = new PauseBeforeAuditVerificationClone(repos.Bare, AuditPath("observed.json"), matchingClone: 2);
+        var removePair = Task.Run(() =>
+        {
+            Assert.True(pause.WaitUntilVerificationCloneStarts(TimeSpan.FromSeconds(20)),
+                "the observed publication verifier must finish before the final-snapshot clone is paused");
+            try
+            {
+                PublishCanonicalChange(repos, root =>
+                {
+                    File.Delete(Path.Combine(root, preparedPath.Replace('/', Path.DirectorySeparatorChar)));
+                    var runFile = Path.Combine(root, runPath.Replace('/', Path.DirectorySeparatorChar));
+                    var remaining = RunLogSerializer.DeserializeAll(File.ReadAllText(runFile))
+                        .Where(item => !(item.Event == "approval-evidence-override-prepared"
+                            && item.ExecutionUnit == Unit && item.ResultRef == preparedPath));
+                    File.WriteAllText(runFile, string.Join("\n", remaining.Select(RunLogSerializer.SerializeLine)) + "\n");
+                });
+            }
+            finally { pause.ReleaseVerificationClone(); }
+        });
+
+        var (exit, output) = Run(repos, OverrideId, write: true, flagged: true);
+        await removePair;
+
+        Assert.True(File.Exists(pause.Marker), "the observed pair was verified before the final confirmation snapshot");
+        Assert.Equal(1, exit);
+        AssertOverrideFacts(output, "final-observation-changed", "unresolved", prepared: true, outcome: true, mutationAttempted: true);
+        using (var result = JsonDocument.Parse(output))
+        {
+            Assert.False(result.RootElement.GetProperty("applied").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("ci_wait_cleared").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("approval_posting_override").GetProperty("may_have_applied").GetBoolean());
+        }
+        Assert.Single(mutator.Applied);
+        Assert.Equal(claimBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
+        Assert.True(repos.HasPath("refs/heads/main", AuditPath("observed.json")));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ObservedAuditRejectsContradictoryMutationPhaseFlags_G861(bool mutationAttempted, bool mayHaveApplied)
+    {
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        var (firstExit, firstOutput) = Run(repos, OverrideId, write: true, flagged: true);
+        Assert.Equal(0, firstExit);
+        using (var first = JsonDocument.Parse(firstOutput))
+        {
+            var facts = first.RootElement.GetProperty("approval_posting_override");
+            Assert.True(facts.GetProperty("mutation_attempted").GetBoolean());
+            Assert.True(facts.GetProperty("may_have_applied").GetBoolean());
+        }
+        var ciWaitPath = RecordCiWait(repos.Caller);
+        var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+        var observedPath = AuditPath("observed.json");
+        PublishCanonicalChange(repos, root =>
+        {
+            var fullPath = Path.Combine(root, observedPath.Replace('/', Path.DirectorySeparatorChar));
+            var audit = JsonNode.Parse(File.ReadAllText(fullPath))!.AsObject();
+            audit["mutation_attempted"] = mutationAttempted;
+            audit["may_have_applied"] = mayHaveApplied;
+            File.WriteAllText(fullPath, audit.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        });
+        var tamperedObserved = GitBytes(repos.Bare, "show", $"refs/heads/main:{observedPath}");
+        var runPath = ScopedRunPath(repos.Caller);
+        var runBytes = GitBytes(repos.Bare, "show", $"refs/heads/main:{runPath}");
+        var actionCount = mutator.Applied.Count;
+
+        var (previewExit, previewOutput) = Run(repos, OverrideId, write: false, flagged: true);
+        var (writeExit, writeOutput) = Run(repos, OverrideId, write: true, flagged: true);
+
+        Assert.Equal(1, previewExit);
+        AssertOverrideFacts(previewOutput, "override-audit-unavailable", "refused", prepared: true, outcome: true, mutationAttempted: false);
+        Assert.Equal(1, writeExit);
+        AssertOverrideFacts(writeOutput, "override-audit-unavailable", "refused", prepared: true, outcome: true, mutationAttempted: false);
+        Assert.Equal(actionCount, mutator.Applied.Count);
+        Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
+        Assert.Equal(tamperedObserved, GitBytes(repos.Bare, "show", $"refs/heads/main:{observedPath}"));
+        Assert.Equal(runBytes, GitBytes(repos.Bare, "show", $"refs/heads/main:{runPath}"));
+        Assert.True(repos.HasPath("refs/heads/main", AuditPath("prepared.json")));
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -560,6 +792,138 @@ solo_conductor_unscopable_review_ids: (none)
             Assert.Equal(observedBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{AuditPath("observed.json")}"));
             Assert.Equal(runBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{runPath}"));
         }
+    }
+
+    [Theory]
+    [InlineData("{\"schema_version\":\"1\",\"entries\":null}")]
+    [InlineData("{\"schema_version\":\"1\",\"entries\":[null]}")]
+    [InlineData("{\"schema_version\":\"1\",\"entries\":[{\"domain\":\"intent-cli\",\"team\":\"builder\",\"mode\":\"solo-conductor\",\"updated_at\":\"2026-10-10T12:00:00Z\",\"transitions\":null}]}")]
+    public async Task NullTeamModeCollectionsFailClosedAtEachPublicationPhase_G861(string malformedMode)
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        ResetSeams();
+        using (var initialRepos = CreateEligibleRepositories())
+        {
+            PublishCanonicalChange(initialRepos, root => File.WriteAllText(
+                Path.Combine(root, TeamModeStore.RelativePath.Replace('/', Path.DirectorySeparatorChar)), malformedMode));
+            var (jsonExit, jsonOutput) = Run(initialRepos, OverrideId, write: true, flagged: true);
+            Assert.Equal(1, jsonExit);
+            AssertOverrideFacts(jsonOutput, "team-mode-unavailable", "refused", prepared: false, outcome: false, mutationAttempted: false);
+            using (var result = JsonDocument.Parse(jsonOutput))
+            {
+                var facts = result.RootElement.GetProperty("approval_posting_override");
+                Assert.Equal(JsonValueKind.Null, facts.GetProperty("prepared_commit").ValueKind);
+                Assert.False(facts.GetProperty("prepared_published").GetBoolean());
+            }
+            var (textExit, textOutput) = Run(initialRepos, OverrideId, write: true, flagged: true, format: "text");
+            Assert.Equal(1, textExit);
+            Assert.Contains("cause=team-mode-unavailable", textOutput, StringComparison.Ordinal);
+            Assert.Contains("prepared_published=false", textOutput, StringComparison.Ordinal);
+            Assert.Empty(mutator.Applied);
+        }
+
+        ResetSeams();
+        using (var preparedRepos = CreateEligibleRepositories())
+        {
+            var ciWaitPath = RecordCiWait(preparedRepos.Caller);
+            var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+            var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+            var claimBefore = GitBytes(preparedRepos.Bare, "show", $"refs/heads/main:{claimPath}");
+            using var pause = new PauseBeforeAuditVerificationClone(preparedRepos.Bare, AuditPath("prepared.json"), matchingClone: 2);
+            var changeMode = Task.Run(() =>
+            {
+                Assert.True(pause.WaitUntilVerificationCloneStarts(TimeSpan.FromSeconds(20)),
+                    "the prepared pair must be verified before the next canonical snapshot is paused");
+                try
+                {
+                    PublishCanonicalChange(preparedRepos, root => File.WriteAllText(
+                        Path.Combine(root, TeamModeStore.RelativePath.Replace('/', Path.DirectorySeparatorChar)), malformedMode));
+                }
+                finally { pause.ReleaseVerificationClone(); }
+            });
+            var (exit, output) = Run(preparedRepos, OverrideId, write: true, flagged: true);
+            await changeMode;
+
+            Assert.True(File.Exists(pause.Marker));
+            Assert.Equal(1, exit);
+            AssertOverrideFacts(output, "team-mode-unavailable", "refused", prepared: true, outcome: false, mutationAttempted: false);
+            Assert.Empty(mutator.Applied);
+            Assert.True(preparedRepos.HasPath("refs/heads/main", AuditPath("prepared.json")));
+            Assert.Equal(claimBefore, GitBytes(preparedRepos.Bare, "show", $"refs/heads/main:{claimPath}"));
+            Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
+            Assert.DoesNotContain(preparedRepos.ReadEvents(), item => item.Event == "approval-evidence-override-observed");
+        }
+
+        ResetSeams();
+        using (var afterActionRepos = CreateEligibleRepositories())
+        {
+            var ciWaitPath = RecordCiWait(afterActionRepos.Caller);
+            var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+            var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+            var claimBefore = GitBytes(afterActionRepos.Bare, "show", $"refs/heads/main:{claimPath}");
+            mutator.AfterApply = () => PublishCanonicalChange(afterActionRepos, root => File.WriteAllText(
+                Path.Combine(root, TeamModeStore.RelativePath.Replace('/', Path.DirectorySeparatorChar)), malformedMode));
+
+            var (exit, output) = Run(afterActionRepos, OverrideId, write: true, flagged: true);
+
+            Assert.Equal(1, exit);
+            AssertOverrideFacts(output, "team-mode-unavailable", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
+            using (var result = JsonDocument.Parse(output))
+            {
+                var facts = result.RootElement.GetProperty("approval_posting_override");
+                Assert.True(facts.GetProperty("may_have_applied").GetBoolean());
+                Assert.True(facts.GetProperty("label_state_observed").GetBoolean());
+                Assert.False(result.RootElement.GetProperty("ci_wait_cleared").GetBoolean());
+            }
+            Assert.Single(mutator.Applied);
+            Assert.Contains("intent-pr-approved", mutator.Labels);
+            Assert.Equal(claimBefore, GitBytes(afterActionRepos.Bare, "show", $"refs/heads/main:{claimPath}"));
+            Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
+            Assert.False(afterActionRepos.HasPath("refs/heads/main", AuditPath("observed.json")));
+        }
+    }
+
+    [Theory]
+    [InlineData("before")]
+    [InlineData("after")]
+    public void LabelMutatorTimeoutIsReportedAsReachedAndPossiblyApplied_G861(string phase)
+    {
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        var ciWaitPath = RecordCiWait(repos.Caller);
+        var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+        if (phase == "before") mutator.TimeoutBeforeApply = true;
+        else mutator.TimeoutAfterApply = true;
+
+        var (exit, output) = Run(repos, OverrideId, write: true, flagged: true);
+
+        if (phase == "before")
+        {
+            Assert.Equal(1, exit);
+            AssertOverrideFacts(output, "label-state-unconfirmed", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
+            using var result = JsonDocument.Parse(output);
+            var facts = result.RootElement.GetProperty("approval_posting_override");
+            Assert.True(facts.GetProperty("may_have_applied").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("ci_wait_cleared").GetBoolean());
+            Assert.DoesNotContain("intent-pr-approved", mutator.Labels);
+        }
+        else
+        {
+            Assert.Equal(0, exit);
+            using var result = JsonDocument.Parse(output);
+            Assert.True(result.RootElement.GetProperty("applied").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("ci_wait_cleared").GetBoolean());
+            var facts = result.RootElement.GetProperty("approval_posting_override");
+            Assert.Equal("observed", facts.GetProperty("disposition").GetString());
+            Assert.True(facts.GetProperty("prepared_published").GetBoolean());
+            Assert.True(facts.GetProperty("outcome_published").GetBoolean());
+            Assert.True(facts.GetProperty("mutation_attempted").GetBoolean());
+            Assert.True(facts.GetProperty("may_have_applied").GetBoolean());
+            Assert.Contains("intent-pr-approved", mutator.Labels);
+        }
+        Assert.Single(mutator.Applied);
+        if (phase == "before") Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
     }
 
     [Fact]
@@ -2948,8 +3312,11 @@ solo_conductor_unscopable_review_ids: (none)
         headReadCount = 0;
         mutator.Labels = ["intent-pr-reviewing"];
         mutator.BeforeApply = null;
+        mutator.AfterApply = null;
         mutator.ThrowBeforeApply = false;
         mutator.ThrowAfterApply = false;
+        mutator.TimeoutBeforeApply = false;
+        mutator.TimeoutAfterApply = false;
         mutator.PartialApply = false;
         mutator.FailReadLabels = false;
         mutator.Applied.Clear();
@@ -3306,8 +3673,11 @@ solo_conductor_unscopable_review_ids: (none)
         public List<(IReadOnlyCollection<string> Add, IReadOnlyCollection<string> Remove)> Applied { get; } = [];
         public IReadOnlyList<string> Labels { get; set; } = ["intent-pr-reviewing"];
         public Action? BeforeApply { get; set; }
+        public Action? AfterApply { get; set; }
         public bool ThrowBeforeApply { get; set; }
         public bool ThrowAfterApply { get; set; }
+        public bool TimeoutBeforeApply { get; set; }
+        public bool TimeoutAfterApply { get; set; }
         public bool PartialApply { get; set; }
         public bool FailReadLabels { get; set; }
 
@@ -3322,14 +3692,18 @@ solo_conductor_unscopable_review_ids: (none)
             BeforeApply?.Invoke();
             Applied.Add((addLabels.ToArray(), removeLabels.ToArray()));
             if (ThrowBeforeApply) throw new IOException("mutator fixture threw after request may have reached GitHub");
+            if (TimeoutBeforeApply) throw new TimeoutException("mutator fixture timed out before applying labels");
             if (PartialApply)
             {
                 Labels = Labels.Concat(addLabels).Distinct(StringComparer.Ordinal).ToArray();
+                AfterApply?.Invoke();
                 return;
             }
             var removed = removeLabels.ToHashSet(StringComparer.Ordinal);
             Labels = Labels.Where(label => !removed.Contains(label)).Concat(addLabels).Distinct(StringComparer.Ordinal).ToArray();
+            AfterApply?.Invoke();
             if (ThrowAfterApply) throw new IOException("mutator applied the label request, then lost its response");
+            if (TimeoutAfterApply) throw new TimeoutException("mutator applied the label request, then timed out");
         }
 
         public void ApplyReconcileTransitions(string repo, string kind, int number, IReadOnlyCollection<string> addLabels, IReadOnlyCollection<string> removeLabels) =>
@@ -3588,22 +3962,26 @@ solo_conductor_unscopable_review_ids: (none)
     {
         private readonly string previousPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
 
-        public PauseBeforeAuditVerificationClone(string bare, string auditPath)
+        public PauseBeforeAuditVerificationClone(string bare, string auditPath, int matchingClone = 1)
         {
             if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+            if (matchingClone < 1) throw new ArgumentOutOfRangeException(nameof(matchingClone));
             var bin = Path.Combine(Path.GetDirectoryName(bare)!, "g861-late-record-pause-bin");
             Directory.CreateDirectory(bin);
             Marker = Path.Combine(bin, "prepared-verification-clone-started.txt");
             ReleaseMarker = Path.Combine(bin, "continue-prepared-verification-clone.txt");
+            var matchCount = Path.Combine(bin, "prepared-verification-clone-count.txt");
             var wrapper = Path.Combine(bin, "git");
             var realGit = FindGit();
             File.WriteAllText(wrapper,
                 "#!/bin/sh\nset -u\nPWD=$(pwd)\n"
-                + $"REAL={ShellQuote(realGit)}\nBARE={ShellQuote(bare)}\nMARKER={ShellQuote(Marker)}\nRELEASE={ShellQuote(ReleaseMarker)}\nTARGET={ShellQuote(auditPath)}\n"
+                + $"REAL={ShellQuote(realGit)}\nBARE={ShellQuote(bare)}\nMARKER={ShellQuote(Marker)}\nRELEASE={ShellQuote(ReleaseMarker)}\nTARGET={ShellQuote(auditPath)}\nCOUNTFILE={ShellQuote(matchCount)}\nMATCHINGCLONE={matchingClone}\n"
                 + "case \"$PWD\" in */intent-cli-g861-*) ;; *) exec \"$REAL\" \"$@\" ;; esac\n"
                 + "[ \"${1-}\" = clone ] || exec \"$REAL\" \"$@\"\n"
                 + "[ ! -e \"$MARKER\" ] || exec \"$REAL\" \"$@\"\n"
                 + "\"$REAL\" --git-dir \"$BARE\" cat-file -e \"refs/heads/main:$TARGET\" 2>/dev/null || exec \"$REAL\" \"$@\"\n"
+                + "COUNT=0\n[ ! -f \"$COUNTFILE\" ] || COUNT=$(cat \"$COUNTFILE\")\nCOUNT=$((COUNT + 1))\nprintf '%s' \"$COUNT\" > \"$COUNTFILE\"\n"
+                + "[ \"$COUNT\" -eq \"$MATCHINGCLONE\" ] || exec \"$REAL\" \"$@\"\n"
                 + ": > \"$MARKER\"\n"
                 + "while [ ! -e \"$RELEASE\" ]; do sleep 0.02; done\n"
                 + "exec \"$REAL\" \"$@\"\n");
