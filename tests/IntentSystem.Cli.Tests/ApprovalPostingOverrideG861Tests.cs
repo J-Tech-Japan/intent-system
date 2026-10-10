@@ -236,6 +236,7 @@ solo_conductor_unscopable_review_ids: (none)
         Assert.True(finalFacts.GetProperty("prepared_published").GetBoolean());
         Assert.True(finalFacts.GetProperty("outcome_published").GetBoolean());
         Assert.True(finalFacts.GetProperty("mutation_attempted").GetBoolean());
+        Assert.True(finalFacts.GetProperty("may_have_applied").GetBoolean());
         Assert.True(finalFacts.GetProperty("label_state_observed").GetBoolean());
         Assert.Equal(JsonValueKind.Null, finalFacts.GetProperty("recovery_command").ValueKind);
         Assert.True(result.RootElement.GetProperty("ci_wait_cleared").GetBoolean());
@@ -329,6 +330,178 @@ solo_conductor_unscopable_review_ids: (none)
             Assert.False(repos.HasPath("refs/heads/main", AuditPath("prepared.json")));
             Assert.DoesNotContain(repos.ReadEvents(), item => item.Event.StartsWith("approval-evidence-override-", StringComparison.Ordinal));
         }
+    }
+
+    [Theory]
+    [InlineData("g834-decision")]
+    [InlineData("g834-reasons")]
+    [InlineData("g834-identity")]
+    [InlineData("solo-decision")]
+    [InlineData("solo-cause")]
+    [InlineData("solo-identity")]
+    [InlineData("solo-expected-head")]
+    [InlineData("solo-observed-head")]
+    [InlineData("solo-obligations")]
+    [InlineData("solo-null-obligations")]
+    [InlineData("solo-unscopable")]
+    [InlineData("solo-null-qualifying")]
+    [InlineData("qualifying-contradiction")]
+    [InlineData("qualifying-runtime-contradiction")]
+    [InlineData("deciding-verdict")]
+    [InlineData("deciding-head")]
+    [InlineData("missing-relations-contradiction")]
+    public void TamperedPreparedHistoricalGateEvidenceRefusesBeforeMutation_G861(string mutation)
+    {
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        var id = Guid.NewGuid().ToString("D");
+        var ciWaitPath = RecordCiWait(repos.Caller);
+        var ciWaitBefore = File.ReadAllBytes(ciWaitPath);
+        mutator.ThrowBeforeApply = true;
+
+        var (firstExit, firstOutput) = Run(repos, id, write: true, flagged: true);
+
+        Assert.Equal(1, firstExit);
+        AssertOverrideFacts(firstOutput, "label-state-unconfirmed", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
+        using (var first = JsonDocument.Parse(firstOutput))
+            Assert.True(first.RootElement.GetProperty("approval_posting_override").GetProperty("may_have_applied").GetBoolean());
+        var preparedPath = AuditPath("prepared.json", id);
+        var preparedBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}");
+        string runPath;
+        using (var original = JsonDocument.Parse(preparedBefore))
+        {
+            runPath = original.RootElement.GetProperty("selected_run_log_path").GetString()!;
+            var originalSolo = original.RootElement.GetProperty("original_solo_result");
+            Assert.Equal(SoloConductorApprovalGate.DecisionRefused, originalSolo.GetProperty("decision").GetString());
+            Assert.Equal(SoloConductorApprovalGate.CauseReviewMissing, originalSolo.GetProperty("cause").GetString());
+        }
+        var runBefore = GitBytes(repos.Bare, $"show", $"refs/heads/main:{runPath}");
+        var callsBeforeRetry = mutator.Applied.Count;
+
+        PublishCanonicalChange(repos, root =>
+        {
+            var path = Path.Combine(root, preparedPath.Replace('/', Path.DirectorySeparatorChar));
+            var audit = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            var g834 = audit["original_g834_result"]!.AsObject();
+            var solo = audit["original_solo_result"]!.AsObject();
+            switch (mutation)
+            {
+                case "g834-decision": g834["decision"] = "blocked"; break;
+                case "g834-reasons": g834["reasons"] = new JsonArray(new JsonObject { ["cause"] = "blocked", ["detail"] = "contradiction" }); break;
+                case "g834-identity": g834["team"] = "foreign-team"; break;
+                case "solo-decision": solo["decision"] = SoloConductorApprovalGate.DecisionSatisfied; break;
+                case "solo-cause": solo["cause"] = SoloConductorApprovalGate.CauseReviewBlocked; break;
+                case "solo-identity": solo["domain"] = "foreign-domain"; break;
+                case "solo-expected-head": solo["expected_head_sha"] = new string('e', 40); break;
+                case "solo-observed-head": solo["observed_head_sha"] = new string('e', 40); break;
+                case "solo-obligations":
+                    solo["obligations"] = new JsonArray(new JsonObject
+                    {
+                        ["kind"] = "review-blocked",
+                        ["identity_kind"] = "login",
+                        ["identity"] = "independent-reviewer",
+                        ["review_ids"] = new JsonArray(),
+                        ["recovery"] = "post a fresh approve",
+                    });
+                    break;
+                case "solo-null-obligations": solo["obligations"] = null; break;
+                case "solo-unscopable": solo["unscopable_review_ids"] = new JsonArray(991); break;
+                case "solo-null-qualifying": solo["qualifying_reviews"] = null; break;
+                case "qualifying-contradiction": audit["qualifying_posted_reviews"] = new JsonArray(); break;
+                case "qualifying-runtime-contradiction":
+                {
+                    var soloReview = solo["qualifying_reviews"]!.AsArray()
+                        .Single(item => item?["cited_record_path"] is not null)!;
+                    var postedReview = audit["qualifying_posted_reviews"]!.AsArray()
+                        .Single(item => item?["review_id"]!.GetValue<long>() == soloReview["review_id"]!.GetValue<long>())!;
+                    soloReview["runtime"] = "codex";
+                    postedReview["runtime"] = "codex";
+                    break;
+                }
+                case "deciding-verdict": audit["deciding_records"]![0]!["verdict"] = CrossRuntimeReviewVerdict.RequestChanges; break;
+                case "deciding-head": audit["deciding_records"]![0]!["head_sha"] = new string('e', 40); break;
+                case "missing-relations-contradiction": audit["missing_relations"] = new JsonArray(CrossRuntimeReviewRecord.RelationSameRuntime); break;
+                default: throw new InvalidOperationException($"Unknown historical audit mutation '{mutation}'.");
+            }
+            File.WriteAllText(path, audit.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n");
+        });
+
+        var tamperedPrepared = GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}");
+        var tamperedRun = GitBytes(repos.Bare, "show", $"refs/heads/main:{runPath}");
+        Assert.NotEqual(preparedBefore, tamperedPrepared);
+        Assert.Equal(runBefore, tamperedRun);
+        mutator.ThrowBeforeApply = false;
+
+        var (retryExit, retryOutput) = Run(repos, id, write: true, flagged: true);
+
+        Assert.Equal(1, retryExit);
+        AssertOverrideFacts(retryOutput, "override-audit-unavailable", "refused", prepared: true, outcome: false, mutationAttempted: false);
+        using (var retry = JsonDocument.Parse(retryOutput))
+        {
+            var facts = retry.RootElement.GetProperty("approval_posting_override");
+            Assert.True(facts.GetProperty("prepared_published").GetBoolean());
+            Assert.False(facts.GetProperty("outcome_published").GetBoolean());
+            Assert.False(facts.GetProperty("mutation_attempted").GetBoolean());
+            Assert.False(retry.RootElement.GetProperty("applied").GetBoolean());
+            Assert.False(retry.RootElement.GetProperty("ci_wait_cleared").GetBoolean());
+        }
+        Assert.Equal(callsBeforeRetry, mutator.Applied.Count);
+        Assert.Equal(ciWaitBefore, File.ReadAllBytes(ciWaitPath));
+        Assert.Equal(tamperedPrepared, GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}"));
+        Assert.Equal(tamperedRun, GitBytes(repos.Bare, "show", $"refs/heads/main:{runPath}"));
+        Assert.Single(repos.ReadEvents(), item => item.Event == "approval-evidence-override-prepared" && item.ResultRef == preparedPath);
+        Assert.DoesNotContain(repos.ReadEvents(), item => item.Event == "approval-evidence-override-observed");
+    }
+
+    [Fact]
+    public void GenericHistoricalQualifyingReviewWithoutCanonicalCitationRemainsValid_G861()
+    {
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        postedRowsOverride = request =>
+        [
+            ParsePostedRow(request, 99002, GenericReviewBody(Unit, Head, "approve"),
+                "COMMENTED", Head, "legacy-reviewer"),
+            .. ReadCanonicalPostedReviewsWithoutOverride(request),
+        ];
+        mutator.ThrowBeforeApply = true;
+
+        var id = Guid.NewGuid().ToString("D");
+        var (exit, output) = Run(repos, id, write: true, flagged: true);
+
+        Assert.Equal(1, exit);
+        AssertOverrideFacts(output, "label-state-unconfirmed", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
+        using var prepared = JsonDocument.Parse(GitBytes(repos.Bare, "show", $"refs/heads/main:{AuditPath("prepared.json", id)}"));
+        var qualifying = prepared.RootElement.GetProperty("original_solo_result").GetProperty("qualifying_reviews");
+        var generic = Assert.Single(qualifying.EnumerateArray(), item => item.GetProperty("review_id").GetInt64() == 99002);
+        Assert.Equal(JsonValueKind.Null, generic.GetProperty("runtime").ValueKind);
+        Assert.Equal(JsonValueKind.Null, generic.GetProperty("relation").ValueKind);
+        Assert.Equal(JsonValueKind.Null, generic.GetProperty("cited_record_path").ValueKind);
+    }
+
+    [Fact]
+    public void PreparedHistoricalSupersededInvalidReviewIdsRemainValid_G861()
+    {
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        postedRowsOverride = request =>
+        [
+            ParsePostedRow(request, 99001, GenericReviewBody(Unit, Head, "approve", includeKind: false),
+                "COMMENTED", Head, "independent-reviewer"),
+            .. ReadCanonicalPostedReviewsWithoutOverride(request),
+        ];
+        mutator.ThrowBeforeApply = true;
+
+        var id = Guid.NewGuid().ToString("D");
+        var (exit, output) = Run(repos, id, write: true, flagged: true);
+
+        Assert.Equal(1, exit);
+        AssertOverrideFacts(output, "label-state-unconfirmed", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
+        using var prepared = JsonDocument.Parse(GitBytes(repos.Bare, "show", $"refs/heads/main:{AuditPath("prepared.json", id)}"));
+        Assert.Contains(99001, prepared.RootElement.GetProperty("original_solo_result")
+            .GetProperty("superseded_invalid_review_ids").EnumerateArray().Select(item => item.GetInt64()));
+        Assert.Empty(prepared.RootElement.GetProperty("original_solo_result").GetProperty("obligations").EnumerateArray());
+        Assert.Empty(prepared.RootElement.GetProperty("original_solo_result").GetProperty("unscopable_review_ids").EnumerateArray());
     }
 
     [Theory]
@@ -709,6 +882,8 @@ solo_conductor_unscopable_review_ids: (none)
             finally { ApprovalPostingOverride.WriterOperations = previous; }
             Assert.Equal(1, result.Exit);
             AssertOverrideFacts(result.Output, "observed-append-failed", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
+            using (var failedOutcome = JsonDocument.Parse(result.Output))
+                Assert.True(failedOutcome.RootElement.GetProperty("approval_posting_override").GetProperty("may_have_applied").GetBoolean());
             Assert.Single(mutator.Applied);
             Assert.Equal(before, File.ReadAllBytes(path));
         }
@@ -1940,6 +2115,8 @@ solo_conductor_unscopable_review_ids: (none)
             var (exit, output) = Run(repos, OverrideId, write: true, flagged: true);
             Assert.Equal(1, exit);
             AssertOverrideFacts(output, "label-state-unconfirmed", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
+            using (var partial = JsonDocument.Parse(output))
+                Assert.True(partial.RootElement.GetProperty("approval_posting_override").GetProperty("may_have_applied").GetBoolean());
             Assert.Contains("intent-pr-approved", mutator.Labels);
             Assert.Contains("intent-pr-reviewing", mutator.Labels);
             Assert.Single(mutator.Applied);
@@ -2437,7 +2614,9 @@ solo_conductor_unscopable_review_ids: (none)
             using (var observed = JsonDocument.Parse(observedOutput))
             {
                 Assert.True(observed.RootElement.GetProperty("applied").GetBoolean());
-                Assert.False(observed.RootElement.GetProperty("approval_posting_override").GetProperty("mutation_attempted").GetBoolean());
+                var observedFacts = observed.RootElement.GetProperty("approval_posting_override");
+                Assert.False(observedFacts.GetProperty("mutation_attempted").GetBoolean());
+                Assert.False(observedFacts.GetProperty("may_have_applied").GetBoolean());
                 Assert.StartsWith("Observed the approved transition already converged", observed.RootElement.GetProperty("summary").GetString());
                 Assert.DoesNotContain("Applied approved transition", observed.RootElement.GetProperty("summary").GetString(), StringComparison.Ordinal);
             }
@@ -2481,6 +2660,57 @@ solo_conductor_unscopable_review_ids: (none)
     }
 
     [Fact]
+    public void RepairedPostingReportsCurrentOrdinarySatisfiedBasisWithoutRewritingObservedAudit_G861()
+    {
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        var ciWaitPath = RecordCiWait(repos.Caller);
+
+        var (firstExit, firstOutput) = Run(repos, OverrideId, write: true, flagged: true);
+
+        Assert.True(firstExit == 0, firstOutput);
+        var observedPath = AuditPath("observed.json");
+        var preparedPath = AuditPath("prepared.json");
+        var observedBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{observedPath}");
+        var preparedBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}");
+        string runPath;
+        using (var prepared = JsonDocument.Parse(preparedBefore))
+            runPath = prepared.RootElement.GetProperty("selected_run_log_path").GetString()!;
+        var runBefore = GitBytes(repos.Bare, "show", $"refs/heads/main:{runPath}");
+        var waitAfterFirst = File.ReadAllBytes(ciWaitPath);
+        var actionsAfterFirst = mutator.Applied.Count;
+        var eventsAfterFirst = repos.ReadEvents().Count(item => item.Event.StartsWith("approval-evidence-override-", StringComparison.Ordinal));
+        using (var historicalObserved = JsonDocument.Parse(observedBefore))
+            Assert.Equal("missing-posting-eligible", historicalObserved.RootElement.GetProperty("authorization_basis").GetString());
+
+        postedRecordSelector = _ => true;
+        var (previewExit, previewOutput) = Run(repos, OverrideId, write: false, flagged: true, format: "json");
+
+        Assert.Equal(0, previewExit);
+        using (var preview = JsonDocument.Parse(previewOutput))
+        {
+            Assert.Equal("satisfied", preview.RootElement.GetProperty("solo_conductor_review").GetProperty("decision").GetString());
+            Assert.Equal("ordinary-satisfied", preview.RootElement.GetProperty("approval_posting_override").GetProperty("authorization_basis").GetString());
+            Assert.True(preview.RootElement.GetProperty("approval_posting_override").GetProperty("prepared_published").GetBoolean());
+            Assert.True(preview.RootElement.GetProperty("approval_posting_override").GetProperty("outcome_published").GetBoolean());
+            Assert.False(preview.RootElement.GetProperty("approval_posting_override").GetProperty("mutation_attempted").GetBoolean());
+        }
+
+        var (writeExit, writeText) = Run(repos, OverrideId, write: true, flagged: true, format: "text");
+
+        Assert.Equal(0, writeExit);
+        Assert.Contains("approval_posting_override_authorization_basis: ordinary-satisfied", writeText, StringComparison.Ordinal);
+        Assert.Contains("solo_conductor_review: satisfied", writeText, StringComparison.Ordinal);
+        Assert.Contains("Observed the approved transition already converged", writeText, StringComparison.Ordinal);
+        Assert.Equal(actionsAfterFirst, mutator.Applied.Count);
+        Assert.Equal(eventsAfterFirst, repos.ReadEvents().Count(item => item.Event.StartsWith("approval-evidence-override-", StringComparison.Ordinal)));
+        Assert.Equal(observedBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{observedPath}"));
+        Assert.Equal(preparedBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{preparedPath}"));
+        Assert.Equal(runBefore, GitBytes(repos.Bare, "show", $"refs/heads/main:{runPath}"));
+        Assert.Equal(waitAfterFirst, File.ReadAllBytes(ciWaitPath));
+    }
+
+    [Fact]
     public void MutatorThrowAfterApplyMaySucceedOnlyAfterExactConvergence_G861()
     {
         ResetSeams();
@@ -2503,6 +2733,31 @@ solo_conductor_unscopable_review_ids: (none)
     }
 
     [Fact]
+    public void InitialCanonicalCheckoutFailureLeavesUnknownAuditPathsNull_G861()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+        using var shim = new FailCanonicalCheckoutClone(repos.Bare);
+
+        var (exit, output) = Run(repos, OverrideId, write: true, flagged: true);
+
+        Assert.Equal(1, exit);
+        AssertOverrideFacts(output, "approval-posting-override-unavailable", "refused",
+            prepared: false, outcome: false, mutationAttempted: false);
+        Assert.True(File.Exists(shim.Marker));
+        Assert.Equal("2", File.ReadAllText(shim.Attempts).Trim());
+        using var result = JsonDocument.Parse(output);
+        var facts = result.RootElement.GetProperty("approval_posting_override");
+        foreach (var field in new[] { "prepared_path", "observed_path", "selected_run_log_path", "prepared_commit", "outcome_commit", "recovery_command" })
+            Assert.Equal(JsonValueKind.Null, facts.GetProperty(field).ValueKind);
+        Assert.Empty(mutator.Applied);
+        Assert.DoesNotContain(repos.ReadEvents(), item => item.Event.StartsWith("approval-evidence-override-", StringComparison.Ordinal));
+        Assert.False(repos.HasPath("refs/heads/main", AuditPath("prepared.json")));
+        Assert.False(repos.HasPath("refs/heads/main", AuditPath("observed.json")));
+    }
+
+    [Fact]
     public void PostActionReadFailureRetainsPreparedFactsAndResumeDoesNotRepeatLabels_G861()
     {
         ResetSeams();
@@ -2514,7 +2769,7 @@ solo_conductor_unscopable_review_ids: (none)
         using (var first = JsonDocument.Parse(firstOutput))
         {
             var facts = first.RootElement.GetProperty("approval_posting_override");
-            Assert.False(facts.GetProperty("may_have_applied").GetBoolean());
+            Assert.True(facts.GetProperty("may_have_applied").GetBoolean());
             Assert.False(facts.GetProperty("label_state_observed").GetBoolean());
         }
         Assert.Single(mutator.Applied);
@@ -2549,6 +2804,7 @@ solo_conductor_unscopable_review_ids: (none)
         Assert.True(facts.GetProperty("prepared_published").GetBoolean());
         Assert.False(facts.GetProperty("outcome_published").GetBoolean());
         Assert.True(facts.GetProperty("mutation_attempted").GetBoolean());
+        Assert.True(facts.GetProperty("may_have_applied").GetBoolean());
         Assert.Equal(advancedHead, facts.GetProperty("current_head").GetString());
         Assert.Single(mutator.Applied);
         Assert.Contains("intent-pr-approved", mutator.Labels);
@@ -2939,6 +3195,14 @@ solo_conductor_unscopable_review_ids: (none)
         return new SoloConductorReviewReadResult { Complete = true, Rows = rows };
     }
 
+    private IReadOnlyList<IndependentReviewRowEvidence> ReadCanonicalPostedReviewsWithoutOverride(SoloConductorReviewReadRequest request)
+    {
+        var previous = postedRowsOverride;
+        postedRowsOverride = null;
+        try { return ReadCanonicalPostedReviews(request).Rows; }
+        finally { postedRowsOverride = previous; }
+    }
+
     private static IndependentReviewRowEvidence ParsePostedRow(
         SoloConductorReviewReadRequest request,
         long id,
@@ -3221,6 +3485,46 @@ solo_conductor_unscopable_review_ids: (none)
                 .Select(directory => Path.Combine(directory, "git")).FirstOrDefault(File.Exists);
             return path ?? throw new InvalidOperationException("git executable was not found on PATH.");
         }
+        private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
+
+    private sealed class FailCanonicalCheckoutClone : IDisposable
+    {
+        private readonly string previousPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+        public FailCanonicalCheckoutClone(string bare)
+        {
+            if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+            var bin = Path.Combine(Path.GetDirectoryName(bare)!, "g861-initial-checkout-failure-bin");
+            Directory.CreateDirectory(bin);
+            Marker = Path.Combine(bin, "clone-failed.txt");
+            Attempts = Path.Combine(bin, "clone-attempts.txt");
+            var wrapper = Path.Combine(bin, "git");
+            var realGit = FindGit();
+            File.WriteAllText(wrapper,
+                "#!/bin/sh\nset -u\nPWD=$(pwd)\n"
+                + $"REAL={ShellQuote(realGit)}\nMARKER={ShellQuote(Marker)}\nATTEMPTS={ShellQuote(Attempts)}\n"
+                + "case \"$PWD\" in */intent-cli-g861-*) ;; *) exec \"$REAL\" \"$@\" ;; esac\n"
+                + "if [ \"${1-}\" = clone ]; then\n"
+                + "  count=0; [ ! -f \"$ATTEMPTS\" ] || count=$(cat \"$ATTEMPTS\"); count=$((count + 1)); printf '%s\\n' \"$count\" > \"$ATTEMPTS\"\n"
+                + "  : > \"$MARKER\"; echo 'injected initial canonical checkout clone failure' >&2; exit 128\n"
+                + "fi\n"
+                + "exec \"$REAL\" \"$@\"\n");
+            File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Environment.SetEnvironmentVariable("PATH", bin + Path.PathSeparator + previousPath);
+        }
+
+        public string Marker { get; }
+        public string Attempts { get; }
+        public void Dispose() => Environment.SetEnvironmentVariable("PATH", previousPath);
+
+        private static string FindGit()
+        {
+            var path = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator)
+                .Select(directory => Path.Combine(directory, "git")).FirstOrDefault(File.Exists);
+            return path ?? throw new InvalidOperationException("git executable was not found on PATH.");
+        }
+
         private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
     }
 

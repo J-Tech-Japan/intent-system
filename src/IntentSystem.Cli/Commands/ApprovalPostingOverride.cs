@@ -73,7 +73,7 @@ internal static class ApprovalPostingOverride
             return WriteEarlyRefusal(request, "canonical-target-unavailable", exception.Message, writer);
         }
 
-        var sticky = new ExecutionFacts(request);
+        var sticky = new ExecutionFacts();
 
         int WriteResultWithHistory(
             ApprovalPostingOverrideRequest resultRequest,
@@ -175,7 +175,7 @@ internal static class ApprovalPostingOverride
                         preparedCommit: pair.PreparedCommit,
                         outcomeCommit: pair.ObservedCommit,
                         currentHead: first.CurrentHead,
-                    authorizationBasis: pair.Observed?.AuthorizationBasis),
+                    authorizationBasis: first.Basis),
                     first.Labels, first.Solo, first.CrossRuntime, false, false, writer);
             }
 
@@ -269,6 +269,7 @@ internal static class ApprovalPostingOverride
             if (!Converged(beforeLabels.Labels, prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
             {
                 mutationAttempted = true;
+                mayHaveApplied = true;
                 sticky.MutationAttempted = true;
                 sticky.MayHaveApplied = true;
                 try
@@ -278,7 +279,6 @@ internal static class ApprovalPostingOverride
                         prepared.IntendedRemoveLabels, beforeLabels.Labels);
                     mutator.ApplyLabelTransitions(request.Repo, GhCliGitHubLabelMutator.Kinds.Pr,
                         request.PullRequest, prepared.IntendedAddLabels, remove);
-                    sticky.MayHaveApplied = false;
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
                 {
@@ -430,7 +430,7 @@ internal static class ApprovalPostingOverride
             runPath: prepared.SelectedRunLogPath, preparedCommit: preparedCommit,
             outcomeCommit: outcomeCommit, currentHead: current.CurrentHead,
             mutationAttempted: mutationAttempted, mayHaveApplied: mayHaveApplied,
-            labelStateObserved: true, authorizationBasis: observed.AuthorizationBasis),
+            labelStateObserved: true, authorizationBasis: current.Basis),
             current.Labels, current.Solo, current.CrossRuntime, true, cleared, writer, warning,
             observedOnly: !mutationAttempted);
     }
@@ -546,15 +546,15 @@ internal static class ApprovalPostingOverride
         string? ObservedCommit,
         string? Detail);
 
-    private sealed class ExecutionFacts(ApprovalPostingOverrideRequest request)
+    private sealed class ExecutionFacts
     {
         public bool PreparedPublished { get; private set; }
         public bool OutcomePublished { get; private set; }
         public bool MutationAttempted { get; set; }
         public bool MayHaveApplied { get; set; }
         public bool LabelStateObserved { get; set; }
-        public string? PreparedPath { get; private set; } = AuditPath(request.ExecutionUnit, request.OverrideId, "prepared.json");
-        public string? ObservedPath { get; private set; } = AuditPath(request.ExecutionUnit, request.OverrideId, "observed.json");
+        public string? PreparedPath { get; private set; }
+        public string? ObservedPath { get; private set; }
         public string? RunPath { get; private set; }
         public string? PreparedCommit { get; private set; }
         public string? OutcomeCommit { get; private set; }
@@ -623,11 +623,14 @@ internal static class ApprovalPostingOverride
         {
             PreparedPublished |= historical.PreparedExists;
             OutcomePublished |= historical.ObservedExists;
-            PreparedPath = historical.PreparedPath ?? PreparedPath;
-            ObservedPath = historical.ObservedPath ?? ObservedPath;
-            RunPath = historical.RunPath ?? RunPath;
-            PreparedCommit = historical.PreparedCommit ?? PreparedCommit;
-            OutcomeCommit = historical.ObservedCommit ?? OutcomeCommit;
+            if (historical.PreparedExists || historical.ObservedExists)
+            {
+                PreparedPath = historical.PreparedPath ?? PreparedPath;
+                ObservedPath = historical.ObservedPath ?? ObservedPath;
+                RunPath = historical.RunPath ?? RunPath;
+                PreparedCommit = historical.PreparedCommit ?? PreparedCommit;
+                OutcomeCommit = historical.ObservedCommit ?? OutcomeCommit;
+            }
         }
     }
 
@@ -1374,10 +1377,13 @@ internal static class ApprovalPostingOverride
             || audit.CurrentLabels is null || audit.IntendedAddLabels is null || audit.IntendedRemoveLabels is null)
             return "a required collection or gate result is null.";
         if (audit.DecidingRecords.Any(item => item is null || string.IsNullOrWhiteSpace(item.Runtime)
-                || string.IsNullOrWhiteSpace(item.Relation) || string.IsNullOrWhiteSpace(item.Verdict)
+                || !CrossRuntimeReviewRuntimes.IsSupported(item.Runtime)
+                || item.Relation is not (CrossRuntimeReviewRecord.RelationSameRuntime or CrossRuntimeReviewRecord.RelationCrossRuntime)
+                || item.Verdict != CrossRuntimeReviewVerdict.Approve
                 || string.IsNullOrWhiteSpace(item.HeadSha) || string.IsNullOrWhiteSpace(item.File)
                 || string.IsNullOrWhiteSpace(item.Sha256)
                 || !CrossRuntimeReviewPaths.IsFullHeadSha(item.HeadSha)
+                || !item.HeadSha.Equals(audit.RequestedHeadSha, StringComparison.OrdinalIgnoreCase)
                 || item.Sha256.Length != 64 || !item.Sha256.All(Uri.IsHexDigit)))
             return "a deciding-record binding is null or malformed.";
         if (!IsValidLabelSet(audit.CurrentLabels) || !IsValidLabelSet(audit.IntendedAddLabels)
@@ -1387,7 +1393,81 @@ internal static class ApprovalPostingOverride
         if (!LabelSetsEqual(audit.IntendedAddLabels, approvedPlan.AddLabels)
             || !LabelSetsEqual(audit.IntendedRemoveLabels, approvedPlan.RemoveLabels))
             return "intended label changes differ from the normal approved-transition plan.";
+        var historicalGateError = ValidateHistoricalGateEvidence(audit);
+        if (historicalGateError is not null) return historicalGateError;
         return null;
+    }
+
+    private static string? ValidateHistoricalGateEvidence(PreparedAudit audit)
+    {
+        var g834 = audit.OriginalG834Result;
+        if (g834.Decision != CrossRuntimeReviewGate.DecisionSatisfied || g834.Cause is not null
+            || g834.Reasons is null || g834.Reasons.Count != 0
+            || g834.ExecutionUnit != audit.ExecutionUnit || g834.Domain != audit.Domain || g834.Team != audit.Team)
+            return "original_g834_result is not a satisfied, identity-bound gate result.";
+
+        var solo = audit.OriginalSoloResult;
+        if (solo.Decision != SoloConductorApprovalGate.DecisionRefused
+            || solo.Cause != SoloConductorApprovalGate.CauseReviewMissing
+            || solo.ExecutionUnit != audit.ExecutionUnit || solo.Domain != audit.Domain || solo.Team != audit.Team
+            || !CrossRuntimeReviewPaths.IsFullHeadSha(solo.ExpectedHeadSha)
+            || !CrossRuntimeReviewPaths.IsFullHeadSha(solo.ObservedHeadSha)
+            || !string.Equals(solo.ExpectedHeadSha, audit.RequestedHeadSha, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(solo.ObservedHeadSha, audit.RequestedHeadSha, StringComparison.OrdinalIgnoreCase)
+            || solo.QualifyingReviews is null || solo.Obligations is null || solo.Obligations.Count != 0
+            || solo.UnscopableReviewIds is null || solo.UnscopableReviewIds.Count != 0
+            || solo.SupersededInvalidReviewIds is null
+            || solo.SupersededInvalidReviewIds.Any(id => id <= 0)
+            || solo.SupersededInvalidReviewIds.Distinct().Count() != solo.SupersededInvalidReviewIds.Count
+            || solo.RepairUnavailableReason is not null)
+            return "original_solo_result is not a clean, identity-bound review-missing result.";
+
+        if (solo.QualifyingReviews.Any(review => !IsValidHistoricalQualifyingReview(review))
+            || audit.QualifyingPostedReviews.Any(review => !IsValidHistoricalQualifyingReview(review))
+            || !solo.QualifyingReviews.SequenceEqual(audit.QualifyingPostedReviews))
+            return "qualifying posted-review evidence does not match the original solo result.";
+
+        foreach (var review in solo.QualifyingReviews.Where(item => item.CitedRecordPath is not null))
+        {
+            var decidingRecord = audit.DecidingRecords.SingleOrDefault(item => item.File == review.CitedRecordPath);
+            if (decidingRecord is not null
+                && (decidingRecord.Runtime != review.Runtime || decidingRecord.Relation != review.Relation))
+                return "a qualifying posted review contradicts its cited deciding record runtime or relation.";
+        }
+
+        var expectedMissing = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var relation in new[]
+                 {
+                     CrossRuntimeReviewRecord.RelationSameRuntime,
+                     CrossRuntimeReviewRecord.RelationCrossRuntime,
+                 })
+        {
+            var decidingFiles = audit.DecidingRecords
+                .Where(record => record.Relation == relation)
+                .Select(record => record.File)
+                .ToHashSet(StringComparer.Ordinal);
+            if (decidingFiles.Count == 0)
+                return "original_g834_result is satisfied but has no bound deciding record for a required relation.";
+            if (!solo.QualifyingReviews.Any(review => review.Relation == relation
+                    && review.CitedRecordPath is not null && decidingFiles.Contains(review.CitedRecordPath)))
+                expectedMissing.Add(relation);
+        }
+        return expectedMissing.SetEquals(audit.MissingRelations)
+            ? null
+            : "missing_relations contradict the original deciding records and qualifying posted reviews.";
+    }
+
+    private static bool IsValidHistoricalQualifyingReview(SoloConductorQualifyingReview? review)
+    {
+        if (review is null || review.ReviewId <= 0 || string.IsNullOrWhiteSpace(review.Login)) return false;
+        var hasRuntime = review.Runtime is not null;
+        var hasRelation = review.Relation is not null;
+        var hasCitedPath = review.CitedRecordPath is not null;
+        if (!hasRuntime && !hasRelation && !hasCitedPath) return true;
+        return hasRuntime && hasRelation && hasCitedPath
+            && CrossRuntimeReviewRuntimes.IsSupported(review.Runtime)
+            && review.Relation is CrossRuntimeReviewRecord.RelationSameRuntime or CrossRuntimeReviewRecord.RelationCrossRuntime
+            && !string.IsNullOrWhiteSpace(review.CitedRecordPath);
     }
 
     private static bool IsValidLabelSet(IReadOnlyList<string> labels) =>

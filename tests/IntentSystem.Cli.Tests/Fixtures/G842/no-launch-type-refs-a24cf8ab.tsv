@@ -9,7 +9,7 @@ src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.cs	ParsedOption	19
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingCheckout	23
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverride	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideDecidingRecord	5
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideRequest	27
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideRequest	26
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingOverrideResult	4
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingPacketIdentity	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ApprovalPostingPathInspection	12
@@ -31,11 +31,11 @@ src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	IGitHubLabelMutator	4
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Kinds	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Labels	27
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ObservedAudit	12
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	PreparedAudit	21
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	PreparedAudit	22
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ProcessResult	5
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	PublicationResult	24
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorApprovalGate	8
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorQualifyingReview	2
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorApprovalGate	10
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorQualifyingReview	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewReadRequest	1
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewReadResult	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewReader	3
