@@ -22,7 +22,10 @@ public sealed class RulingCommandTests
         var bytes = RulingArtifact.Serialize(record!);
         Assert.Equal((byte)'\n', bytes[^1]);
         Assert.False(bytes.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf }));
-        Assert.Contains("\\u003C", Encoding.UTF8.GetString(bytes), StringComparison.Ordinal);
+        var canonicalText = Encoding.UTF8.GetString(bytes);
+        Assert.Contains("\\u003C", canonicalText, StringComparison.Ordinal);
+        Assert.Contains("\\u65E5\\u672C\\u8A9E", canonicalText, StringComparison.Ordinal);
+        Assert.Contains("\\uD83D\\uDE00", canonicalText, StringComparison.Ordinal);
         Assert.Equal("2026-10-10T12:00:00.1000000Z", record!.NormalizedRecordedAt);
         Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), record.Sha256);
 
@@ -1475,6 +1478,23 @@ public sealed class RulingCommandTests
             Assert.Equal(1, refused.ExitCode);
             Assert.False(Directory.Exists(Path.Combine(workspace.Root, ".intent-cli")));
         }
+
+        var validInputPath = workspace.Write("valid-operator.json", RecordJson("R-VALID-PARSER", "2026-10-10T11:00:00Z"));
+        var flagCases = new[]
+        {
+            (new[] { "--write", "--dry-run" }, "--write and --dry-run are mutually exclusive"),
+            (new[] { "--write", "true" }, "--write does not take a value"),
+            (new[] { "--dry-run", "true" }, "--dry-run does not take a value"),
+        };
+        foreach (var (flags, expectedError) in flagCases)
+        {
+            var args = new[] { "ruling", "record", "--id", "R-VALID-PARSER", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", validInputPath, "--authority-role", "operator" }
+                .Concat(flags).Append("--format").Append("json").ToArray();
+            var refused = Invoke(context, args);
+            Assert.Equal(1, refused.ExitCode);
+            Assert.Contains(expectedError, refused.Output, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(workspace.Root, ".intent-cli")));
+        }
     }
 
     [Fact]
@@ -1492,6 +1512,41 @@ public sealed class RulingCommandTests
             File.Copy(Path.Combine(seedRoot, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", id + ".json"), Path.Combine(scope, id + ".json"));
         }
         var store = new RulingArtifactStore(workspace.Root);
+        foreach (var malformedId in new[] { "R-000", "R-500" })
+        {
+            var malformedPath = Path.Combine(scope, malformedId + ".json");
+            var canonicalBefore = File.ReadAllBytes(malformedPath);
+            try
+            {
+                File.WriteAllText(malformedPath, "{ truncated before inventory limit", new UTF8Encoding(false));
+                var contentReads = 0;
+                var bounded = new RulingArtifactStore(workspace.Root, (operation, _) =>
+                { if (operation == "read") contentReads++; });
+                var overLimit = bounded.Evaluate("intent-cli", "intent-cli-dev", "R-000", T0);
+                Assert.Equal("unavailable", overLimit.Status);
+                Assert.Equal("ruling-inventory-limit", overLimit.Cause);
+                Assert.Empty(overLimit.Records);
+                Assert.Equal(0, contentReads);
+
+                if (malformedId == "R-000")
+                {
+                    var candidateInput = workspace.Write("inventory-overflow-candidate.json", RecordJson("R-CMD-LIMIT", "2026-10-10T12:01:00Z"));
+                    var commandArgs = new[] { "ruling", "record", "--id", "R-CMD-LIMIT", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", candidateInput, "--authority-role", "operator", "--write", "--format", "json" };
+                    var commandReads = 0;
+                    using var commandWriter = new StringWriter();
+                    var commandExit = RulingCommand.ExecuteRecord(CreateContext(workspace.Root), commandArgs[2..], commandWriter,
+                        (operation, _) => { if (operation == "read") commandReads++; }, T0.AddMinutes(1));
+                    Assert.Equal(0, commandReads);
+                    Assert.Equal(1, commandExit);
+                    using var commandResult = JsonDocument.Parse(commandWriter.ToString());
+                    Assert.Equal("unavailable", commandResult.RootElement.GetProperty("status").GetString());
+                    Assert.Equal("ruling-inventory-limit", commandResult.RootElement.GetProperty("cause").GetString());
+                    Assert.False(commandResult.RootElement.GetProperty("wrote").GetBoolean());
+                    Assert.False(File.Exists(Path.Combine(scope, "R-CMD-LIMIT.json")));
+                }
+            }
+            finally { File.WriteAllBytes(malformedPath, canonicalBefore); }
+        }
         var at499 = new TemporaryWorkspace();
         using (at499)
         {
@@ -1511,15 +1566,30 @@ public sealed class RulingCommandTests
             var allowed = new RulingArtifactStore(at500.Root).Evaluate("intent-cli", "intent-cli-dev", "R-000", T0);
             Assert.Equal("active", allowed.Status);
             var candidate = Artifact("R-CANDIDATE", T0.AddMinutes(1), []);
-            var candidateLimit = new RulingArtifactStore(at500.Root).Evaluate("intent-cli", "intent-cli-dev", candidate.Id, T0.AddMinutes(1), candidate, true);
+            var newCandidateReads = 0;
+            var candidateLimit = new RulingArtifactStore(at500.Root, (operation, _) =>
+            { if (operation == "read") newCandidateReads++; }).Evaluate("intent-cli", "intent-cli-dev", candidate.Id, T0.AddMinutes(1), candidate, true);
             Assert.Equal("unavailable", candidateLimit.Status);
             Assert.Equal("ruling-inventory-limit", candidateLimit.Cause);
+            Assert.Empty(candidateLimit.Records);
+            Assert.Equal(0, newCandidateReads);
+
+            var existingReplayReads = 0;
+            var existingReplay = new RulingArtifactStore(at500.Root, (operation, _) =>
+            { if (operation == "read") existingReplayReads++; }).Evaluate("intent-cli", "intent-cli-dev", "R-000", T0,
+                Artifact("R-000", T0, []), forAdmission: true);
+            Assert.Equal("active", existingReplay.Status);
+            Assert.Equal(500, existingReplayReads);
 
             var candidatePath = at500.Write("capacity-candidate.json", RecordJson("R-CAPACITY-CANDIDATE", "2026-10-10T12:01:00Z"));
             var commandArgs = new[] { "ruling", "record", "--id", "R-CAPACITY-CANDIDATE", "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", candidatePath, "--authority-role", "operator", "--write", "--format", "json" };
-            var command = InvokeRecordAt(CreateContext(at500.Root), commandArgs, T0.AddMinutes(2));
-            Assert.Equal(1, command.ExitCode);
-            using var commandResult = JsonDocument.Parse(command.Output);
+            var commandContentReads = 0;
+            using var commandWriter = new StringWriter();
+            var commandExit = RulingCommand.ExecuteRecord(CreateContext(at500.Root), commandArgs[2..], commandWriter,
+                (operation, _) => { if (operation == "read") commandContentReads++; }, T0.AddMinutes(2));
+            Assert.Equal(0, commandContentReads);
+            Assert.Equal(1, commandExit);
+            using var commandResult = JsonDocument.Parse(commandWriter.ToString());
             Assert.Equal("unavailable", commandResult.RootElement.GetProperty("status").GetString());
             Assert.Equal("ruling-inventory-limit", commandResult.RootElement.GetProperty("cause").GetString());
             Assert.Contains("responsible host operator", commandResult.RootElement.GetProperty("recovery_hint").GetString(), StringComparison.Ordinal);
@@ -1530,6 +1600,103 @@ public sealed class RulingCommandTests
         Assert.Equal("unavailable", over.Status);
         Assert.Equal("ruling-inventory-limit", over.Cause);
         Assert.Empty(over.ReplacementIds);
+    }
+
+    [Fact]
+    public void ActualCommandWritesSchemaValidNormalizedArtifactAtExactOneMiBAndRefusesOneByteOver()
+    {
+        const int predecessorCount = 400;
+        using var workspace = new TemporaryWorkspace();
+        var targetScope = Path.Combine(workspace.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev");
+        Directory.CreateDirectory(targetScope);
+        var units = Enumerable.Range(0, 128)
+            .Select(index => "U" + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture) + new string('A', 124))
+            .ToArray();
+        var predecessorIds = Enumerable.Range(0, predecessorCount)
+            .Select(index => "P" + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture) + new string('B', 124))
+            .ToArray();
+
+        for (var index = 0; index < predecessorCount; index++)
+        {
+            var predecessor = Artifact(predecessorIds[index], T0, []) with { ExecutionUnits = units };
+            var seedRoot = workspace.CreateChild("exact-size-seed-" + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture));
+            var input = workspace.Write("seed-input-" + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture) + ".json", Encoding.UTF8.GetString(RulingArtifact.Serialize(predecessor)));
+            var args = new[] { "ruling", "record", "--id", predecessor.Id, "--domain", predecessor.Domain, "--team", predecessor.Team, "--from-file", input, "--authority-role", "operator", "--write", "--format", "json" };
+            var written = InvokeRecordAt(CreateContext(seedRoot), args, T0);
+            Assert.Equal(0, written.ExitCode);
+            using var result = JsonDocument.Parse(written.Output);
+            Assert.True(result.RootElement.GetProperty("wrote").GetBoolean());
+            var emitted = Path.Combine(seedRoot, ".intent-cli", "rulings", predecessor.Domain, predecessor.Team, predecessor.Id + ".json");
+            Assert.True(File.Exists(emitted));
+            File.Copy(emitted, Path.Combine(targetScope, predecessor.Id + ".json"));
+        }
+
+        var evidence = Enumerable.Range(0, 64)
+            .Select(index => "E" + index.ToString("D3", System.Globalization.CultureInfo.InvariantCulture) + new string('\u0080', 2044))
+            .ToArray();
+        var candidate = Artifact("R-EXACT-1MIB", T0.AddMinutes(1), predecessorIds) with
+        {
+            ExecutionUnits = units,
+            Decision = new string('\u0080', 16384),
+            Rationale = new string('\u0080', 16384),
+            EvidenceRefs = evidence,
+        };
+        var baseLength = RulingArtifact.Serialize(candidate).Length;
+        var excess = baseLength - RulingArtifact.MaximumBytes;
+        Assert.True(excess > 0, $"The measured seed record was not over the normalized byte limit: {baseLength} bytes.");
+        var replaceEscapes = excess / 5;
+        var removeAscii = excess % 5;
+        Assert.InRange(replaceEscapes, removeAscii, candidate.Decision.Length);
+        candidate = candidate with
+        {
+            Decision = new string('x', replaceEscapes - removeAscii) + new string('\u0080', candidate.Decision.Length - replaceEscapes),
+        };
+        var exactBytes = RulingArtifact.Serialize(candidate);
+        Assert.Equal(RulingArtifact.MaximumBytes, exactBytes.Length);
+        Assert.True(RulingArtifact.TryParse(exactBytes, true, out var parsedExact, out var exactCause, out var exactDetail), $"{exactCause}: {exactDetail}");
+        Assert.Equal(exactBytes, RulingArtifact.Serialize(parsedExact!));
+
+        var exactInput = workspace.Write("exact-one-mib.json", Encoding.UTF8.GetString(exactBytes));
+        var exactArgs = new[] { "ruling", "record", "--id", candidate.Id, "--domain", candidate.Domain, "--team", candidate.Team, "--from-file", exactInput, "--authority-role", "operator", "--write", "--format", "json" };
+        var writtenExact = InvokeRecordAt(CreateContext(workspace.Root), exactArgs, T0.AddMinutes(2));
+        Assert.Equal(0, writtenExact.ExitCode);
+        using (var writeResult = JsonDocument.Parse(writtenExact.Output))
+        {
+            Assert.Equal("written", writeResult.RootElement.GetProperty("disposition").GetString());
+            Assert.True(writeResult.RootElement.GetProperty("wrote").GetBoolean());
+            Assert.Equal(RulingArtifact.MaximumBytes, File.ReadAllBytes(Path.Combine(targetScope, candidate.Id + ".json")).Length);
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(exactBytes)).ToLowerInvariant(), writeResult.RootElement.GetProperty("content_sha256").GetString());
+        }
+        foreach (var operation in new[] { "show", "validate" })
+        {
+            var read = InvokeReadAt(CreateContext(workspace.Root), operation,
+                ["ruling", operation, candidate.Id, "--domain", candidate.Domain, "--team", candidate.Team, "--format", "json"], T0.AddMinutes(2));
+            Assert.Equal(0, read.ExitCode);
+            using var readResult = JsonDocument.Parse(read.Output);
+            Assert.Equal("active", readResult.RootElement.GetProperty("status").GetString());
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(exactBytes)).ToLowerInvariant(), readResult.RootElement.GetProperty("content_sha256").GetString());
+        }
+
+        var overCandidate = candidate with { Id = "R-OTHER-1MIB", Decision = candidate.Decision + "x" };
+        var overCanonical = RulingArtifact.Serialize(overCandidate);
+        Assert.Equal(RulingArtifact.MaximumBytes + 1, overCanonical.Length);
+        var escapedText = Encoding.UTF8.GetString(overCanonical);
+        const string unicodeEscape = "\\u0080";
+        var escapeOffset = escapedText.IndexOf(unicodeEscape, StringComparison.Ordinal);
+        Assert.True(escapeOffset >= 0);
+        var rawOverText = escapedText[..escapeOffset] + '\u0080' + escapedText[(escapeOffset + unicodeEscape.Length)..];
+        var rawOver = Encoding.UTF8.GetBytes(rawOverText);
+        Assert.True(rawOver.Length < RulingArtifact.MaximumBytes);
+        Assert.True(RulingArtifact.TryParse(rawOver, false, out var parsedOver, out var rawOverCause, out var rawOverDetail), $"{rawOverCause}: {rawOverDetail}");
+        Assert.Equal(RulingArtifact.MaximumBytes + 1, RulingArtifact.Serialize(parsedOver!).Length);
+        var overInput = workspace.Write("normalized-over-one-mib.json", rawOverText);
+        var overArgs = new[] { "ruling", "record", "--id", overCandidate.Id, "--domain", overCandidate.Domain, "--team", overCandidate.Team, "--from-file", overInput, "--authority-role", "operator", "--write", "--format", "json" };
+        var refusedOver = InvokeRecordAt(CreateContext(workspace.Root), overArgs, T0.AddMinutes(2));
+        Assert.Equal(1, refusedOver.ExitCode);
+        using var overResult = JsonDocument.Parse(refusedOver.Output);
+        Assert.Equal("ruling-normalized-size-limit", overResult.RootElement.GetProperty("cause").GetString());
+        Assert.False(overResult.RootElement.GetProperty("wrote").GetBoolean());
+        Assert.False(File.Exists(Path.Combine(targetScope, overCandidate.Id + ".json")));
     }
 
     [Fact]

@@ -107,6 +107,19 @@ internal static class RulingCommand
         if (supplied.AuthorityRole != "operator")
             return Emit(writer, parsed.Format, Refused("record", parsed, now, "ruling-invalid-authority", "only the literal operator assertion is supported; it is not authenticated"));
 
+        var inventoryCapacity = store.CheckInventoryCapacity(parsed.Domain!, parsed.Team!, parsed.Id!);
+        if (inventoryCapacity is not null)
+        {
+            var capacityResult = ResultFromEvaluation("record", parsed, now, inventoryCapacity, parsed.Write ? "write" : "dry-run");
+            var refused = capacityResult with
+            {
+                RecoveryHint = inventoryCapacity.Cause == "ruling-inventory-limit"
+                    ? "The exact-scope ruling inventory is at capacity; ask the responsible host operator to resolve scope capacity. Do not partially merge or archive records."
+                    : capacityResult.RecoveryHint,
+            };
+            return Emit(writer, parsed.Format, refused);
+        }
+
         var initial = store.Evaluate(parsed.Domain!, parsed.Team!, parsed.Id!, now);
         if (initial.Status == "unavailable" || initial.Status == "conflict")
             return Emit(writer, parsed.Format, ResultFromEvaluation("record", parsed, now, initial, parsed.Write ? "write" : "dry-run"));

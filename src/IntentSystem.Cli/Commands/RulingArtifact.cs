@@ -362,6 +362,40 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         return false;
     }
 
+    public RulingEvaluation? CheckInventoryCapacity(string domain, string team, string candidateId)
+    {
+        var directory = ScopeDirectory(domain, team);
+        if (!TryValidatePath(directory, domain, team, candidateId, out var pathCause, out var pathDetail))
+            return pathCause == "ruling-identity-conflict"
+                ? Conflict(pathCause, pathDetail, [], [], directory)
+                : Unavailable(pathCause, pathDetail, [], [], directory);
+        try
+        {
+            var state = Inspect(directory);
+            if (state.Error is not null) return Unavailable("ruling-artifact-unavailable", state.Error, [], [], directory);
+            if (!state.Exists) return null;
+            if (state.IsSymlink || !state.IsDirectory)
+                return Unavailable("ruling-unsafe-path", state.IsSymlink ? "scoped directory is a symlink" : "scoped path is not a directory", [], [], directory);
+
+            var artifacts = Directory.EnumerateFileSystemEntries(directory)
+                .Where(entry => Path.GetFileName(entry).EndsWith(".json", StringComparison.Ordinal))
+                .ToArray();
+            var artifactIds = artifacts.Select(entry => Path.GetFileName(entry)[..^5]);
+            if (HasCaseInsensitiveIdentifierCollision(artifactIds))
+                return Conflict("ruling-identity-conflict", "scoped inventory contains case-insensitive ruling ID aliases", [], [], directory);
+
+            var count = artifacts.Length;
+            if (!artifacts.Any(entry => string.Equals(Path.GetFileName(entry), candidateId + ".json", StringComparison.Ordinal))) count++;
+            return count > RulingArtifact.MaximumInventory
+                ? Unavailable("ruling-inventory-limit", "exact scope has more than 500 artifact entries including the candidate", [], [], directory)
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return Unavailable("ruling-artifact-unavailable", ex.Message, [], [], directory);
+        }
+    }
+
     public RulingEvaluation Evaluate(string domain, string team, string id, DateTimeOffset now,
         RulingArtifact? candidate = null, bool forAdmission = false)
     {
@@ -386,11 +420,18 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
             else
             {
                 var entries = Directory.EnumerateFileSystemEntries(directory).ToArray();
-                var artifactIds = entries.Select(entry => Path.GetFileName(entry))
-                    .Where(name => name is not null && name.EndsWith(".json", StringComparison.Ordinal))
-                    .Select(name => name![..^5]);
+                var artifactEntries = entries
+                    .Where(entry => Path.GetFileName(entry).EndsWith(".json", StringComparison.Ordinal))
+                    .ToArray();
+                var artifactIds = artifactEntries.Select(entry => Path.GetFileName(entry)[..^5]);
                 if (HasCaseInsensitiveIdentifierCollision(artifactIds))
                     return Conflict("ruling-identity-conflict", "scoped inventory contains case-insensitive ruling ID aliases", records, diagnostics, directory);
+                var inventoryCount = artifactEntries.Length;
+                if (candidate is not null && !artifactEntries.Any(entry => string.Equals(
+                        Path.GetFileName(entry), candidate.Id + ".json", StringComparison.Ordinal)))
+                    inventoryCount++;
+                if (inventoryCount > RulingArtifact.MaximumInventory)
+                    return Unavailable("ruling-inventory-limit", "exact scope has more than 500 artifact entries including the candidate", records, diagnostics, directory);
                 foreach (var entry in entries.Order(StringComparer.Ordinal))
                 {
                     var name = Path.GetFileName(entry);
@@ -430,8 +471,6 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
                     if (!bytes.AsSpan().SequenceEqual(canonical))
                         return Unavailable("ruling-noncanonical-artifact", "stored artifact bytes differ from canonical serialization", records, diagnostics, path);
                     records.Add(parsed);
-                    if (records.Count > RulingArtifact.MaximumInventory)
-                        return Unavailable("ruling-inventory-limit", "exact scope has more than 500 records", records, diagnostics, directory);
                 }
             }
         }
