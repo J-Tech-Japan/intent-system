@@ -12,6 +12,7 @@ public sealed class UnitStatusCommandG855Tests
 {
     private const string HeadSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string SourceIssueUrl = "https://github.com/J-Tech-Japan/intent-system/issues/1878";
+    private const string ForeignIssueUrl = "https://github.com/tomohisa/toy-calc-sample/issues/3";
     private static string LegacyForeignSourceReport => File.ReadAllText(Path.Combine(
         RepoVersionPolicySource.RepoRoot(), "tests", "IntentSystem.Cli.Tests", "Fixtures", "G859", "legacy-observed-report.yaml"));
 
@@ -40,6 +41,164 @@ public sealed class UnitStatusCommandG855Tests
             .ToDictionary(item => item.Key!, item => item.Value, StringComparer.Ordinal);
 
     private static JsonElement FindBugSource(JsonElement report) => TempHost.FindSubcheck(report, "bug-chain-or-ruling");
+
+    private static string SetTopLevelYamlField(string yaml, string fieldName, string replacement)
+    {
+        var lines = yaml.Split('\n').ToList();
+        var start = lines.FindIndex(line => line.StartsWith(fieldName + ":", StringComparison.Ordinal));
+        var replacementLines = replacement.TrimEnd('\n').Split('\n');
+        if (start < 0)
+        {
+            lines.AddRange(replacementLines);
+            return string.Join('\n', lines);
+        }
+
+        var end = start + 1;
+        while (end < lines.Count && lines[end].StartsWith("  - ", StringComparison.Ordinal)) end++;
+        lines.RemoveRange(start, end - start);
+        lines.InsertRange(start, replacementLines);
+        return string.Join('\n', lines);
+    }
+
+    private static string RemoveTopLevelYamlField(string yaml, string fieldName) =>
+        string.Join('\n', yaml.Split('\n').Where(line => !line.StartsWith(fieldName + ":", StringComparison.Ordinal)));
+
+    private static void AssertMalformedSourceInventoryReport(TempHost host, string reportFileName, string yaml, string sourceUrl)
+    {
+        Assert.Throws<InvalidOperationException>(() => BugReportArtifactYaml.Deserialize(yaml));
+        var reportPath = Path.Combine(host.Root, ".intent-cli", "bugs", reportFileName);
+        File.WriteAllText(reportPath, yaml);
+        var bytes = File.ReadAllBytes(reportPath);
+        var reader = new FixedReader(new UnitStatusRemoteSnapshot
+        {
+            State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha, Facts = [],
+        });
+
+        using var report = RunStatusJson(host, reader, out var exit);
+
+        Assert.Equal(1, exit);
+        var source = FindBugSource(report.RootElement);
+        Assert.Equal("unavailable", source.GetProperty("state").GetString());
+        Assert.Equal("source-report-unreadable", source.GetProperty("cause").GetString());
+        Assert.Equal("read-failure", source.GetProperty("unavailable_class").GetString());
+        Assert.Contains(reportFileName, source.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains(sourceUrl, source.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        var attempted = Assert.Single(source.GetProperty("evidence").EnumerateArray());
+        Assert.Equal("bug-report-artifact", attempted.GetProperty("kind").GetString());
+        Assert.Equal(".intent-cli/bugs/" + reportFileName, attempted.GetProperty("path").GetString());
+        Assert.Equal(sourceUrl, attempted.GetProperty("url").GetString());
+        Assert.Equal("attempted-canonical-source-inventory-read", attempted.GetProperty("provenance").GetString());
+        Assert.Equal(bytes, File.ReadAllBytes(reportPath));
+    }
+
+    private static FixedReader CreateKnownSixProvenanceLimitsReader()
+    {
+        const string repo = "J-Tech-Japan/intent-system";
+        const int pullRequest = 1864;
+        const string pullRequestUrl = "https://github.com/J-Tech-Japan/intent-system/pull/1864";
+        var approvalEvidence = new UnitStatusEvidencePointer
+        {
+            Kind = "pull-request-label",
+            Url = pullRequestUrl,
+            ExecutionUnit = "G855",
+            Repo = repo,
+            Pr = pullRequest,
+            HeadSha = HeadSha,
+            Provenance = "github-rest",
+        };
+        return new FixedReader(
+            new UnitStatusRemoteSnapshot
+            {
+                State = "completed",
+                HeadBefore = HeadSha,
+                HeadAfter = HeadSha,
+                HeadSha = HeadSha,
+                Facts =
+                [
+                    new UnitStatusFact
+                    {
+                        Id = "approval-head-receipt",
+                        State = UnitStatusStates.Unavailable,
+                        Cause = "approval-head-receipt-not-recorded",
+                        UnavailableClass = UnitStatusStates.ProvenanceLimit,
+                        RepairUnavailableReason = "no-supported-historical-receipt-writer",
+                        Evidence = [approvalEvidence],
+                    },
+                ],
+            },
+            new UnitStatusClaimSnapshot
+            {
+                State = UnitStatusStates.Unavailable,
+                Cause = "local-claim-ref-unavailable",
+                Detail = "local-claim-ref-unavailable: no configured local metadata branch is available; this reader does not infer or fetch a canonical claim branch.",
+                UnavailableClass = UnitStatusStates.ProvenanceLimit,
+            });
+    }
+
+    private static void AssertKnownSixProvenanceLimits(JsonElement report)
+    {
+        var expectedIds = new[]
+        {
+            "approval-head-receipt",
+            "design-claim-acquired",
+            "design-claim-release",
+            "implementation-claim-acquired",
+            "implementation-claim-release",
+            "worker-completion-receipt",
+        };
+        var allFacts = report.GetProperty("steps").EnumerateArray()
+            .SelectMany(step => step.GetProperty("subchecks").EnumerateArray()).ToArray();
+        var actualIds = allFacts
+            .Where(fact => fact.TryGetProperty("unavailable_class", out var unavailableClass)
+                && unavailableClass.GetString() == UnitStatusStates.ProvenanceLimit)
+            .Select(fact => fact.GetProperty("id").GetString()!)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expectedIds.OrderBy(id => id, StringComparer.Ordinal), actualIds);
+        Assert.Equal(6, report.GetProperty("summary").GetProperty("unavailable_class_counts")
+            .GetProperty(UnitStatusStates.ProvenanceLimit).GetInt32());
+        Assert.Equal(0, report.GetProperty("summary").GetProperty("observation_exit_code").GetInt32());
+
+        foreach (var id in expectedIds.Where(id => id.EndsWith("claim-acquired", StringComparison.Ordinal)
+            || id.EndsWith("claim-release", StringComparison.Ordinal)))
+        {
+            var fact = TempHost.FindSubcheck(report, id);
+            Assert.Equal("unavailable", fact.GetProperty("state").GetString());
+            Assert.Equal("local-claim-ref-unavailable", fact.GetProperty("cause").GetString());
+            Assert.Equal("provenance-limit", fact.GetProperty("unavailable_class").GetString());
+            Assert.Empty(fact.GetProperty("repair_commands").EnumerateArray());
+            Assert.Equal("no-supported-repair-command-in-this-slice", fact.GetProperty("repair_unavailable_reason").GetString());
+            var evidence = Assert.Single(fact.GetProperty("evidence").EnumerateArray());
+            Assert.Equal("local-claim-snapshot", evidence.GetProperty("kind").GetString());
+            Assert.Null(evidence.GetProperty("path").GetString());
+            Assert.Null(evidence.GetProperty("record_id").GetString());
+            Assert.Equal("G855", evidence.GetProperty("execution_unit").GetString());
+            Assert.Equal("intent-cli-dev", evidence.GetProperty("claim_team").GetString());
+            Assert.Equal("local-claim-snapshot-ref-unconfigured:scope=execution-unit:G855; ref=(unresolved); oid=(unresolved)",
+                evidence.GetProperty("provenance").GetString());
+        }
+
+        var worker = TempHost.FindSubcheck(report, "worker-completion-receipt");
+        Assert.Equal("unavailable", worker.GetProperty("state").GetString());
+        Assert.Equal("worker-completion-receipt-not-recorded", worker.GetProperty("cause").GetString());
+        Assert.Equal("provenance-limit", worker.GetProperty("unavailable_class").GetString());
+        Assert.Empty(worker.GetProperty("evidence").EnumerateArray());
+        Assert.Equal("no-supported-historical-worker-completion-receipt-writer", worker.GetProperty("repair_unavailable_reason").GetString());
+
+        var approval = TempHost.FindSubcheck(report, "approval-head-receipt");
+        Assert.Equal("unavailable", approval.GetProperty("state").GetString());
+        Assert.Equal("approval-head-receipt-not-recorded", approval.GetProperty("cause").GetString());
+        Assert.Equal("provenance-limit", approval.GetProperty("unavailable_class").GetString());
+        Assert.Equal("no-supported-historical-receipt-writer", approval.GetProperty("repair_unavailable_reason").GetString());
+        var approvalPointer = Assert.Single(approval.GetProperty("evidence").EnumerateArray());
+        Assert.Equal("pull-request-label", approvalPointer.GetProperty("kind").GetString());
+        Assert.Equal("https://github.com/J-Tech-Japan/intent-system/pull/1864", approvalPointer.GetProperty("url").GetString());
+        Assert.Equal("G855", approvalPointer.GetProperty("execution_unit").GetString());
+        Assert.Equal("J-Tech-Japan/intent-system", approvalPointer.GetProperty("repo").GetString());
+        Assert.Equal(1864, approvalPointer.GetProperty("pr").GetInt32());
+        Assert.Equal(HeadSha, approvalPointer.GetProperty("head_sha").GetString());
+        Assert.Equal("github-rest", approvalPointer.GetProperty("provenance").GetString());
+    }
 
     [Fact]
     public void RoleRecordEnumerationMoveNextFailureIsStructuredAndKeepsRowsReadBeforeFailure()
@@ -668,23 +827,17 @@ public sealed class UnitStatusCommandG855Tests
         host.WriteMode(TeamMode.SoloConductor);
         host.WritePacketAndPublishArtifact(sourceArtifact: SourceIssueUrl);
         host.WriteActualBugSourceChain("BUG-G859-TARGET", SourceIssueUrl);
-        var reader = new FixedReader(new UnitStatusRemoteSnapshot
-        {
-            State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha,
-            Facts = [new UnitStatusFact
-            {
-                Id = "observed-ci", State = UnitStatusStates.Unavailable, Cause = "check-attempt-unattributable",
-                Detail = "A pinned non-source provenance limit remains visible.", UnavailableClass = UnitStatusStates.ProvenanceLimit,
-            }],
-        });
+        var reader = CreateKnownSixProvenanceLimitsReader();
 
         using var before = RunStatusJson(host, reader, out var beforeExit);
         Assert.Equal(0, beforeExit);
+        AssertKnownSixProvenanceLimits(before.RootElement);
         var legacyPath = Path.Combine(host.Context.RepoRoot, ".intent-cli", "bugs", "AAA-legacy.report.yaml");
         File.WriteAllText(legacyPath, LegacyForeignSourceReport);
         var legacyBytes = File.ReadAllBytes(legacyPath);
         using var after = RunStatusJson(host, reader, out var afterExit);
         Assert.Equal(0, afterExit);
+        AssertKnownSixProvenanceLimits(after.RootElement);
         var markdown = RunStatusOutput(host, reader, "markdown", out var markdownExit);
         Assert.Equal(0, markdownExit);
 
@@ -880,6 +1033,62 @@ public sealed class UnitStatusCommandG855Tests
             Assert.Equal("source-chain-identity-conflict", source.GetProperty("cause").GetString());
             Assert.Equal("identity-conflict", source.GetProperty("unavailable_class").GetString());
         }
+    }
+
+    [Fact]
+    public void LegacyTargetUrlVetoesCanonicalForeignIssueAndUnitWhenReportSchemaIsInvalid()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact(sourceArtifact: SourceIssueUrl);
+        host.WriteActualBugSourceChain("BUG-G859-TARGET", SourceIssueUrl);
+        const string canonicalForeignUrl = "https://github.com/elsewhere/intent-system/issues/1878";
+        const string reportFileName = "AAA-G859-LEGACY-TARGET.report.yaml";
+        var reportPath = host.WriteActualBugReport("AAA-G859-LEGACY-TARGET", "Foreign canonical report", [canonicalForeignUrl], ["OTHER-UNIT"]);
+        var emitted = File.ReadAllText(reportPath);
+        var canonical = BugReportArtifactYaml.Deserialize(emitted);
+        Assert.Equal([canonicalForeignUrl], canonical.LinkedIssueRefs);
+        Assert.Equal(["OTHER-UNIT"], canonical.LinkedExecutionUnits);
+
+        var dualRouted = emitted + "observed_in:\n  linked_issue: \"" + SourceIssueUrl
+            + "\"\n  execution_unit: OTHER-LEGACY-UNIT\n";
+        Assert.Contains("linked_issue: \"" + SourceIssueUrl + "\"", dualRouted, StringComparison.Ordinal);
+        Assert.Contains("execution_unit: OTHER-LEGACY-UNIT", dualRouted, StringComparison.Ordinal);
+        var dualCanonical = BugReportArtifactYaml.Deserialize(dualRouted);
+        Assert.Equal([canonicalForeignUrl], dualCanonical.LinkedIssueRefs);
+        Assert.Equal(["OTHER-UNIT"], dualCanonical.LinkedExecutionUnits);
+        var invalid = RemoveTopLevelYamlField(dualRouted, "title");
+        Assert.NotEqual(dualRouted, invalid);
+
+        AssertMalformedSourceInventoryReport(host, reportFileName, invalid, SourceIssueUrl);
+    }
+
+    [Fact]
+    public void CanonicalTargetUrlVetoesLegacyForeignIssueAndUnitWhenReportSchemaIsInvalid()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact(sourceArtifact: SourceIssueUrl);
+        host.WriteActualBugSourceChain("BUG-G859-TARGET", SourceIssueUrl);
+        const string reportFileName = "AAA-G859-CANONICAL-TARGET.report.yaml";
+        var reportPath = host.WriteActualBugReport("AAA-G859-CANONICAL-TARGET", "Target canonical report", [SourceIssueUrl], ["OTHER-UNIT"]);
+        var emitted = File.ReadAllText(reportPath);
+        var canonical = BugReportArtifactYaml.Deserialize(emitted);
+        Assert.Equal([SourceIssueUrl], canonical.LinkedIssueRefs);
+        Assert.Equal(["OTHER-UNIT"], canonical.LinkedExecutionUnits);
+
+        var dualRouted = emitted
+            + "observed_in:\n  linked_issue: \"" + ForeignIssueUrl
+            + "\"\n  execution_unit: OTHER-LEGACY-UNIT\n";
+        Assert.Contains("linked_issue: \"" + ForeignIssueUrl + "\"", dualRouted, StringComparison.Ordinal);
+        Assert.Contains("execution_unit: OTHER-LEGACY-UNIT", dualRouted, StringComparison.Ordinal);
+        var dualCanonical = BugReportArtifactYaml.Deserialize(dualRouted);
+        Assert.Equal([SourceIssueUrl], dualCanonical.LinkedIssueRefs);
+        Assert.Equal(["OTHER-UNIT"], dualCanonical.LinkedExecutionUnits);
+        var invalid = RemoveTopLevelYamlField(dualRouted, "title");
+        Assert.NotEqual(dualRouted, invalid);
+
+        AssertMalformedSourceInventoryReport(host, reportFileName, invalid, SourceIssueUrl);
     }
 
     [Fact]
@@ -1083,6 +1292,101 @@ public sealed class UnitStatusCommandG855Tests
             Assert.Equal(SourceIssueUrl, attempted.GetProperty("url").GetString());
             Assert.Equal("attempted-canonical-source-inventory-read", attempted.GetProperty("provenance").GetString());
         }
+    }
+
+    public static IEnumerable<object[]> MalformedRoutingWithIndependentForeignProofCases()
+    {
+        yield return new object[] { "canonical", "linked_execution_units", "linked_execution_units: null\n" };
+        yield return new object[] { "canonical", "linked_execution_units", "linked_execution_units: OTHER-UNIT\n" };
+        yield return new object[] { "canonical", "linked_execution_units", "linked_execution_units:\n  - null\n" };
+        yield return new object[] { "canonical", "linked_execution_units", "linked_execution_units:\n  - [OTHER-UNIT]\n" };
+        yield return new object[] { "canonical", "linked_execution_units", "linked_execution_units:\n  - ../unsafe\n" };
+        yield return new object[] { "canonical", "observed_in", "observed_in: null\n" };
+        yield return new object[] { "canonical", "observed_in", "observed_in: OTHER\n" };
+        yield return new object[] { "canonical", "observed_in", "observed_in: []\n" };
+        yield return new object[] { "canonical", "observed_in", "observed_in:\n  linked_issue: \"" + ForeignIssueUrl + "\"\n" };
+        yield return new object[] { "canonical", "observed_in", "observed_in:\n  execution_unit: OTHER-UNIT\n" };
+        yield return new object[] { "canonical", "observed_in", "observed_in:\n  linked_issue: [\"" + ForeignIssueUrl + "\"]\n  execution_unit: OTHER-UNIT\n" };
+        yield return new object[] { "canonical", "observed_in", "observed_in:\n  linked_issue: \"" + ForeignIssueUrl + "\"\n  execution_unit: {unit: OTHER-UNIT}\n" };
+        yield return new object[] { "legacy", "linked_issue_refs", "linked_issue_refs: null\n" };
+        yield return new object[] { "legacy", "linked_issue_refs", "linked_issue_refs: \"" + ForeignIssueUrl + "\"\n" };
+        yield return new object[] { "legacy", "linked_issue_refs", "linked_issue_refs:\n  - null\n" };
+        yield return new object[] { "legacy", "linked_issue_refs", "linked_issue_refs:\n  - 1878\n" };
+        yield return new object[] { "legacy", "linked_issue_refs", "linked_issue_refs:\n  - {issue: \"" + ForeignIssueUrl + "\"}\n" };
+        yield return new object[] { "legacy", "linked_issue_refs", "linked_issue_refs:\n  - \"" + ForeignIssueUrl + "\"\n  - 1878\n" };
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedRoutingWithIndependentForeignProofCases))]
+    public void MalformedRoutingVetoesExclusionEvenWhenOtherFieldsProveForeignIdentity(
+        string sourceProof, string malformedField, string malformedRouting)
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact(sourceArtifact: SourceIssueUrl);
+        host.WriteActualBugSourceChain("BUG-G859-TARGET", SourceIssueUrl);
+        const string reportFileName = "AAA-G859-VETO.report.yaml";
+        var reportPath = host.WriteActualBugReport("AAA-G859-VETO", "Foreign veto fixture",
+            sourceProof == "canonical" ? [ForeignIssueUrl] : [],
+            sourceProof == "canonical" ? ["OTHER-UNIT"] : []);
+        var yaml = File.ReadAllText(reportPath);
+
+        if (sourceProof == "canonical")
+        {
+            Assert.Contains("linked_issue_refs:\n  - \"" + ForeignIssueUrl + "\"", yaml, StringComparison.Ordinal);
+        }
+        else
+        {
+            var legacyProof = "observed_in:\n  linked_issue: \"" + ForeignIssueUrl
+                + "\"\n  execution_unit: OTHER-UNIT\n";
+            yaml = SetTopLevelYamlField(yaml, "observed_in", legacyProof);
+            Assert.Contains(legacyProof.TrimEnd('\n'), yaml, StringComparison.Ordinal);
+        }
+
+        yaml = SetTopLevelYamlField(yaml, malformedField, malformedRouting);
+        Assert.Contains(malformedRouting.TrimEnd('\n'), yaml, StringComparison.Ordinal);
+        var invalid = RemoveTopLevelYamlField(yaml, "title");
+        Assert.NotEqual(yaml, invalid);
+
+        AssertMalformedSourceInventoryReport(host, reportFileName, invalid, SourceIssueUrl);
+    }
+
+    [Fact]
+    public void NestedMetadataTargetLookalikesDoNotVetoCanonicalForeignExclusion()
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact(sourceArtifact: SourceIssueUrl);
+        host.WriteActualBugSourceChain("BUG-G859-TARGET", SourceIssueUrl);
+        const string reportFileName = "AAA-G859-METADATA.report.yaml";
+        var reportPath = host.WriteActualBugReport("AAA-G859-METADATA", "Foreign report with metadata lookalikes",
+            [ForeignIssueUrl], ["OTHER-UNIT"]);
+        var emitted = File.ReadAllText(reportPath);
+        var withMetadata = emitted
+            + "metadata:\n  linked_issue_refs:\n    - \"" + SourceIssueUrl
+            + "\"\n  linked_execution_units: [G855]\n";
+        Assert.Contains("linked_issue_refs:\n  - \"" + ForeignIssueUrl + "\"", withMetadata, StringComparison.Ordinal);
+        Assert.Contains("    - \"" + SourceIssueUrl + "\"", withMetadata, StringComparison.Ordinal);
+        Assert.Contains("linked_execution_units: [G855]", withMetadata, StringComparison.Ordinal);
+        var invalid = RemoveTopLevelYamlField(withMetadata, "title");
+        Assert.NotEqual(withMetadata, invalid);
+        Assert.Throws<InvalidOperationException>(() => BugReportArtifactYaml.Deserialize(invalid));
+        File.WriteAllText(reportPath, invalid);
+        var bytes = File.ReadAllBytes(reportPath);
+        var reader = new FixedReader(new UnitStatusRemoteSnapshot
+        {
+            State = "completed", HeadBefore = HeadSha, HeadAfter = HeadSha, HeadSha = HeadSha, Facts = [],
+        });
+
+        using var report = RunStatusJson(host, reader, out var exit);
+
+        Assert.Equal(0, exit);
+        var source = FindBugSource(report.RootElement);
+        Assert.Equal("done", source.GetProperty("state").GetString());
+        Assert.Equal("canonical-source-chain-recorded", source.GetProperty("cause").GetString());
+        Assert.DoesNotContain(source.GetProperty("evidence").EnumerateArray(), item =>
+            item.GetProperty("path").GetString() == ".intent-cli/bugs/" + reportFileName);
+        Assert.Equal(bytes, File.ReadAllBytes(reportPath));
     }
 
     [Fact]
