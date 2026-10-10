@@ -127,6 +127,7 @@ internal static class ApprovalPostingOverride
                     string? previewReadError = null;
                     var historicalBindingCurrent = MatchesObserved(pair.Observed, pair.Prepared!, pair.PreparedSha256, first, request)
                         && pair.Observed.PreparedPublicationCommit == pair.PreparedCommit
+                        && CanContinue(pair.Prepared!, first)
                         && Converged(first.Labels, pair.Prepared!.IntendedAddLabels, pair.Prepared.IntendedRemoveLabels);
                     var previewStateCurrent = historicalBindingCurrent
                         && TryGetMutator(out previewMutator, out previewMutatorError)
@@ -184,6 +185,15 @@ internal static class ApprovalPostingOverride
             }
             else
                 sticky.RecordPrepared(prepared, preparedCommit);
+
+            if (preparedCommit is null)
+            {
+                return WriteResult(request, Facts(request, "unresolved", "prepared-publication-commit-unavailable",
+                    "The prepared audit/event pair is present, but its exact transaction commit could not be verified.",
+                    preparedPublished: true, preparedPath: prepared.PreparedPath,
+                    runPath: prepared.SelectedRunLogPath, recoveryCommand: Recovery(request)),
+                    first.Labels, first.Solo, first.CrossRuntime, false, false, writer);
+            }
 
             using var late = ApprovalPostingCheckout.Open(target);
             var beforeLabels = Assess(late, request);
@@ -404,7 +414,8 @@ internal static class ApprovalPostingOverride
             mutationAttempted: mutationAttempted, mayHaveApplied: mayHaveApplied,
                     labelStateObserved: true, authorizationBasis: observed.AuthorizationBasis,
             recoveryCommand: Recovery(request)),
-            current.Labels, current.Solo, current.CrossRuntime, true, cleared, writer, warning);
+            current.Labels, current.Solo, current.CrossRuntime, true, cleared, writer, warning,
+            observedOnly: !mutationAttempted);
     }
 
     private static int WriteAssessmentRefusal(ApprovalPostingOverrideRequest request, Assessment assessment, TextWriter writer,
@@ -612,7 +623,8 @@ internal static class ApprovalPostingOverride
         bool applied,
         bool ciWaitCleared,
         TextWriter writer,
-        string? ciWaitWarning = null)
+        string? ciWaitWarning = null,
+        bool observedOnly = false)
     {
         var plan = AutomationPrTransitionCommand.PlanTransition("approved");
         var remove = AutomationPrTransitionCommand.ResolveRemoveLabelsForMode(
@@ -627,8 +639,10 @@ internal static class ApprovalPostingOverride
             AddLabels = applied ? plan.AddLabels : Array.Empty<string>(),
             RemoveLabels = applied ? remove : Array.Empty<string>(),
             CurrentLabels = currentLabels,
-            Summary = applied
-                ? $"Applied approved transition to PR #{request.PullRequest} in {request.Repo} after the missing-posting exception was recorded."
+            Summary = applied && observedOnly
+                ? $"Observed the approved transition already converged on PR #{request.PullRequest} in {request.Repo}; no label action was applied by this invocation."
+                : applied
+                    ? $"Applied approved transition to PR #{request.PullRequest} in {request.Repo} after the missing-posting exception was recorded."
                 : $"Refused approved transition on PR #{request.PullRequest} in {request.Repo}: {overrideResult.Cause}.",
             CiWaitCleared = ciWaitCleared,
             CiWaitWarning = ciWaitWarning,
@@ -911,7 +925,6 @@ internal static class ApprovalPostingOverride
         { return refused("github-label-reader-unavailable", exception.Message, soloOutcome, crossOutcome); }
 
         var plan = AutomationPrTransitionCommand.PlanTransition("approved");
-        var remove = AutomationPrTransitionCommand.ResolveRemoveLabelsForMode("approved", WorkerClaimCompleteConstants.Modes.Write, plan.RemoveLabels, labels);
         var missing = soloEvaluation.MissingRelations;
         var eligible = soloEvaluation.Decision == SoloConductorApprovalGate.DecisionRefused
             && soloEvaluation.Cause == SoloConductorApprovalGate.CauseReviewMissing
@@ -950,7 +963,7 @@ internal static class ApprovalPostingOverride
             RunText = runText,
             RunEvents = runEvents,
             AddLabels = plan.AddLabels,
-            RemoveLabels = remove,
+            RemoveLabels = plan.RemoveLabels,
             SelectedQueueLayout = scoped ? "scoped" : "legacy",
         };
     }
@@ -1334,10 +1347,8 @@ internal static class ApprovalPostingOverride
             || !IsValidLabelSet(audit.IntendedRemoveLabels))
             return "a current or intended label collection contains a blank or duplicate value.";
         var approvedPlan = AutomationPrTransitionCommand.PlanTransition("approved");
-        var expectedRemoveLabels = AutomationPrTransitionCommand.ResolveRemoveLabelsForMode(
-            "approved", WorkerClaimCompleteConstants.Modes.Write, approvedPlan.RemoveLabels, audit.CurrentLabels);
         if (!LabelSetsEqual(audit.IntendedAddLabels, approvedPlan.AddLabels)
-            || !LabelSetsEqual(audit.IntendedRemoveLabels, expectedRemoveLabels))
+            || !LabelSetsEqual(audit.IntendedRemoveLabels, approvedPlan.RemoveLabels))
             return "intended label changes differ from the normal approved-transition plan.";
         return null;
     }
@@ -1462,8 +1473,7 @@ internal static class ApprovalPostingOverride
         && prepared.SelectedRunLogPath == current.RunPath && prepared.CanonicalTargetRef == current.CanonicalTargetRef
         && LabelSetsEqual(prepared.IntendedAddLabels, current.AddLabels)
         && LabelSetsEqual(prepared.IntendedRemoveLabels,
-            AutomationPrTransitionCommand.ResolveRemoveLabelsForMode("approved", WorkerClaimCompleteConstants.Modes.Write,
-                AutomationPrTransitionCommand.PlanTransition("approved").RemoveLabels, prepared.CurrentLabels))
+            AutomationPrTransitionCommand.PlanTransition("approved").RemoveLabels)
         && (current.OrdinarySatisfied || prepared.MissingRelations.OrderBy(x => x, StringComparer.Ordinal)
             .SequenceEqual(current.MissingRelations.OrderBy(x => x, StringComparer.Ordinal), StringComparer.Ordinal))
         && prepared.DecidingRecords.OrderBy(x => x.File, StringComparer.Ordinal).SequenceEqual(current.DecidingRecords.OrderBy(x => x.File, StringComparer.Ordinal));
@@ -1474,18 +1484,23 @@ internal static class ApprovalPostingOverride
 
     private static bool MatchesObserved(ObservedAudit observed, PreparedAudit prepared, string? preparedSha,
         Assessment current, ApprovalPostingOverrideRequest request) =>
+        MatchesObservedImmutable(observed, prepared, preparedSha, request)
+        && observed.ClaimEpochClaimedAt == current.ClaimEpoch;
+
+    private static bool MatchesObservedImmutable(ObservedAudit observed, PreparedAudit prepared, string? preparedSha,
+        ApprovalPostingOverrideRequest request) =>
         observed.SchemaVersion == "1" && observed.Operation == Operation
         && observed.OverrideId == request.OverrideId && observed.PreparedPath == prepared.PreparedPath
         && observed.ObservedPath == prepared.ObservedPath
         && observed.PreparedSha256 == preparedSha
         && observed.ExecutionUnit == request.ExecutionUnit && observed.Domain == prepared.Domain
         && observed.Team == prepared.Team && observed.Actor == prepared.Actor && observed.Scope == prepared.Scope
-        && observed.TargetRepo == request.Repo && observed.PullRequest == request.PullRequest
+        && SameRepo(observed.TargetRepo, request.Repo) && observed.PullRequest == request.PullRequest
         && observed.RequestedHeadSha.Equals(request.HeadSha, StringComparison.OrdinalIgnoreCase)
-        && observed.ClaimEpochClaimedAt == current.ClaimEpoch;
+        && observed.ClaimEpochClaimedAt == prepared.ClaimEpochClaimedAt;
 
     private static ObservedAudit BuildObserved(PreparedAudit prepared, Assessment current, IReadOnlyList<string> labels,
-        string? preparedCommit, string basis, bool mutationAttempted, bool mayHaveApplied) => new()
+        string preparedCommit, string basis, bool mutationAttempted, bool mayHaveApplied) => new()
     {
         SchemaVersion = "1", Operation = Operation, OverrideId = prepared.OverrideId,
         ExecutionUnit = prepared.ExecutionUnit, Domain = prepared.Domain, Team = prepared.Team,
@@ -1493,7 +1508,7 @@ internal static class ApprovalPostingOverride
         TargetRepo = prepared.TargetRepo, PullRequest = prepared.PullRequest, RequestedHeadSha = prepared.RequestedHeadSha,
         PreparedPath = prepared.PreparedPath, ObservedPath = prepared.ObservedPath,
         PreparedSha256 = Sha256Hex(SerializeAuditBytes(prepared)),
-        PreparedPublicationCommit = preparedCommit ?? current.CanonicalSnapshotOid!, ObservedAt = DateTimeOffset.UtcNow,
+        PreparedPublicationCommit = preparedCommit, ObservedAt = DateTimeOffset.UtcNow,
         HeadBeforeAction = prepared.RequestedHeadSha, HeadAfterAction = current.CurrentHead!,
         LabelsObserved = labels, AuthorizationBasis = basis,
         MutationAttempted = mutationAttempted, MayHaveApplied = mayHaveApplied,
@@ -1514,7 +1529,10 @@ internal static class ApprovalPostingOverride
             var existing = ReadPair(checkout, current.RunPath!, request, path, observedPath);
             if (!existing.Valid) return new PublicationResult(false, existing.Cause, existing.Detail, path, current.RunPath, null);
             if (existing.Prepared is not null)
-                return new PublicationResult(true, null, null, path, current.RunPath, existing.PreparedCommit, existing.Prepared);
+                return existing.PreparedCommit is null
+                    ? new PublicationResult(false, "prepared-publication-commit-unavailable",
+                        "The existing prepared pair has no verifiable transaction commit.", path, current.RunPath, null)
+                    : new PublicationResult(true, null, null, path, current.RunPath, existing.PreparedCommit, existing.Prepared);
             var audit = CreatePrepared(current, request, path, observedPath);
             var relativeDirectory = Path.GetDirectoryName(Path.Combine(checkout.Root, path.Replace('/', Path.DirectorySeparatorChar)))!;
             Directory.CreateDirectory(relativeDirectory);
@@ -1535,20 +1553,17 @@ internal static class ApprovalPostingOverride
             if (!CommitAndPush(checkout, [path, current.RunPath!], "Record prepared approval posting override", out var commit, out lastError))
             {
                 if (TryVerifyPreparedPublication(target, request, path, observedPath, current.RunPath!,
-                        Sha256Hex(SerializeAuditBytes(audit)), out var publishedPair))
+                        Sha256Hex(SerializeAuditBytes(audit)), commit, out var publishedPair))
                     return new PublicationResult(true, null, null, path, current.RunPath,
                         publishedPair.PreparedCommit, publishedPair.Prepared);
                 if (attempt + 1 < MaximumPublicationAttempts) continue;
                 break;
             }
-            using var verify = ApprovalPostingCheckout.Open(target);
-            var verifiedAssessment = Assess(verify, request);
-            if (!verifiedAssessment.Readable) return new PublicationResult(false, "prepared-verification-unavailable", verifiedAssessment.Detail, path, current.RunPath, commit);
-            var verifiedPair = ReadPair(verify, verifiedAssessment.RunPath!, request, path, observedPath);
-            if (verifiedPair.Valid && verifiedPair.Prepared is not null
-                && verifiedPair.PreparedSha256 == Sha256Hex(SerializeAuditBytes(audit)))
-                return new PublicationResult(true, null, null, path, current.RunPath, commit, verifiedPair.Prepared);
-            lastError = "The canonical branch did not contain the exact prepared file and event after push.";
+            if (TryVerifyPreparedPublication(target, request, path, observedPath, current.RunPath!,
+                    Sha256Hex(SerializeAuditBytes(audit)), commit, out var verifiedPair))
+                return new PublicationResult(true, null, null, path, current.RunPath,
+                    verifiedPair.PreparedCommit, verifiedPair.Prepared);
+            lastError = "The canonical branch did not contain the exact prepared file, event, and transaction commit after push.";
         }
         return new PublicationResult(false, "prepared-publication-unconfirmed", lastError ?? "Canonical prepared publication was not confirmed.", path, null, null);
     }
@@ -1564,7 +1579,7 @@ internal static class ApprovalPostingOverride
             if (!current.Readable || !Matches(prepared, current, request) || !CanContinue(prepared, current))
                 return new PublicationResult(false, current.Cause ?? "outcome-binding-changed", current.Detail, prepared.ObservedPath, current.RunPath, null);
             var pair = ReadPair(checkout, current.RunPath!, request, prepared.PreparedPath, prepared.ObservedPath);
-            if (!pair.Valid || pair.Prepared is null)
+            if (!pair.Valid || pair.Prepared is null || pair.PreparedCommit is null)
                 return new PublicationResult(false, pair.Cause ?? "prepared-pair-unavailable", pair.Detail, prepared.ObservedPath, current.RunPath, null);
             IGitHubLabelMutator? mutator = null;
             string? mutatorError = null;
@@ -1582,6 +1597,7 @@ internal static class ApprovalPostingOverride
             {
                 if (!MatchesObserved(pair.Observed, pair.Prepared, pair.PreparedSha256, current, request)
                     || pair.Observed.PreparedPublicationCommit != pair.PreparedCommit
+                    || pair.ObservedCommit is null
                     || !Converged(liveLabels!, prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
                     return new PublicationResult(false, "observed-binding-conflict",
                         "The existing observed audit no longer matches the exact prepared bytes or current live state.",
@@ -1610,40 +1626,25 @@ internal static class ApprovalPostingOverride
                 if (attempt + 1 < MaximumPublicationAttempts) continue;
                 break;
             }
-            using var verify = ApprovalPostingCheckout.Open(target);
-            var verifyAssessment = Assess(verify, request);
-            if (!verifyAssessment.Readable) return new PublicationResult(false, "observed-verification-unavailable", verifyAssessment.Detail, prepared.ObservedPath, current.RunPath, commit);
-            IGitHubLabelMutator? verifyMutator = null;
-            string? verifyMutatorError = null;
-            string? verifyHead = null;
-            IReadOnlyList<string>? verifyLabels = null;
-            string? verifyReadError = null;
-            if (!TryGetMutator(out verifyMutator, out verifyMutatorError)
-                || !TryObserve(request, verifyMutator!, out verifyHead, out verifyLabels, out verifyReadError)
-                || !string.Equals(verifyHead, request.HeadSha, StringComparison.OrdinalIgnoreCase)
-                || !Converged(verifyLabels ?? [], prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
-                return new PublicationResult(false, "observed-live-state-changed",
-                    verifyMutatorError ?? verifyReadError ?? "The requested head or labels changed after the observed pair was pushed.",
-                    prepared.ObservedPath, current.RunPath, commit);
-            var verified = ReadPair(verify, verifyAssessment.RunPath!, request, prepared.PreparedPath, prepared.ObservedPath);
-            if (verified.Valid && verified.Prepared is not null && verified.Observed is not null
-                && verified.ObservedSha256 == Sha256Hex(SerializeAuditBytes(refreshedObserved))
-                && MatchesObserved(verified.Observed, verified.Prepared, verified.PreparedSha256, verifyAssessment, request))
-                return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, commit);
-            lastError = "The canonical branch did not contain the observed audit/event pair after push.";
+            if (TryVerifyObservedPublication(target, request, prepared, auditBytes, out var verifiedCommit, out var verifyError))
+                return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, verifiedCommit);
+            lastError = verifyError ?? "The canonical branch did not contain the observed audit/event pair after push.";
         }
         return new PublicationResult(false, "observed-publication-unconfirmed", lastError ?? "Canonical outcome publication was not confirmed.", prepared.ObservedPath, null, null);
     }
 
     private static bool TryVerifyPreparedPublication(CanonicalTarget target, ApprovalPostingOverrideRequest request,
-        string preparedPath, string observedPath, string runPath, string expectedSha, out ExistingPair verified)
+        string preparedPath, string observedPath, string runPath, string expectedSha, string? attemptedCommit,
+        out ExistingPair verified)
     {
         verified = new ExistingPair(false, null, null, false, false, null, null, null, null);
         try
         {
             using var checkout = ApprovalPostingCheckout.Open(target);
             var pair = ReadPair(checkout, runPath, request, preparedPath, observedPath);
-            if (!pair.Valid || pair.Prepared is null || pair.PreparedSha256 != expectedSha) return false;
+            if (!pair.Valid || pair.Prepared is null || pair.PreparedSha256 != expectedSha
+                || string.IsNullOrWhiteSpace(attemptedCommit)
+                || !string.Equals(pair.PreparedCommit, attemptedCommit, StringComparison.OrdinalIgnoreCase)) return false;
             verified = pair;
             return true;
         }
@@ -1661,29 +1662,12 @@ internal static class ApprovalPostingOverride
         try
         {
             using var checkout = ApprovalPostingCheckout.Open(target);
-            var current = Assess(checkout, request);
-            if (!current.Readable || !Matches(prepared, current, request) || !CanContinue(prepared, current))
-            {
-                error = current.Detail ?? "The canonical authorization changed after the outcome push attempt.";
-                return false;
-            }
-            IGitHubLabelMutator? mutator = null;
-            string? mutatorError = null;
-            string? head = null;
-            IReadOnlyList<string>? labels = null;
-            string? observeError = null;
-            if (!TryGetMutator(out mutator, out mutatorError)
-                || !TryObserve(request, mutator!, out head, out labels, out observeError)
-                || !string.Equals(head, request.HeadSha, StringComparison.OrdinalIgnoreCase)
-                || !Converged(labels ?? [], prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
-            {
-                error = mutatorError ?? observeError ?? "The requested head and labels are not currently converged.";
-                return false;
-            }
-            var pair = ReadPair(checkout, current.RunPath!, request, prepared.PreparedPath, prepared.ObservedPath);
+            var pair = ReadPair(checkout, prepared.SelectedRunLogPath, request, prepared.PreparedPath, prepared.ObservedPath);
             if (!pair.Valid || pair.Prepared is null || pair.Observed is null
+                || pair.PreparedCommit is null || pair.ObservedCommit is null
                 || pair.ObservedSha256 != Sha256Hex(expectedObservedBytes)
-                || !MatchesObserved(pair.Observed, pair.Prepared, pair.PreparedSha256, current, request)
+                || pair.PreparedSha256 != Sha256Hex(SerializeAuditBytes(prepared))
+                || !MatchesObservedImmutable(pair.Observed, pair.Prepared, pair.PreparedSha256, request)
                 || pair.Observed.PreparedPublicationCommit != pair.PreparedCommit)
             {
                 error = pair.Detail ?? "The exact observed audit/event pair is not present on the canonical branch.";
@@ -1800,6 +1784,8 @@ internal static class ApprovalPostingOverride
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
             UseShellExecute = false,
             CreateNoWindow = true,
         };

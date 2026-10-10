@@ -669,7 +669,7 @@ command は review 読み取り前と label 直前に head を読みます。Git
 
 ### G834 宣言 team の missing-posting 例外（G861 — preview-through-1.x）
 
-G861 は、記録済み solo-conductor team の G834 local gate が満たされ、G856 が canonical posted approval comment の欠落だけを理由に `review-missing` を返す場合に限り、approved transition 専用の明示的な例外を追加します。local approval、negative/unknown review、head/ownership check、unavailable/conflicting record、その他の gate cause は無視できません。canonical queue は同じ execution unit、repo、PR を示す必要があります。すでに posting 済みの状態や G834 未宣言 team には適用されません。
+G861 は、記録済み solo-conductor team の G834 local gate が満たされ、G856 が canonical posted approval comment の欠落だけを理由に `review-missing` を返す場合に限り、approved transition 専用の明示的な例外を追加します。local approval、negative/unknown review、head/ownership check、unavailable/conflicting record、その他の gate cause は無視できません。canonical queue は同じ execution unit、repo、PR を示し、解決済み domain/team の G834 declaration にその repo が含まれる必要があります。すでに posting 済みの状態や G834 未宣言 team には適用されません。
 
 flag には明示的な repo、PR、execution unit、full head、現在保持している builder actor/team、空でない reason、UUID が必要です。reason は operator の記録であり、intent-cli は外部承認や reason の妥当性を検証しません。この flag は未公開の local review/config を公開せず、GitHub review/comment も作りません。先に必要な review record と config を canonical host branch へ公開します。その後 command が immutable prepared audit と選択済み run event を canonical branch に記録してから label を変更します:
 

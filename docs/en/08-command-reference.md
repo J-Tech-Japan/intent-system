@@ -752,7 +752,8 @@ G856 reports `review-missing` solely because one or both currently deciding
 canonical approval comments are missing. It cannot bypass either local
 approval, a negative or unknown review, head or ownership checks, an unavailable
 or conflicting record, or any other gate cause. The canonical queue must bind
-the same execution unit, repository and PR. An already-satisfied or
+the same execution unit, repository and PR, and the resolved domain/team's G834
+declaration must include that repository. An already-satisfied or
 undeclared-team request is not applicable.
 
 The flag requires explicit repository, PR, execution unit and full head, plus

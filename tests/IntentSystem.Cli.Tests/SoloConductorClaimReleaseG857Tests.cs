@@ -1217,15 +1217,22 @@ public sealed class SoloConductorClaimReleaseG857Tests
     }
 
     [Fact]
-    public void PrTransitionKeepsOverrideAsUnknownArgument_G860()
+    public void PrTransitionRecognizesApprovedOnlyOverrideAndRejectsOtherTransitions_G860()
     {
         var output = new StringWriter();
         var exit = AutomationPrTransitionCommand.Execute(Context(Path.GetTempPath()),
             ["--repo", Repo, "--pr", PullRequest.ToString(System.Globalization.CultureInfo.InvariantCulture),
              "--transition", "request-update", "--override-loop-evidence", "--format", "json"], output);
         Assert.Equal(1, exit);
-        Assert.Contains("Unknown argument '--override-loop-evidence'", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--override-loop-evidence is supported only with --transition approved", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("usage:", output.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        var reviewStartOutput = new StringWriter();
+        var reviewStartExit = AutomationPrTransitionCommand.Execute(Context(Path.GetTempPath()),
+            ["--repo", Repo, "--pr", PullRequest.ToString(System.Globalization.CultureInfo.InvariantCulture),
+             "--transition", "review-start", "--override-loop-evidence", "--format", "json"], reviewStartOutput);
+        Assert.Equal(1, reviewStartExit);
+        Assert.Contains("--override-loop-evidence is supported only with --transition approved", reviewStartOutput.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
