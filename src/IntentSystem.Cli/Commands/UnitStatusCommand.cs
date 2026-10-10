@@ -682,6 +682,9 @@ internal static class UnitStatusCommand
                 return;
             }
 
+            if (sourceUrl is not null && IsPositivelyUnrelatedSourceReport(yaml, sourceUrl, unit))
+                continue;
+
             BugReportArtifact report;
             try { report = BugReportArtifactYaml.Deserialize(yaml); }
             catch (Exception exception) when (IsReadException(exception))
@@ -802,6 +805,105 @@ internal static class UnitStatusCommand
         };
         facts.Add(Done("bug-chain-or-ruling", "canonical-source-chain-recorded", "The packet's explicit source issue resolves to one identity-matched canonical report, triage, and plan chain.")
             with { Evidence = chainEvidence });
+    }
+
+    private static bool IsPositivelyUnrelatedSourceReport(string yaml, string sourceUrl, string unit)
+    {
+        if (!TryParseGithubUrl(sourceUrl, "issues", out var requestedRepo, out var requestedIssue)) return false;
+
+        try
+        {
+            var stream = new YamlStream();
+            using var reader = new StringReader(yaml);
+            stream.Load(reader);
+            if (stream.Documents.Count != 1 || stream.Documents[0].RootNode is not YamlMappingNode root) return false;
+
+            var hasCanonicalIssues = false;
+            var canonicalForeignIssue = false;
+            var targetIssueAssertion = false;
+            if (!TryGetUniqueMappingValue(root, "linked_issue_refs", out hasCanonicalIssues, out var issueNode)) return false;
+            if (hasCanonicalIssues)
+            {
+                if (issueNode is not YamlSequenceNode issueSequence) return false;
+                foreach (var node in issueSequence.Children)
+                {
+                    if (!TryGetProjectionScalar(node, out var issueReference)
+                        || !TryParseGithubUrl(issueReference, "issues", out var repo, out var issue)) return false;
+                    if (issue == requestedIssue && string.Equals(repo, requestedRepo, StringComparison.OrdinalIgnoreCase))
+                        targetIssueAssertion = true;
+                    else
+                        canonicalForeignIssue = true;
+                }
+            }
+
+            var currentUnitAssertion = false;
+            if (!TryGetUniqueMappingValue(root, "linked_execution_units", out var hasCanonicalUnits, out var unitNode)) return false;
+            if (hasCanonicalUnits)
+            {
+                if (unitNode is not YamlSequenceNode unitSequence) return false;
+                foreach (var node in unitSequence.Children)
+                {
+                    if (!TryGetProjectionScalar(node, out var executionUnit)
+                        || !KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out _)) return false;
+                    if (string.Equals(executionUnit, unit, StringComparison.Ordinal)) currentUnitAssertion = true;
+                }
+            }
+
+            var legacyForeignPair = false;
+            if (!TryGetUniqueMappingValue(root, "observed_in", out var hasObservedIn, out var observedInNode)) return false;
+            if (hasObservedIn)
+            {
+                if (observedInNode is not YamlMappingNode observedIn) return false;
+                if (!TryGetUniqueMappingValue(observedIn, "linked_issue", out var hasLegacyIssue, out var legacyIssueNode)
+                    || !TryGetUniqueMappingValue(observedIn, "execution_unit", out var hasLegacyUnit, out var legacyUnitNode)) return false;
+                if (hasLegacyIssue != hasLegacyUnit) return false;
+                if (hasLegacyIssue)
+                {
+                    if (!TryGetProjectionScalar(legacyIssueNode, out var legacyIssueReference)
+                        || !TryParseGithubUrl(legacyIssueReference, "issues", out var legacyRepo, out var legacyIssue)
+                        || !TryGetProjectionScalar(legacyUnitNode, out var legacyExecutionUnit)
+                        || !KnowledgeWriteBackRecord.TryValidateExecutionUnit(legacyExecutionUnit, out _)) return false;
+                    if (legacyIssue == requestedIssue && string.Equals(legacyRepo, requestedRepo, StringComparison.OrdinalIgnoreCase))
+                        targetIssueAssertion = true;
+                    if (string.Equals(legacyExecutionUnit, unit, StringComparison.Ordinal)) currentUnitAssertion = true;
+                    legacyForeignPair = !(legacyIssue == requestedIssue && string.Equals(legacyRepo, requestedRepo, StringComparison.OrdinalIgnoreCase))
+                        && !string.Equals(legacyExecutionUnit, unit, StringComparison.Ordinal);
+                }
+            }
+
+            return !targetIssueAssertion && !currentUnitAssertion && (canonicalForeignIssue || legacyForeignPair);
+        }
+        catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidOperationException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetUniqueMappingValue(YamlMappingNode mapping, string key, out bool present, out YamlNode? value)
+    {
+        var matches = mapping.Children
+            .Where(entry => entry.Key is YamlScalarNode scalar && string.Equals(scalar.Value, key, StringComparison.Ordinal))
+            .Select(entry => entry.Value)
+            .Take(2)
+            .ToArray();
+        present = matches.Length == 1;
+        value = present ? matches[0] : null;
+        return matches.Length < 2;
+    }
+
+    private static bool TryGetProjectionScalar(YamlNode? node, out string value)
+    {
+        value = "";
+        if (node is not YamlScalarNode scalar || scalar.Value is not { } text || string.IsNullOrWhiteSpace(text)) return false;
+        var tag = scalar.Tag.ToString();
+        var hasExplicitTag = tag.Length > 0 && tag is not ("!" or "?");
+        var isNullTag = string.Equals(tag, "!!null", StringComparison.Ordinal)
+            || string.Equals(tag, "tag:yaml.org,2002:null", StringComparison.Ordinal);
+        if (isNullTag
+            || !hasExplicitTag && scalar.Style == YamlDotNet.Core.ScalarStyle.Plain
+                && (text == "~" || string.Equals(text, "null", StringComparison.OrdinalIgnoreCase))) return false;
+        value = text;
+        return true;
     }
 
     private static bool HasExplicitKnowledgeWriteBackDeclaration(string yaml)

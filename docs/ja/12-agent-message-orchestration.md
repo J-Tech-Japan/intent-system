@@ -137,6 +137,10 @@ PR が未 link の場合、issue label は読めますが PR-bound fact は `pr-
 local metadata snapshot のみを使います。branch 未設定や source/write topology の差は claim provenance を制限し、default branch の
 推測や fetch は行いません。state、cause、unavailable class の count を合わせて確認してください。
 
+明示された source issue URL では、正確な routing により requested issue と unit に無関係だと証明できる report だけを除外します。
+関連する report や scope を確定できない report は表示され、source を unavailable にすることがあります。legacy `observed_in` routing は除外専用で、
+canonical completion evidence にはなりません。packet の明示 report path は厳密に扱います。既知の 6 件の provenance limit は変わりません。
+
 ## cross-runtime implementation review（G834 — preview-through-1.x）
 
 team は、各 implementation PR を別 runtime（Codex、Claude Code、Cursor agent を

@@ -604,6 +604,11 @@ object ID は読んだ snapshot を特定しますが、remote canonical claim b
 source/write branch が異なる場合や `same_repo_topology = false` の場合、選択 snapshot に別 branch の claim が無いことがあります。
 同じ check context の Actions run が複数あり、各 row を区別できない場合は identity conflict を維持します。
 
+明示された source issue URL では、対応する正確な routing field により requested issue と unit のどちらにも関係しないと証明できる
+report だけを、上限付き inventory から除外できます。関連する report や scope を確定できない entry は、別に有効な chain があっても
+表示され、source を unavailable にすることがあります。legacy `observed_in` routing は除外専用で、canonical completion evidence
+にはしません。packet の明示 report path は従来どおり厳密に検証します。既知の 6 件の provenance limit は変更しません。
+
 exit 0 は observation が完了したことを示し、evidence の欠落や既知の `provenance-limit` だけで unavailable
 となる場合も含みます。exit 1 は不正な request または provenance 以外の observation failure を示します。
 どちらも完了や merge readiness の判断ではありません。過去の exact-head approval receipt や

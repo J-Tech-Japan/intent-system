@@ -154,6 +154,13 @@ local metadata snapshot only. An unset branch or a source/write topology split
 can limit claim provenance; the observer does not guess a default branch or
 fetch. Read the state, cause, and unavailable-class counts together.
 
+For an explicit source issue URL, unit status skips a report only when its
+exact supported routing proves it unrelated to the requested issue and unit.
+Relevant or unscopable reports remain visible and can make the source
+unavailable. Legacy `observed_in` routing is exclusion-only, never canonical completion
+evidence; an explicit packet report path remains strict. The six known
+provenance limits are unchanged.
+
 ## Cross-runtime implementation review (G834 — preview-through-1.x)
 
 A team can require that each implementation PR is also reviewed by a reviewer on

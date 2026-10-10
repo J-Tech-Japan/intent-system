@@ -288,6 +288,7 @@ public sealed class G833SoloConductorTests : IDisposable
             {
                 Assert.Contains(heading, markdown.ToString(), StringComparison.Ordinal);
             }
+            Assert.Contains("Legacy routing is exclusion-only, never canonical completion evidence", markdown.ToString(), StringComparison.Ordinal);
 
             using var json = new StringWriter();
             Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", "json"], BareContext(bare), json));
@@ -296,6 +297,8 @@ public sealed class G833SoloConductorTests : IDisposable
             Assert.Equal(GuideSoloConductorCommand.CommandName, guide.GetProperty("route").GetString());
             Assert.True(guide.GetProperty("metadata_free").GetBoolean());
             Assert.Equal(Enumerable.Range(1, 10), guide.GetProperty("loop").EnumerateArray().Select(step => step.GetProperty("number").GetInt32()));
+            var statusStep = guide.GetProperty("loop").EnumerateArray().Single(step => step.GetProperty("number").GetInt32() == 7);
+            Assert.Contains("Legacy routing is exclusion-only, never canonical completion evidence", statusStep.GetProperty("instruction").GetString(), StringComparison.Ordinal);
             Assert.Equal(5, guide.GetProperty("independence_rules").GetArrayLength());
             Assert.All(guide.GetProperty("independence_rules").EnumerateArray(), rule => Assert.StartsWith("Blocking:", rule.GetString(), StringComparison.Ordinal));
             Assert.Empty(Directory.EnumerateFileSystemEntries(bare));
@@ -503,7 +506,18 @@ public sealed class G833SoloConductorTests : IDisposable
             Assert.Contains("solo-conductor", orchestration, StringComparison.Ordinal);
             Assert.Contains("G833", orchestration, StringComparison.Ordinal);
 
+            var commandReference = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "08-command-reference.md"));
             var ledger = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "1.0-compatibility-ledger.md"));
+            var exclusionPhrase = language == "en"
+                ? "Legacy `observed_in` routing is exclusion-only"
+                : "legacy `observed_in` routing は除外専用";
+            foreach (var document in new[] { commandReference, orchestration, ledger })
+            {
+                var normalizedDocument = Regex.Replace(document, @"\s+", " ");
+                Assert.Contains(exclusionPhrase, normalizedDocument, StringComparison.Ordinal);
+                Assert.Contains(language == "en" ? "six known provenance limit" : "6 件の provenance limit", normalizedDocument, StringComparison.Ordinal);
+            }
+
             Assert.Contains("| `guide solo-conductor` |", ledger, StringComparison.Ordinal);
             Assert.Contains("G833/G842; `preview-through-1.x`", ledger, StringComparison.Ordinal);
             foreach (var document in new[] { orchestration, ledger })

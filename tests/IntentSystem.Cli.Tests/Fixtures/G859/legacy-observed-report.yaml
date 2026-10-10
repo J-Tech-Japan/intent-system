@@ -1,0 +1,23 @@
+bug_id: BUG-20260416-fix-worktree-diff-blocked-after-backend-exit
+reported_at: "2026-04-16T20:45:30Z"
+summary: "Root run blocks on backend-exit even when the latest fix session leaves valid tested worktree changes."
+statement_ref: ".intent-cli/bugs/BUG-20260416-fix-worktree-diff-blocked-after-backend-exit.statement.md"
+observed_in:
+  host_repo: "/Users/tomohisa/dev/GitHub/MyIntentHost"
+  child_repo: "J-Tech-Japan/intent-system"
+  product_repo: "/Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample"
+  execution_unit: "TOY-CALC-V0-01"
+  linked_issue: "https://github.com/tomohisa/toy-calc-sample/issues/3"
+  linked_pr: "https://github.com/tomohisa/toy-calc-sample/pull/4"
+  accepted_child_main: "7cc492b5d039365f49c9aaa4bc8025b69a0fa796"
+symptoms:
+  - "Root orchestration auto-resumes fix sessions `pid:95703`, `pid:8777`, and `pid:9861`, then blocks after `pid:10686` with `retry-exhausted` and `parent-intent-update-required`."
+  - "Current session `pid:10686` appends canonical same-session `payload.type=backend-exit exit_code=1`."
+  - "The execution-unit worktree `.intent-cli/worktrees/TOY-CALC-V0-01` is left dirty with source changes in `src/ToyCalc/Calculator.cs`, `src/ToyCalc/CommandLine.cs`, and `tests/ToyCalc.Tests/CalculatorTests.cs`."
+  - "`dotnet test` on that worktree passes, and `dotnet run --project src/ToyCalc/ToyCalc.csproj -- add 2 3` returns `5`."
+current_artifacts:
+  root_result_ref: "/Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/run.result.json"
+  queue_state_ref: "/Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/queue-state.json"
+  normalized_result_ref: "/Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/runs/TOY-CALC-V0-01.result.json"
+  provider_log_ref: "/Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/runs/TOY-CALC-V0-01.provider.jsonl"
+  worktree_ref: "/Users/tomohisa/dev/GitHub/MyIntentHost/submodules/toy-calc-sample/.intent-cli/worktrees/TOY-CALC-V0-01"
