@@ -102,12 +102,14 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
     {
         using var workspace = new AdoptionWorkspace();
         var cutoff = new DateTimeOffset(2026, 8, 20, 0, 0, 0, TimeSpan.Zero);
+        var createdAt = cutoff.AddDays(-1);
+        var publishedAt = cutoff.AddDays(1);
         const string unit = "G858-url-only";
         workspace.WriteDebtPacket(unit);
         workspace.WriteDraftPublishArtifact(unit);
         IssueCreateCommand.PublisherFactory = () => new FakePublisher(412);
         IssueCreateCommand.GitCommandRunnerFactory = () => new FakeGitRunner();
-        IssueCreateCommand.TimestampFactory = () => cutoff;
+        IssueCreateCommand.TimestampFactory = () => createdAt;
 
         using var writer = new StringWriter();
         var exitCode = IssueCreateCommand.Execute(workspace.Context, [unit], writer);
@@ -119,19 +121,56 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
         Assert.Null(emitted.Reason);
         Assert.Null(emitted.Repo);
 
-        PublishMarker(workspace, unit, cutoff.AddDays(1));
+        PublishMarker(workspace, unit, publishedAt);
         var published = Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunLogPath)),
             item => item.Event == "issue-published");
         Assert.Equal(unit, published.ExecutionUnit);
         Assert.Equal("https://github.com/J-Tech-Japan/intent-system/issues/412", published.LinkedIssue);
-        Assert.Equal(cutoff.AddDays(1), published.Ts);
+        Assert.Equal(publishedAt, published.Ts);
+        Assert.True(createdAt < cutoff && cutoff < publishedAt);
 
-        workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2412);
+        workspace.WriteCloseoutOnly(unit, cutoff.AddDays(2), 2412);
         using var result = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(3));
-        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+        var historical = result.RootElement.GetProperty("excluded").EnumerateArray()
+            .Where(item => item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("reason").GetString() == "debt-window-historical")
+            .ToArray();
+        Assert.Equal(2, historical.Length);
+        Assert.All(historical, item =>
+        {
+            Assert.Equal("issue-created", item.GetProperty("debt_window_evidence_kind").GetString());
+            Assert.Equal(createdAt, item.GetProperty("debt_window_evidence_at").GetDateTimeOffset());
+        });
+        Assert.DoesNotContain(result.RootElement.GetProperty("items").EnumerateArray(), item =>
             item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                or AutomationStalledWorkCommand.KindGuideReachabilityPending);
+        Assert.Equal(0, result.RootElement.GetProperty("debt_window").GetProperty("decision_counts")
+            .GetProperty("included_units").GetInt32());
+
+        const string publishedOnlyUnit = "G858-published-only-start";
+        var publishedOnlyAt = cutoff.AddDays(1);
+        workspace.WriteDebtPacket(publishedOnlyUnit);
+        workspace.WriteIssueCreatedPublishArtifact(publishedOnlyUnit, 413);
+        PublishMarker(workspace, publishedOnlyUnit, publishedOnlyAt);
+        var publishedOnlyEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunLogPath))
+            .Where(item => item.ExecutionUnit == publishedOnlyUnit)
+            .ToArray();
+        var publishedOnlyEvent = Assert.Single(publishedOnlyEvents);
+        Assert.Equal("issue-published", publishedOnlyEvent.Event);
+        Assert.Equal(publishedOnlyAt, publishedOnlyEvent.Ts);
+        workspace.WriteCloseoutOnly(publishedOnlyUnit, cutoff.AddDays(2), 2413);
+
+        using var publishedOnlyResult = Report(
+            workspace.Context,
+            ["--since", cutoff.ToString("O")],
+            now: cutoff.AddDays(3));
+        Assert.Contains(publishedOnlyResult.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == publishedOnlyUnit
             && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
-        Assert.Equal(1, result.RootElement.GetProperty("debt_window").GetProperty("decision_counts")
+        Assert.DoesNotContain(publishedOnlyResult.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == publishedOnlyUnit);
+        Assert.Equal(1, publishedOnlyResult.RootElement.GetProperty("debt_window").GetProperty("decision_counts")
             .GetProperty("included_units").GetInt32());
     }
 
@@ -1000,6 +1039,22 @@ internal sealed class AdoptionWorkspace : IDisposable
             IssueBodyPath = $".intent-cli/issues/{unit}/github-body.md",
             CreatedIssueNumber = null,
             CreatedIssueUrl = null,
+            PublishedLabelName = null,
+        }));
+    }
+
+    public void WriteIssueCreatedPublishArtifact(string unit, int issueNumber)
+    {
+        var path = Path.Combine(Root, IssuePublishArtifactPathResolver.Resolve(unit));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, IssuePublishArtifactYaml.Serialize(new IssuePublishArtifact
+        {
+            ExecutionUnit = unit,
+            PublishStatus = "issue-created",
+            PacketPath = $".intent-cli/issues/{unit}/packet.yaml",
+            IssueBodyPath = $".intent-cli/issues/{unit}/github-body.md",
+            CreatedIssueNumber = issueNumber,
+            CreatedIssueUrl = $"https://github.com/J-Tech-Japan/intent-system/issues/{issueNumber}",
             PublishedLabelName = null,
         }));
     }

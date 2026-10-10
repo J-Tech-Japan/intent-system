@@ -6,7 +6,7 @@ namespace IntentSystem.Cli.Tests;
 public sealed partial class StalledWorkAdoptionWindowG858Tests
 {
     [Fact]
-    public void R3_MalformedReceiptsStayDiagnosticOnlyWithoutWindowAndKeepRequiredDebtWithWindow()
+    public void R3_MalformedReceiptsRemainDiagnosticOnlyWithOrWithoutWindow()
     {
         using var workspace = new AdoptionWorkspace();
         var cutoff = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
@@ -49,10 +49,10 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
             && item.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonGuideReachabilityMetadataUnreadable);
 
         using var activeWindow = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: now);
-        Assert.Contains(activeWindow.RootElement.GetProperty("items").EnumerateArray(), item =>
+        Assert.DoesNotContain(activeWindow.RootElement.GetProperty("items").EnumerateArray(), item =>
             item.GetProperty("execution_unit").GetString() == knowledgeUnit
             && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
-        Assert.Contains(activeWindow.RootElement.GetProperty("items").EnumerateArray(), item =>
+        Assert.DoesNotContain(activeWindow.RootElement.GetProperty("items").EnumerateArray(), item =>
             item.GetProperty("execution_unit").GetString() == guideUnit
             && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
         Assert.Contains(activeWindow.RootElement.GetProperty("excluded").EnumerateArray(), item =>

@@ -3474,37 +3474,6 @@ internal static class AutomationStalledWorkCommand
         return false;
     }
 
-    /// <summary>
-    /// G544: fires <see cref="KindBacklogReadyIdle"/> when WIP is empty for
-    /// <paramref name="domain"/> (<see cref="DomainWipIsEmpty"/>), the SAME
-    /// canonical selector <c>issue publish-flow</c> preflight itself uses
-    /// (<see cref="IntentNextSliceCommand.Analyze"/> — no separate
-    /// heuristic) reports a publishable candidate, and no <c>runs.jsonl</c>
-    /// activity has been recorded for at least <paramref
-    /// name="backlogIdleMinutes"/>. "Activity" here is the most recent
-    /// <c>ts</c> across every row in <c>runs.jsonl</c> — a different signal
-    /// than every other collector's GitHub-entity-timestamp approach, since
-    /// by construction nothing has been published yet for this candidate to
-    /// carry a GitHub timestamp of its own. A missing/unparseable/empty
-    /// runs.jsonl cannot establish a baseline and fails closed into
-    /// <c>excluded[]</c>, never a guessed age — same philosophy as
-    /// <see cref="ReasonActivityDataUnusable"/> above.
-    /// </summary>
-    private static string ReadWindowedEvidenceText(string path, StalledWorkAdoptionWindow? debtWindow)
-    {
-        if (debtWindow is null)
-        {
-            return File.ReadAllText(path);
-        }
-
-        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(path, out var bytes, out var failure, out var error))
-        {
-            throw new IOException($"evidence file '{path}' could not be read safely ({failure}): {error}");
-        }
-
-        return Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
-    }
-
     private static void CollectBacklogReadyIdle(
         CliContext context,
         string domain,
@@ -4092,7 +4061,7 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<RunEvent> events;
         try
         {
-            events = RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(runLogPath, debtWindow));
+            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
         }
         catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or NotSupportedException)
         {
@@ -4158,7 +4127,7 @@ internal static class AutomationStalledWorkCommand
                 Corroborated: File.Exists(packetYamlPath),
                 IsAmbiguous: false,
                 CandidatePacketPaths: Array.Empty<string>());
-            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit, debtWindow), candidateDomains, repo,
+            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit), candidateDomains, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
@@ -4176,7 +4145,7 @@ internal static class AutomationStalledWorkCommand
             KnowledgeWriteBackDeclaration declaration;
             try
             {
-                declaration = KnowledgeWriteBackDeclaration.Read(ReadWindowedEvidenceText(packetYamlPath, debtWindow));
+                declaration = KnowledgeWriteBackDeclaration.Read(File.ReadAllText(packetYamlPath));
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
             {
@@ -4218,7 +4187,7 @@ internal static class AutomationStalledWorkCommand
                     // from a multi-role read.
                     recordEntries.Add((
                         recordPath,
-                        KnowledgeWriteBackRecord.Deserialize(ReadWindowedEvidenceText(recordPath, debtWindow), executionUnit)));
+                        KnowledgeWriteBackRecord.Deserialize(File.ReadAllText(recordPath), executionUnit)));
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
                 {
@@ -4240,11 +4209,7 @@ internal static class AutomationStalledWorkCommand
                 }
             }
 
-            // Preserve the pre-window report contract: without an active
-            // adoption window, malformed receipts remain diagnostic-only.
-            // With a window active, the packet has already proven that this
-            // work is required, so the unreadable receipt cannot discharge it.
-            if (recordReadFailed && debtWindow is null)
+            if (recordReadFailed)
             {
                 continue;
             }
@@ -4434,7 +4399,7 @@ internal static class AutomationStalledWorkCommand
         IReadOnlyList<RunEvent> events;
         try
         {
-            events = RunLogSerializer.DeserializeAll(ReadWindowedEvidenceText(runLogPath, debtWindow));
+            events = RunLogSerializer.DeserializeAll(File.ReadAllText(runLogPath));
         }
         catch (Exception exception) when (exception is IOException or JsonException or InvalidOperationException or NotSupportedException)
         {
@@ -4501,7 +4466,7 @@ internal static class AutomationStalledWorkCommand
                 Corroborated: File.Exists(packetYamlPath),
                 IsAmbiguous: false,
                 CandidatePacketPaths: Array.Empty<string>());
-            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit, debtWindow), candidateDomains, repo,
+            if (!TryConfirmDomain(domain, resolution, ReadPacketDeclaredDomain(context, executionUnit), candidateDomains, repo,
                     out var reason, out var detail))
             {
                 excluded.Add(new StalledWorkExcluded
@@ -4519,7 +4484,7 @@ internal static class AutomationStalledWorkCommand
             GuideReachabilityDeclaration declaration;
             try
             {
-                declaration = GuideReachabilityDeclaration.Read(ReadWindowedEvidenceText(packetYamlPath, debtWindow));
+                declaration = GuideReachabilityDeclaration.Read(File.ReadAllText(packetYamlPath));
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
             {
@@ -4589,7 +4554,7 @@ internal static class AutomationStalledWorkCommand
                 {
                     recordEntries.Add((
                         existingPath,
-                        GuideReachabilityRecord.Deserialize(ReadWindowedEvidenceText(existingPath, debtWindow), executionUnit)));
+                        GuideReachabilityRecord.Deserialize(File.ReadAllText(existingPath), executionUnit)));
                 }
                 catch (Exception exception) when (exception is IOException or InvalidOperationException)
                 {
@@ -4610,10 +4575,7 @@ internal static class AutomationStalledWorkCommand
                 }
             }
 
-            // Keep legacy mode diagnostic-only. A pending item is actionable
-            // only when the operator has activated a start window, at which
-            // point this valid packet declaration establishes the duty.
-            if (recordReadFailed && debtWindow is null)
+            if (recordReadFailed)
             {
                 continue;
             }
@@ -4799,10 +4761,7 @@ internal static class AutomationStalledWorkCommand
     /// the packet — e.g. a `review_context_packet` section — silently
     /// shadowing the real declaration.
     /// </summary>
-    private static string? ReadPacketDeclaredDomain(
-        CliContext context,
-        string executionUnit,
-        StalledWorkAdoptionWindow? debtWindow = null)
+    private static string? ReadPacketDeclaredDomain(CliContext context, string executionUnit)
     {
         if (string.IsNullOrWhiteSpace(executionUnit))
         {
@@ -4817,7 +4776,7 @@ internal static class AutomationStalledWorkCommand
         string packetText;
         try
         {
-            packetText = ReadWindowedEvidenceText(packetYamlPath, debtWindow);
+            packetText = File.ReadAllText(packetYamlPath);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -4978,6 +4937,10 @@ internal static class AutomationStalledWorkCommand
     private static readonly System.Text.RegularExpressions.Regex LeadingExecutionUnitPattern = new(
         @"^(?:[A-Z][A-Z0-9]*-G?[0-9]+|G[0-9]+)(?![A-Za-z0-9])",
         System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex FullIso8601InstantPattern = new(
+        @"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,7})?(?:Z|[+-][0-9]{2}:[0-9]{2})\z",
+        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private static string ExecutionUnitFromTitle(string title)
     {
@@ -5307,14 +5270,21 @@ internal static class AutomationStalledWorkCommand
                 // closeout-debt populations. It does not change lane-specific
                 // closeout cutoffs or any live stalled-work lane.
                 case "--since":
-                    if (index + 1 >= args.Length
-                        || !DateTimeOffset.TryParse(args[index + 1], System.Globalization.CultureInfo.InvariantCulture,
-                            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
-                            out var parsedStartSince))
+                    if (index + 1 >= args.Length)
                     {
                         error = "--since requires an ISO-8601 instant (e.g. 2026-09-16T08:26:32Z).";
                         return false;
                     }
+
+                    var startSinceText = args[index + 1].Trim();
+                    if (!FullIso8601InstantPattern.IsMatch(startSinceText)
+                        || !DateTimeOffset.TryParse(startSinceText, System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsedStartSince))
+                    {
+                        error = "--since requires an ISO-8601 instant (e.g. 2026-09-16T08:26:32Z).";
+                        return false;
+                    }
+
                     since = parsedStartSince.ToUniversalTime();
                     index++;
                     break;

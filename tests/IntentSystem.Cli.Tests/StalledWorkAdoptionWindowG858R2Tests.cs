@@ -76,7 +76,7 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
     }
 
     [Fact]
-    public void R2_UnreadableReceiptsKeepProvenKnowledgeAndGuideDebtVisible()
+    public void R2_ValidSymlinkReceiptsKeepBaselineClearanceWithOrWithoutWindow()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -111,17 +111,32 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
         MakeRecordSymlink(workspace.Root, KnowledgeWriteBackRecord.RecordRootRelativePath, knowledgeUnit, "design", "knowledge");
         MakeRecordSymlink(workspace.Root, GuideReachabilityRecord.RecordRootRelativePath, guideUnit, "design", "guide");
 
-        using var result = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(3));
-        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
-            item.GetProperty("execution_unit").GetString() == knowledgeUnit
-            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
-        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
-            item.GetProperty("execution_unit").GetString() == guideUnit
-            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
-        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+        using var baseline = Report(workspace.Context, now: cutoff.AddDays(3));
+        using var activeWindow = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(3));
+        foreach (var (unit, pendingKind) in new[]
+                 {
+                     (knowledgeUnit, AutomationStalledWorkCommand.KindKnowledgeWritebackPending),
+                     (guideUnit, AutomationStalledWorkCommand.KindGuideReachabilityPending),
+                 })
+        {
+            Assert.DoesNotContain(baseline.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit && item.GetProperty("kind").GetString() == pendingKind);
+            Assert.DoesNotContain(activeWindow.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit && item.GetProperty("kind").GetString() == pendingKind);
+            var baselineItems = baseline.RootElement.GetProperty("items").EnumerateArray()
+                .Where(item => item.GetProperty("execution_unit").GetString() == unit)
+                .Select(item => item.GetRawText())
+                .ToArray();
+            var windowItems = activeWindow.RootElement.GetProperty("items").EnumerateArray()
+                .Where(item => item.GetProperty("execution_unit").GetString() == unit)
+                .Select(item => item.GetRawText())
+                .ToArray();
+            Assert.Equal(baselineItems, windowItems);
+        }
+        Assert.DoesNotContain(activeWindow.RootElement.GetProperty("excluded").EnumerateArray(), item =>
             item.GetProperty("execution_unit").GetString() == knowledgeUnit
             && item.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonKnowledgeMetadataUnreadable);
-        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+        Assert.DoesNotContain(activeWindow.RootElement.GetProperty("excluded").EnumerateArray(), item =>
             item.GetProperty("execution_unit").GetString() == guideUnit
             && item.GetProperty("reason").GetString() == AutomationStalledWorkCommand.ReasonGuideReachabilityMetadataUnreadable);
     }
