@@ -664,6 +664,15 @@ branch. In same-repository layouts, a source/write branch split or
 claim recorded elsewhere. Multiple Actions runs with the same check context
 remain an identity conflict when their rows cannot be distinguished.
 
+For an explicit source issue URL, the bounded report inventory may skip a
+report only when its exact supported routing fields prove it unrelated to the
+requested issue and unit. A relevant report or an entry whose scope cannot be
+established remains visible and can make the source unavailable, even when a
+valid chain is also present. Legacy `observed_in` routing is exclusion-only and
+never serves as canonical completion evidence. An
+explicit packet report path keeps strict validation. The six known provenance
+limits are unchanged.
+
 Exit 0 means observation completed, including when evidence is missing or the
 only unavailable facts are known `provenance-limit` cases. Exit 1 means an
 invalid request or a non-provenance observation failure. Neither exit code
