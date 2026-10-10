@@ -430,8 +430,7 @@ internal static class ApprovalPostingOverride
             runPath: prepared.SelectedRunLogPath, preparedCommit: preparedCommit,
             outcomeCommit: outcomeCommit, currentHead: current.CurrentHead,
             mutationAttempted: mutationAttempted, mayHaveApplied: mayHaveApplied,
-                    labelStateObserved: true, authorizationBasis: observed.AuthorizationBasis,
-            recoveryCommand: Recovery(request)),
+            labelStateObserved: true, authorizationBasis: observed.AuthorizationBasis),
             current.Labels, current.Solo, current.CrossRuntime, true, cleared, writer, warning,
             observedOnly: !mutationAttempted);
     }
@@ -615,7 +614,7 @@ internal static class ApprovalPostingOverride
 
         public void RecordObservedPublication(PublicationResult publication)
         {
-            OutcomePublished |= publication.Published;
+            OutcomePublished |= publication.Published || publication.CanonicalOutcomeExists;
             ObservedPath = publication.Path ?? ObservedPath;
             OutcomeCommit = publication.Commit ?? OutcomeCommit;
         }
@@ -674,15 +673,18 @@ internal static class ApprovalPostingOverride
             CurrentLabels = currentLabels,
             Summary = applied && observedOnly
                 ? $"Observed the approved transition already converged on PR #{request.PullRequest} in {request.Repo}; no label action was applied by this invocation."
-                : applied
-                    ? $"Applied approved transition to PR #{request.PullRequest} in {request.Repo} after the missing-posting exception was recorded."
-                : $"Refused approved transition on PR #{request.PullRequest} in {request.Repo}: {overrideResult.Cause}.",
+                : string.Equals(overrideResult.Disposition, "eligible-preview", StringComparison.Ordinal)
+                    ? $"Eligible preview for approved transition on PR #{request.PullRequest} in {request.Repo}; no labels were changed."
+                    : applied
+                        ? $"Applied approved transition to PR #{request.PullRequest} in {request.Repo} after the missing-posting exception was recorded."
+                        : $"Refused approved transition on PR #{request.PullRequest} in {request.Repo}: {overrideResult.Cause}.",
             CiWaitCleared = ciWaitCleared,
             CiWaitWarning = ciWaitWarning,
             CrossRuntimeReview = crossRuntime,
             SoloConductorReview = solo,
             ApprovalPostingOverride = overrideResult,
-            Error = applied ? null : $"{overrideResult.Cause}: {overrideResult.Detail}",
+            Error = applied || string.Equals(overrideResult.Disposition, "eligible-preview", StringComparison.Ordinal)
+                ? null : $"{overrideResult.Cause}: {overrideResult.Detail}",
         };
         if (request.Format == "json")
             writer.WriteLine(JsonSerializer.Serialize(result, ResultJsonOptions));
@@ -788,7 +790,7 @@ internal static class ApprovalPostingOverride
         { return refused("canonical-config-invalid", exception.Message); }
         if (!config.CrossRuntimeReview.TryGetDeclared(packet.Domain, claim.Team, out var declaration)
             || !declaration.Repos.Contains(request.Repo, StringComparer.OrdinalIgnoreCase))
-            return refused("cross-runtime-review-not-declared", "The canonical config does not declare the exact domain/team and repository for G834.");
+            return refused("override-not-applicable", "The canonical config does not declare the exact domain/team and repository for G834.");
 
         var modeInspection = InspectPath(snapshot.Root, TeamModeStore.RelativePath, expectDirectory: false);
         if (modeInspection.Kind != PathKind.Regular)
@@ -813,6 +815,8 @@ internal static class ApprovalPostingOverride
         try { queue = QueueStateSerializer.Deserialize(queueText!); }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
         { return refused("canonical-queue-invalid", exception.Message); }
+        if (queue.Items is null || queue.Items.Any(item => item is null))
+            return refused("canonical-queue-invalid", "Canonical queue items must be an array of non-null queue entries.");
         var unitRows = queue.Items.Where(item => string.Equals(item.ExecutionUnit, request.ExecutionUnit, StringComparison.Ordinal)).ToArray();
         if (unitRows.Length != 1)
             return refused(unitRows.Length == 0 ? "canonical-queue-item-missing" : "canonical-queue-item-ambiguous",
@@ -1404,6 +1408,7 @@ internal static class ApprovalPostingOverride
             || string.IsNullOrWhiteSpace(audit.TargetRepo) || string.IsNullOrWhiteSpace(audit.RequestedHeadSha)
             || string.IsNullOrWhiteSpace(audit.PreparedPath) || string.IsNullOrWhiteSpace(audit.ObservedPath)
             || string.IsNullOrWhiteSpace(audit.PreparedSha256) || string.IsNullOrWhiteSpace(audit.PreparedPublicationCommit)
+            || string.IsNullOrWhiteSpace(audit.HeadBeforeAction) || string.IsNullOrWhiteSpace(audit.HeadAfterAction)
             || string.IsNullOrWhiteSpace(audit.AuthorizationBasis) || string.IsNullOrWhiteSpace(audit.ObservationKind)
             || string.IsNullOrWhiteSpace(audit.ResultProvenance))
             return "a required string is null or blank.";
@@ -1411,10 +1416,12 @@ internal static class ApprovalPostingOverride
             || !KnowledgeWriteBackRecord.TryValidateExecutionUnit(audit.ExecutionUnit, out _)
             || !CrossRuntimeReviewPaths.IsRepositoryName(audit.TargetRepo)
             || !CrossRuntimeReviewPaths.IsFullHeadSha(audit.RequestedHeadSha)
+            || !CrossRuntimeReviewPaths.IsFullHeadSha(audit.HeadBeforeAction)
+            || !CrossRuntimeReviewPaths.IsFullHeadSha(audit.HeadAfterAction)
             || !IsGitObjectId(audit.PreparedPublicationCommit)
             || audit.PreparedSha256.Length != 64 || !audit.PreparedSha256.All(Uri.IsHexDigit)
             || audit.Scope != $"execution-unit:{audit.ExecutionUnit}"
-            || audit.LabelsObserved is null)
+            || audit.LabelsObserved is null || !IsValidLabelSet(audit.LabelsObserved))
             return "identity, time, digest, or labels fields are invalid.";
         return audit.ObservationKind == "label-state-observed" && audit.ResultProvenance == "github-label-read"
             ? null
@@ -1440,8 +1447,8 @@ internal static class ApprovalPostingOverride
             catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
             { return Invalid("Selected run log is malformed: " + exception.Message, preparedExists, observedExists); }
         }
-        var preparedEvents = events.Where(e => e.ExecutionUnit == request.ExecutionUnit && e.Event == PreparedEvent && e.ResultRef == preparedPath).ToArray();
-        var observedEvents = events.Where(e => e.ExecutionUnit == request.ExecutionUnit && e.Event == ObservedEvent && e.ResultRef == observedPath).ToArray();
+        var preparedEvents = events.Where(e => e.ResultRef == preparedPath).ToArray();
+        var observedEvents = events.Where(e => e.ResultRef == observedPath).ToArray();
         if (preparedExists != (preparedEvents.Length == 1) || !preparedExists && preparedEvents.Length != 0
             || observedExists && (!preparedExists || observedEvents.Length != 1)
             || !observedExists && observedEvents.Length != 0)
@@ -1500,7 +1507,7 @@ internal static class ApprovalPostingOverride
         && prepared.NormalizedRole == LogicalRoleNormalizer.Builder
         && prepared.Scope == $"execution-unit:{request.ExecutionUnit}"
         && prepared.ClaimEpochClaimedAt == current.ClaimEpoch
-        && SameRepo(prepared.TargetRepo, request.Repo) && prepared.PullRequest == request.PullRequest
+        && string.Equals(prepared.TargetRepo, request.Repo, StringComparison.Ordinal) && prepared.PullRequest == request.PullRequest
         && prepared.RequestedHeadSha.Equals(request.HeadSha, StringComparison.OrdinalIgnoreCase)
         && prepared.Reason == request.Reason && prepared.SelectedQueuePath == current.QueuePath
         && prepared.SelectedRunLogPath == current.RunPath && prepared.CanonicalTargetRef == current.CanonicalTargetRef
@@ -1528,8 +1535,12 @@ internal static class ApprovalPostingOverride
         && observed.PreparedSha256 == preparedSha
         && observed.ExecutionUnit == request.ExecutionUnit && observed.Domain == prepared.Domain
         && observed.Team == prepared.Team && observed.Actor == prepared.Actor && observed.Scope == prepared.Scope
-        && SameRepo(observed.TargetRepo, request.Repo) && observed.PullRequest == request.PullRequest
+        && string.Equals(observed.TargetRepo, prepared.TargetRepo, StringComparison.Ordinal)
+        && string.Equals(observed.TargetRepo, request.Repo, StringComparison.Ordinal) && observed.PullRequest == request.PullRequest
         && observed.RequestedHeadSha.Equals(request.HeadSha, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(observed.HeadBeforeAction, request.HeadSha, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(observed.HeadAfterAction, request.HeadSha, StringComparison.OrdinalIgnoreCase)
+        && Converged(observed.LabelsObserved, prepared.IntendedAddLabels, prepared.IntendedRemoveLabels)
         && observed.ClaimEpochClaimedAt == prepared.ClaimEpochClaimedAt;
 
     private static ObservedAudit BuildObserved(PreparedAudit prepared, Assessment current, IReadOnlyList<string> labels,
@@ -1667,10 +1678,12 @@ internal static class ApprovalPostingOverride
         string? lastAttemptCommit = null;
         string? lastPreparedSha256 = null;
 
-        PublicationResult StopBeforeAnotherAttempt(string cause, string? detail, string? currentRunPath)
+        PublicationResult StopBeforeAnotherAttempt(string cause, string? detail, string? currentRunPath,
+            bool canonicalOutcomeExists = false, string? canonicalOutcomeCommit = null)
         {
             if (!mayHaveBeenPublished)
-                return new PublicationResult(false, cause, detail, prepared.ObservedPath, currentRunPath, null);
+                return new PublicationResult(false, cause, detail, prepared.ObservedPath, currentRunPath, canonicalOutcomeCommit,
+                    CanonicalOutcomeExists: canonicalOutcomeExists);
 
             if (lastAttemptBytes is not null
                 && TryVerifyObservedPublication(target, request, prepared, lastPreparedSha256!, lastAttemptBytes,
@@ -1684,6 +1697,11 @@ internal static class ApprovalPostingOverride
                 if (pair.Valid && pair.Prepared is not null && pair.Observed is null
                     && !pair.ObservedExists && pair.PreparedSha256 == lastPreparedSha256)
                     return new PublicationResult(false, cause, detail, prepared.ObservedPath, currentRunPath, null);
+                if (pair.ObservedExists)
+                    return new PublicationResult(false, "observed-binding-conflict",
+                        pair.Detail ?? "An observed audit exists, but its immutable pair could not be verified.",
+                        prepared.ObservedPath, lastAttemptRunPath, pair.ObservedCommit,
+                        MayHaveBeenPublished: true, CanonicalOutcomeExists: true);
             }
             catch (Exception exception) when (Expected(exception)) { }
 
@@ -1703,7 +1721,8 @@ internal static class ApprovalPostingOverride
                     return StopBeforeAnotherAttempt(current.Cause ?? "outcome-binding-changed", current.Detail, current.RunPath);
                 var pair = ReadPair(checkout, current.RunPath!, request, prepared.PreparedPath, prepared.ObservedPath);
                 if (!pair.Valid || pair.Prepared is null || pair.PreparedCommit is null)
-                    return StopBeforeAnotherAttempt(pair.Cause ?? "prepared-pair-unavailable", pair.Detail, current.RunPath);
+                    return StopBeforeAnotherAttempt(pair.Cause ?? "prepared-pair-unavailable", pair.Detail,
+                        current.RunPath, canonicalOutcomeExists: pair.ObservedExists);
                 IGitHubLabelMutator? mutator = null;
                 string? mutatorError = null;
                 string? liveHead = null;
@@ -1715,7 +1734,8 @@ internal static class ApprovalPostingOverride
                     || !Converged(liveLabels ?? [], prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
                     return StopBeforeAnotherAttempt("observed-live-state-unconfirmed",
                         mutatorError ?? liveError ?? "The requested head and intended labels no longer converge.",
-                        current.RunPath);
+                        current.RunPath, canonicalOutcomeExists: pair.ObservedExists,
+                        canonicalOutcomeCommit: pair.ObservedCommit);
                 if (pair.Observed is not null)
                 {
                     if (!MatchesObserved(pair.Observed, pair.Prepared, pair.PreparedSha256, current, request)
@@ -1724,7 +1744,8 @@ internal static class ApprovalPostingOverride
                         || !Converged(liveLabels!, prepared.IntendedAddLabels, prepared.IntendedRemoveLabels))
                         return new PublicationResult(false, "observed-binding-conflict",
                             "The existing observed audit no longer matches the exact prepared bytes or current live state.",
-                            prepared.ObservedPath, current.RunPath, pair.ObservedCommit);
+                            prepared.ObservedPath, current.RunPath, pair.ObservedCommit,
+                            CanonicalOutcomeExists: true);
                     return new PublicationResult(true, null, null, prepared.ObservedPath, current.RunPath, pair.ObservedCommit);
                 }
                 var refreshedObserved = BuildObserved(pair.Prepared, current, liveLabels!, pair.PreparedCommit,
@@ -2108,7 +2129,8 @@ internal static class ApprovalPostingOverride
         string? RunPath,
         string? Commit,
         PreparedAudit? Audit = null,
-        bool MayHaveBeenPublished = false)
+        bool MayHaveBeenPublished = false,
+        bool CanonicalOutcomeExists = false)
     {
         public PublicationConfidence Confidence => Published
             ? PublicationConfidence.Published
