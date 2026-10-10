@@ -866,7 +866,11 @@ waived receipt visibly `missing`; the audit records the exact skipped duties
 and reason. If receipts become complete during a bounded retry, the normal
 release may proceed without an override audit or event. This flag does not
 publish receipts, close out a PR, alter approval evidence, or change claim or
-run-log schemas.
+run-log schemas. The CLI enforces only exact current-holder attribution, this
+explicit flag, and a nonblank reason; it does not verify external authorization
+or reason quality. `canonical_snapshot_oid` identifies the evaluated canonical
+host commit, not the child PR head. This flag is unavailable for other
+operations, non-`execution-unit` scopes, and non-solo-conductor modes.
 
 ### Pasted-evidence gate (G785)
 

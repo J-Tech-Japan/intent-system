@@ -21,6 +21,10 @@ internal static class ClaimLoopEvidenceOverride
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
+    internal static ClaimLoopEvidenceOverrideWriterOperations WriterOperations { get; set; } = new(
+        audit => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(audit, AuditJsonOptions) + Environment.NewLine),
+        (path, bytes) => File.WriteAllBytes(path, bytes));
+
     public static ClaimLoopEvidenceOverrideEligibility Evaluate(SoloConductorClaimReleaseGateResult gate)
     {
         ArgumentNullException.ThrowIfNull(gate);
@@ -162,7 +166,7 @@ internal static class ClaimLoopEvidenceOverride
             RunLogPath = NormalizeRelative(runLogPath),
             SkippedDuties = eligibility.SkippedDuties,
         };
-        var auditBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(record, AuditJsonOptions) + Environment.NewLine);
+        var auditBytes = WriterOperations.SerializeAudit(record);
         var runEvent = new RunEvent
         {
             Ts = now,
@@ -189,7 +193,7 @@ internal static class ClaimLoopEvidenceOverride
         ValidatePathAncestors(transactionRoot, auditAbsolute, allowMissing: true);
         using (var stream = new FileStream(auditAbsolute, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             stream.Write(auditBytes);
-        File.WriteAllBytes(runAbsolute, appendedLog);
+        WriterOperations.WriteRunLog(runAbsolute, appendedLog);
         return new ClaimLoopEvidenceOverrideWriteResult(auditPath, NormalizeRelative(historyPath), NormalizeRelative(runLogPath));
     }
 
@@ -353,3 +357,7 @@ internal sealed record ClaimLoopEvidenceOverrideAudit
 internal sealed record ClaimLoopEvidenceOverrideWriteResult(string AuditPath, string HistoryPath, string RunLogPath);
 
 internal sealed record ClaimLoopEvidenceOverridePaths(string HistoryPath, string AuditPath, string RunLogPath);
+
+internal sealed record ClaimLoopEvidenceOverrideWriterOperations(
+    Func<ClaimLoopEvidenceOverrideAudit, byte[]> SerializeAudit,
+    Action<string, byte[]> WriteRunLog);

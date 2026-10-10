@@ -119,6 +119,89 @@ public sealed class SoloConductorPrTransitionTests : IDisposable
     }
 
     [Fact]
+    public void G856BlockedApprovalBoundaryIsUnchangedAndRejectsReleaseOverrideFlag()
+    {
+        RecordCiWait();
+        var blockerBody = GenericBody(Unit, Head)
+            .Replace("## Independent subagent review: approve", "## Independent subagent review: request-changes", StringComparison.Ordinal)
+            .Replace("- verdict: approve", "- verdict: request-changes", StringComparison.Ordinal)
+            .Replace("- none", "- retain current blocking finding", StringComparison.Ordinal);
+        reviewResult = request => CompleteRead(request, blockerBody, 912);
+
+        var (blockedExit, blockedOutput) = Run(write: true);
+
+        Assert.Equal(1, blockedExit);
+        using (var blocked = JsonDocument.Parse(blockedOutput))
+        {
+            Assert.Equal(SoloConductorApprovalGate.CauseReviewBlocked,
+                blocked.RootElement.GetProperty("solo_conductor_review").GetProperty("cause").GetString());
+            Assert.False(blocked.RootElement.GetProperty("applied").GetBoolean());
+            Assert.Empty(blocked.RootElement.GetProperty("add_labels").EnumerateArray());
+            Assert.Empty(blocked.RootElement.GetProperty("remove_labels").EnumerateArray());
+        }
+        Assert.Equal(1, headReads);
+        Assert.Equal(1, reviewReads);
+        Assert.Empty(mutator.Applied);
+        Assert.Single(CiWaitStore.ReadOpen(root, repo: Repo).Records);
+
+        headReads = 0;
+        reviewReads = 0;
+        claimReads = 0;
+        var before = SnapshotHostFiles();
+        var (flaggedExit, flaggedOutput) = Run(write: true, overrideLoopEvidence: true);
+        var after = SnapshotHostFiles();
+        Assert.Equal(1, flaggedExit);
+        Assert.Contains("--override-loop-evidence", flaggedOutput, StringComparison.Ordinal);
+        Assert.Equal(before.OrderBy(item => item.Key, StringComparer.Ordinal), after.OrderBy(item => item.Key, StringComparer.Ordinal));
+        Assert.Equal(0, claimReads);
+        Assert.Equal(0, headReads);
+        Assert.Equal(0, reviewReads);
+        Assert.Empty(mutator.Applied);
+        Assert.Single(CiWaitStore.ReadOpen(root, repo: Repo).Records);
+    }
+
+    [Fact]
+    public void G834UnresolvedOrdinaryRefusalAndReleaseOverrideFlagRemainUnchanged()
+    {
+        WriteMode(Entry(Team, TeamMode.Delivery));
+        RecordCiWait();
+        var before = SnapshotHostFiles();
+
+        var (baselineExit, baselineOutput) = Run(write: true, declareG834: true);
+        var afterBaseline = SnapshotHostFiles();
+        Assert.Equal(1, baselineExit);
+        using (var baseline = JsonDocument.Parse(baselineOutput))
+        {
+            Assert.Equal(CrossRuntimeReviewCauses.Missing,
+                baseline.RootElement.GetProperty("cross_runtime_review").GetProperty("cause").GetString());
+            Assert.False(baseline.RootElement.GetProperty("applied").GetBoolean());
+            Assert.Empty(baseline.RootElement.GetProperty("add_labels").EnumerateArray());
+            Assert.Empty(baseline.RootElement.GetProperty("remove_labels").EnumerateArray());
+        }
+        Assert.Equal(before.OrderBy(item => item.Key, StringComparer.Ordinal), afterBaseline.OrderBy(item => item.Key, StringComparer.Ordinal));
+        Assert.Equal(1, claimReads);
+        Assert.Equal(1, headReads);
+        Assert.Equal(0, reviewReads);
+        Assert.Empty(mutator.Applied);
+        Assert.Single(CiWaitStore.ReadOpen(root, repo: Repo).Records);
+
+        claimReads = 0;
+        headReads = 0;
+        reviewReads = 0;
+        var beforeFlag = SnapshotHostFiles();
+        var (flaggedExit, flaggedOutput) = Run(write: true, declareG834: true, overrideLoopEvidence: true);
+        var afterFlag = SnapshotHostFiles();
+        Assert.Equal(1, flaggedExit);
+        Assert.Contains("--override-loop-evidence", flaggedOutput, StringComparison.Ordinal);
+        Assert.Equal(beforeFlag.OrderBy(item => item.Key, StringComparer.Ordinal), afterFlag.OrderBy(item => item.Key, StringComparer.Ordinal));
+        Assert.Equal(0, claimReads);
+        Assert.Equal(0, headReads);
+        Assert.Equal(0, reviewReads);
+        Assert.Empty(mutator.Applied);
+        Assert.Single(CiWaitStore.ReadOpen(root, repo: Repo).Records);
+    }
+
+    [Fact]
     public void HeadRaceAfterReviewEvaluationRefusesBeforeLabelMutation()
     {
         headResult = read => read == 1 ? Head : "3333333333333333333333333333333333333333";
@@ -590,7 +673,8 @@ public sealed class SoloConductorPrTransitionTests : IDisposable
         bool declarationOmitsRepo = false,
         bool gateViaOtherTeam = false,
         string format = "json",
-        string? executionUnit = null)
+        string? executionUnit = null,
+        bool overrideLoopEvidence = false)
     {
         var args = new List<string>
         {
@@ -601,6 +685,7 @@ public sealed class SoloConductorPrTransitionTests : IDisposable
         };
         if (head is not null) args.AddRange(["--head-sha", head]);
         if (executionUnit is not null) args.AddRange(["--execution-unit", executionUnit]);
+        if (overrideLoopEvidence) args.Add("--override-loop-evidence");
         if (write) args.Add("--write");
         using var writer = new StringWriter();
         var exit = AutomationPrTransitionCommand.Execute(Context(declareG834, declarationOmitsRepo, gateViaOtherTeam), args.ToArray(), writer);

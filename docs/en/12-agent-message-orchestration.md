@@ -488,7 +488,12 @@ is fabricated or published, and no claim-history or run-event schema changes.
 
 **Forward compatibility.** A binary without G860 treats the new flag as
 unsupported and retains G857's blocking behavior. Update every host binary that
-may release these claims before relying on the audited exception.
+may release these claims before relying on the audited exception. The CLI enforces
+only exact current-holder attribution, the explicit flag and a nonblank reason;
+it does not verify external authorization or reason quality.
+`canonical_snapshot_oid` identifies the evaluated canonical host commit, not the
+child PR head. The flag is unavailable for other operations, non-`execution-unit`
+scopes and non-solo-conductor modes.
 
 ## Copilot CLI and OpenCode runtimes (G842/G849 — preview-through-1.x)
 
