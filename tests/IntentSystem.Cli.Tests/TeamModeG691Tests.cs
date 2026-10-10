@@ -17,6 +17,24 @@ public sealed class TeamModeG691Tests : IDisposable
     private const string Team = "intent-cli-dev";
     private readonly string root = Directory.CreateTempSubdirectory("team-mode-g691-").FullName;
 
+    internal static int ExecuteSetWriterFixture(
+        CliContext context,
+        string[] args,
+        TextWriter output,
+        DateTimeOffset at)
+    {
+        var originalClock = TeamModeCommand.UtcNowFactory;
+        try
+        {
+            TeamModeCommand.UtcNowFactory = () => at;
+            return TeamModeCommand.ExecuteSet(context, args, output);
+        }
+        finally
+        {
+            TeamModeCommand.UtcNowFactory = originalClock;
+        }
+    }
+
     public void Dispose()
     {
         TeamModeCommand.UtcNowFactory = null;

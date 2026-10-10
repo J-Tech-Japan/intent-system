@@ -6,9 +6,30 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
-[Collection("WorkerNextActionSharedState")]
 public sealed class CloseoutPrCommandTests : IDisposable
 {
+    internal static int ExecuteWriterFixture(
+        CliContext context,
+        string[] args,
+        TextWriter output,
+        IPrClosingIssuesFetcher issueFetcher,
+        DateTimeOffset at)
+    {
+        var originalClock = CloseoutPrCommand.UtcNowFactory;
+        var originalIssueFetcherFactory = CloseoutPrCommand.PrClosingIssuesFetcherFactory;
+        try
+        {
+            CloseoutPrCommand.UtcNowFactory = () => at;
+            CloseoutPrCommand.PrClosingIssuesFetcherFactory = () => issueFetcher;
+            return CloseoutPrCommand.Execute(context, args, output);
+        }
+        finally
+        {
+            CloseoutPrCommand.UtcNowFactory = originalClock;
+            CloseoutPrCommand.PrClosingIssuesFetcherFactory = originalIssueFetcherFactory;
+        }
+    }
+
     public CloseoutPrCommandTests()
     {
         CloseoutPrCommand.UtcNowFactory = () => new DateTimeOffset(2026, 5, 4, 12, 0, 0, TimeSpan.Zero);

@@ -8,7 +8,7 @@ using IntentSystem.Supervisor.Serialization;
 
 namespace IntentSystem.Cli.Tests;
 
-[Collection("WorkerNextActionSharedState")]
+[Collection(AutomationStalledWorkSharedStateCollection.Name)]
 public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
 {
     private const string Domain = "intent-cli";
@@ -20,20 +20,6 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
     private readonly Func<DateTimeOffset>? oldStalledClock = AutomationStalledWorkCommand.UtcNowFactory;
     private readonly Func<IGitRemoteCommandRunner>? oldStalledGit = AutomationStalledWorkCommand.GitCommandRunnerFactory;
     private readonly PacketYamlParseWarningTracker? oldPacketWarningTracker = AutomationStalledWorkCommand.PacketParseWarningTracker;
-    private readonly Func<DateTimeOffset>? oldModeClock = TeamModeCommand.UtcNowFactory;
-    private readonly Func<IIssueCreator>? oldFlowCreator = IssuePublishFlowCommand.CreatorFactory;
-    private readonly Func<DateTimeOffset>? oldFlowClock = IssuePublishFlowCommand.UtcNowFactory;
-    private readonly Func<IGitHubExistingIssueChecker>? oldFlowIssueChecker = IssuePublishFlowCommand.ExistingIssueCheckerFactory;
-    private readonly Action? oldFlowAfterGate = IssuePublishFlowCommand.AfterGateHook;
-    private readonly Action? oldFlowBeforeLookup = IssuePublishFlowCommand.BeforeLookupSnapshotHook;
-    private readonly Func<IQueueDispatchPublisher> oldIssuePublishPublisher = IssuePublishCommand.PublisherFactory;
-    private readonly Func<IGitRemoteCommandRunner> oldIssuePublishGit = IssuePublishCommand.GitCommandRunnerFactory;
-    private readonly Func<DateTimeOffset> oldIssuePublishClock = IssuePublishCommand.TimestampFactory;
-    private readonly Func<IQueueDispatchPublisher> oldIssueCreatePublisher = IssueCreateCommand.PublisherFactory;
-    private readonly Func<IGitRemoteCommandRunner> oldIssueCreateGit = IssueCreateCommand.GitCommandRunnerFactory;
-    private readonly Func<DateTimeOffset> oldIssueCreateClock = IssueCreateCommand.TimestampFactory;
-    private readonly Func<DateTimeOffset>? oldCloseoutClock = CloseoutPrCommand.UtcNowFactory;
-    private readonly Func<IPrClosingIssuesFetcher>? oldCloseoutFetcher = CloseoutPrCommand.PrClosingIssuesFetcherFactory;
     private readonly Func<DateTimeOffset>? oldWritebackClock = AutomationKnowledgeWriteBackRecordCommand.UtcNowFactory;
 
     public StalledWorkAdoptionWindowG858Tests()
@@ -41,18 +27,6 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
         AutomationStalledWorkCommand.CandidateListerFactory = () => new EmptyLister();
         AutomationStalledWorkCommand.UtcNowFactory = () => Now;
         AutomationStalledWorkCommand.GitCommandRunnerFactory = null;
-        TeamModeCommand.UtcNowFactory = null;
-        IssuePublishFlowCommand.CreatorFactory = null;
-        IssuePublishFlowCommand.UtcNowFactory = null;
-        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => new ExistingIssueNone();
-        IssuePublishFlowCommand.AfterGateHook = null;
-        IssuePublishFlowCommand.BeforeLookupSnapshotHook = null;
-        IssuePublishCommand.PublisherFactory = () => new FakePublisher();
-        IssuePublishCommand.GitCommandRunnerFactory = () => new FakeGitRunner();
-        IssueCreateCommand.PublisherFactory = () => new FakePublisher();
-        IssueCreateCommand.GitCommandRunnerFactory = () => new FakeGitRunner();
-        CloseoutPrCommand.UtcNowFactory = null;
-        CloseoutPrCommand.PrClosingIssuesFetcherFactory = () => new EmptyClosingIssuesFetcher();
         AutomationKnowledgeWriteBackRecordCommand.UtcNowFactory = null;
     }
 
@@ -62,20 +36,6 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
         AutomationStalledWorkCommand.UtcNowFactory = oldStalledClock;
         AutomationStalledWorkCommand.GitCommandRunnerFactory = oldStalledGit;
         AutomationStalledWorkCommand.PacketParseWarningTracker = oldPacketWarningTracker;
-        TeamModeCommand.UtcNowFactory = oldModeClock;
-        IssuePublishFlowCommand.CreatorFactory = oldFlowCreator;
-        IssuePublishFlowCommand.UtcNowFactory = oldFlowClock;
-        IssuePublishFlowCommand.ExistingIssueCheckerFactory = oldFlowIssueChecker;
-        IssuePublishFlowCommand.AfterGateHook = oldFlowAfterGate;
-        IssuePublishFlowCommand.BeforeLookupSnapshotHook = oldFlowBeforeLookup;
-        IssuePublishCommand.PublisherFactory = oldIssuePublishPublisher;
-        IssuePublishCommand.GitCommandRunnerFactory = oldIssuePublishGit;
-        IssuePublishCommand.TimestampFactory = oldIssuePublishClock;
-        IssueCreateCommand.PublisherFactory = oldIssueCreatePublisher;
-        IssueCreateCommand.GitCommandRunnerFactory = oldIssueCreateGit;
-        IssueCreateCommand.TimestampFactory = oldIssueCreateClock;
-        CloseoutPrCommand.UtcNowFactory = oldCloseoutClock;
-        CloseoutPrCommand.PrClosingIssuesFetcherFactory = oldCloseoutFetcher;
         AutomationKnowledgeWriteBackRecordCommand.UtcNowFactory = oldWritebackClock;
     }
 
@@ -293,6 +253,111 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
     }
 
     [Fact]
+    public void V07_ExplicitSinceBeforeAndAfterSoloAdoptionOverridesBothDebtLanes()
+    {
+        var earlyCutoff = new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero);
+        var earlyStart = earlyCutoff.AddDays(4);
+        var earlyAdoption = earlyCutoff.AddDays(9);
+        var earlyCloseout = earlyCutoff.AddDays(19);
+        using (var early = new AdoptionWorkspace())
+        {
+            const string unit = "G858-v07-before-adoption";
+            early.WriteDebtPacket(unit);
+            early.WriteDraftPublishArtifact(unit);
+            using var createWriter = new StringWriter();
+            Assert.Equal(0, IssueCreateCommandTests.ExecuteWriterFixture(early.Context, [unit], createWriter,
+                new FakePublisher(2071), new FakeGitRunner(), earlyStart));
+            var created = Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(early.RunLogPath)));
+            Assert.Equal("issue-created", created.Event);
+            Assert.Equal(unit, created.ExecutionUnit);
+            Assert.Equal(earlyStart, created.Ts);
+            SetMode(early.Context, TeamMode.SoloConductor, earlyAdoption);
+            early.WriteCloseoutOnly(unit, earlyCloseout, 2071);
+
+            using var defaultSolo = Report(early.Context, now: earlyCloseout.AddDays(1));
+            Assert.Equal(earlyAdoption, defaultSolo.RootElement.GetProperty("debt_window").GetProperty("cutoff").GetDateTimeOffset());
+            Assert.Equal(new[]
+            {
+                AutomationStalledWorkCommand.KindGuideReachabilityPending,
+                AutomationStalledWorkCommand.KindKnowledgeWritebackPending,
+            }, defaultSolo.RootElement.GetProperty("excluded").EnumerateArray()
+                .Where(item => item.GetProperty("execution_unit").GetString() == unit
+                    && item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                        or AutomationStalledWorkCommand.KindGuideReachabilityPending
+                    && item.GetProperty("reason").GetString() == "debt-window-historical")
+                .Select(item => item.GetProperty("kind").GetString()).OrderBy(kind => kind, StringComparer.Ordinal).ToArray());
+
+            using var explicitEarly = Report(early.Context, ["--since", earlyCutoff.ToString("O")], now: earlyCloseout.AddDays(1));
+            Assert.Equal("explicit-since", explicitEarly.RootElement.GetProperty("debt_window").GetProperty("policy").GetString());
+            Assert.Equal(earlyCutoff, explicitEarly.RootElement.GetProperty("debt_window").GetProperty("cutoff").GetDateTimeOffset());
+            Assert.Equal(new[]
+            {
+                AutomationStalledWorkCommand.KindGuideReachabilityPending,
+                AutomationStalledWorkCommand.KindKnowledgeWritebackPending,
+            }, explicitEarly.RootElement.GetProperty("items").EnumerateArray()
+                .Where(item => item.GetProperty("execution_unit").GetString() == unit)
+                .Where(item => item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                    or AutomationStalledWorkCommand.KindGuideReachabilityPending)
+                .Select(item => item.GetProperty("kind").GetString()).OrderBy(kind => kind, StringComparer.Ordinal).ToArray());
+            Assert.DoesNotContain(explicitEarly.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("reason").GetString() == "debt-window-historical");
+            Assert.True(earlyCutoff < earlyStart && earlyStart < earlyAdoption && earlyAdoption < earlyCloseout);
+        }
+
+        var lateAdoption = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+        var lateStart = lateAdoption.AddDays(4);
+        var lateCutoff = lateAdoption.AddDays(9);
+        var lateCloseout = lateAdoption.AddDays(19);
+        using (var late = new AdoptionWorkspace())
+        {
+            const string unit = "G858-v07-after-adoption";
+            late.WriteDebtPacket(unit);
+            late.WriteDraftPublishArtifact(unit);
+            using var createWriter = new StringWriter();
+            Assert.Equal(0, IssueCreateCommandTests.ExecuteWriterFixture(late.Context, [unit], createWriter,
+                new FakePublisher(2072), new FakeGitRunner(), lateStart));
+            var created = Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(late.RunLogPath)));
+            Assert.Equal("issue-created", created.Event);
+            Assert.Equal(unit, created.ExecutionUnit);
+            Assert.Equal(lateStart, created.Ts);
+            SetMode(late.Context, TeamMode.SoloConductor, lateAdoption);
+            late.WriteCloseoutOnly(unit, lateCloseout, 2072);
+
+            using var defaultSolo = Report(late.Context, now: lateCloseout.AddDays(1));
+            Assert.Equal(lateAdoption, defaultSolo.RootElement.GetProperty("debt_window").GetProperty("cutoff").GetDateTimeOffset());
+            Assert.Equal(new[]
+            {
+                AutomationStalledWorkCommand.KindGuideReachabilityPending,
+                AutomationStalledWorkCommand.KindKnowledgeWritebackPending,
+            }, defaultSolo.RootElement.GetProperty("items").EnumerateArray()
+                .Where(item => item.GetProperty("execution_unit").GetString() == unit)
+                .Where(item => item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                    or AutomationStalledWorkCommand.KindGuideReachabilityPending)
+                .Select(item => item.GetProperty("kind").GetString()).OrderBy(kind => kind, StringComparer.Ordinal).ToArray());
+
+            using var explicitLate = Report(late.Context, ["--since", lateCutoff.ToString("O")], now: lateCloseout.AddDays(1));
+            Assert.Equal("explicit-since", explicitLate.RootElement.GetProperty("debt_window").GetProperty("policy").GetString());
+            Assert.Equal(lateCutoff, explicitLate.RootElement.GetProperty("debt_window").GetProperty("cutoff").GetDateTimeOffset());
+            Assert.Equal(new[]
+            {
+                AutomationStalledWorkCommand.KindGuideReachabilityPending,
+                AutomationStalledWorkCommand.KindKnowledgeWritebackPending,
+            }, explicitLate.RootElement.GetProperty("excluded").EnumerateArray()
+                .Where(item => item.GetProperty("execution_unit").GetString() == unit
+                    && item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                        or AutomationStalledWorkCommand.KindGuideReachabilityPending
+                    && item.GetProperty("reason").GetString() == "debt-window-historical")
+                .Select(item => item.GetProperty("kind").GetString()).OrderBy(kind => kind, StringComparer.Ordinal).ToArray());
+            Assert.DoesNotContain(explicitLate.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                    or AutomationStalledWorkCommand.KindGuideReachabilityPending);
+            Assert.True(lateAdoption < lateStart && lateStart < lateCutoff && lateCutoff < lateCloseout);
+        }
+    }
+
+    [Fact]
     public void V10_ContradictoryAndMalformedIdentitiesStayVisibleWithoutHistoricalSuppression()
     {
         using var workspace = new AdoptionWorkspace();
@@ -305,7 +370,7 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
             "G858-same-number-foreign", "G858-bare-number-only",
             "G858-source-unit-mismatch", "G858-duplicate-repo-conflict", "G858-closeout-pr-conflict",
             "G858-closeout-bare-linked-pr-conflict", "G858-closeout-malformed-linked-pr",
-            "G858-closeout-bare-linked-pr-no-repo",
+            "G858-closeout-bare-linked-pr-no-repo", "G858-nonscalar-target-repo",
         };
         foreach (var unit in badUnits)
         {
@@ -313,6 +378,7 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
                 includeRootRepo: unit == "G858-duplicate-repo-conflict");
             workspace.WriteCloseoutOnly(unit, closed, 2050 + Array.IndexOf(badUnits, unit));
         }
+        workspace.WritePacketWithNonscalarTargetRepo("G858-nonscalar-target-repo");
         workspace.AppendEvent(IssueEvent("G858-reason-number-conflict", old, "#123",
             "https://github.com/J-Tech-Japan/intent-system/issues/456"));
         workspace.AppendEvent(IssueEvent("G858-run-repo-conflict", old, "J-Tech-Japan/intent-system#124",
@@ -323,6 +389,8 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
         workspace.AppendEvent(IssueEvent("G858-same-number-foreign", old, "other-org/other-repo#126",
             "https://github.com/other-org/other-repo/issues/126", repo: "other-org/other-repo"));
         workspace.AppendEvent(IssueEvent("G858-bare-number-only", old, "#127", null));
+        workspace.AppendEvent(IssueEvent("G858-nonscalar-target-repo", old, "J-Tech-Japan/intent-system#131",
+            "https://github.com/J-Tech-Japan/intent-system/issues/131"));
         workspace.WriteDebtPacket("G858-metadata-alias", includeMetadataRepo: true);
         workspace.WriteCloseoutOnly("G858-metadata-alias", closed, 2059);
         workspace.AppendEvent(IssueEvent("G858-metadata-alias", old, "J-Tech-Japan/intent-system#128",
@@ -401,6 +469,13 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
             item.GetString()!.Contains("G858-reason-number-conflict", StringComparison.Ordinal));
         Assert.Contains(result.RootElement.GetProperty("warnings").EnumerateArray(), item =>
             item.GetString()!.Contains("G858-same-number-foreign", StringComparison.Ordinal));
+        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == "G858-nonscalar-target-repo"
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
+        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == "G858-nonscalar-target-repo"
+            && item.GetProperty("reason").GetString() == "debt-window-start-unknown"
+            && item.GetProperty("detail").GetString()!.Contains("packet-identity", StringComparison.Ordinal));
         Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
             item.GetProperty("execution_unit").GetString() == "G858-metadata-alias"
             && item.GetProperty("reason").GetString() == "debt-window-historical"
@@ -462,6 +537,44 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests : IDisposable
         Assert.Equal(2, debtCounts.GetProperty("candidate_units").GetInt32());
         Assert.Equal(1, debtCounts.GetProperty("historical_units").GetInt32());
         Assert.Equal(1, debtCounts.GetProperty("included_units").GetInt32());
+
+        using (var roleScoped = new AdoptionWorkspace())
+        {
+            const string unit = "G858-role-scoped-receipt";
+            roleScoped.WriteDebtPacket(unit);
+            roleScoped.AppendEvent(IssueEvent(unit, cutoff.AddDays(1), "J-Tech-Japan/intent-system#305",
+                "https://github.com/J-Tech-Japan/intent-system/issues/305"));
+            roleScoped.WriteCloseoutOnly(unit, cutoff.AddDays(2), 2305);
+            roleScoped.InitializeGit();
+            RecordWriteback(roleScoped.Context, unit, cutoff.AddDays(3));
+            using (var guideWriter = new StringWriter())
+            {
+                Assert.Equal(0, AutomationGuideReachabilityRecordCommand.Execute(roleScoped.Context,
+                    ["--execution-unit", unit, "--commit", new string('a', 40), "--role", "architect", "--write", "--format", "json"],
+                    guideWriter));
+            }
+            roleScoped.CommitPath(RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                KnowledgeWriteBackRecord.RecordRootRelativePath, unit, "design"));
+            roleScoped.CommitPath(RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                GuideReachabilityRecord.RecordRootRelativePath, unit, "design"));
+
+            using var orchestrator = Report(roleScoped.Context,
+                ["--since", cutoff.ToString("O"), "--role", "orchestrator"], now: cutoff.AddDays(10));
+            Assert.Equal("explicit-since", orchestrator.RootElement.GetProperty("debt_window").GetProperty("policy").GetString());
+            Assert.Contains(orchestrator.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+            Assert.Contains(orchestrator.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
+
+            using var architect = Report(roleScoped.Context,
+                ["--since", cutoff.ToString("O"), "--role", "architect"], now: cutoff.AddDays(10));
+            Assert.DoesNotContain(architect.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() is AutomationStalledWorkCommand.KindKnowledgeWritebackPending
+                    or AutomationStalledWorkCommand.KindGuideReachabilityPending);
+        }
     }
 
     [Fact]

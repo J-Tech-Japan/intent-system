@@ -10,6 +10,38 @@ namespace IntentSystem.Cli.Tests;
 [Collection("WorkerNextActionSharedState")]
 public sealed class IssuePublishFlowCommandTests : IDisposable
 {
+    internal static int ExecuteWriterFixture(
+        CliContext context,
+        string[] args,
+        TextWriter output,
+        IIssueCreator creator,
+        IGitHubExistingIssueChecker issueChecker,
+        DateTimeOffset at)
+    {
+        var originalCreatorFactory = IssuePublishFlowCommand.CreatorFactory;
+        var originalClock = IssuePublishFlowCommand.UtcNowFactory;
+        var originalIssueCheckerFactory = IssuePublishFlowCommand.ExistingIssueCheckerFactory;
+        var originalAfterGateHook = IssuePublishFlowCommand.AfterGateHook;
+        var originalBeforeLookupHook = IssuePublishFlowCommand.BeforeLookupSnapshotHook;
+        try
+        {
+            IssuePublishFlowCommand.CreatorFactory = () => creator;
+            IssuePublishFlowCommand.UtcNowFactory = () => at;
+            IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => issueChecker;
+            IssuePublishFlowCommand.AfterGateHook = null;
+            IssuePublishFlowCommand.BeforeLookupSnapshotHook = null;
+            return IssuePublishFlowCommand.Execute(context, args, output);
+        }
+        finally
+        {
+            IssuePublishFlowCommand.CreatorFactory = originalCreatorFactory;
+            IssuePublishFlowCommand.UtcNowFactory = originalClock;
+            IssuePublishFlowCommand.ExistingIssueCheckerFactory = originalIssueCheckerFactory;
+            IssuePublishFlowCommand.AfterGateHook = originalAfterGateHook;
+            IssuePublishFlowCommand.BeforeLookupSnapshotHook = originalBeforeLookupHook;
+        }
+    }
+
     public IssuePublishFlowCommandTests()
     {
         IssuePublishFlowCommand.CreatorFactory = null;

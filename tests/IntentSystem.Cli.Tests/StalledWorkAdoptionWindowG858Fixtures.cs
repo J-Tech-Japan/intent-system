@@ -37,7 +37,6 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
 
     private static void SetMode(CliContext context, string mode, DateTimeOffset at, string? team = null)
     {
-        TeamModeCommand.UtcNowFactory = () => at;
         var args = new List<string> { "--domain", Domain };
         if (team is not null)
         {
@@ -45,7 +44,7 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
         }
         args.AddRange(["--mode", mode, "--write", "--format", "json"]);
         using var writer = new StringWriter();
-        Assert.Equal(0, TeamModeCommand.ExecuteSet(context, args.ToArray(), writer));
+        Assert.Equal(0, TeamModeG691Tests.ExecuteSetWriterFixture(context, args.ToArray(), writer, at));
     }
 
     private static RunEvent IssueEvent(
@@ -66,35 +65,36 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
 
     private static void PublishFlow(AdoptionWorkspace workspace, string unit, int issueNumber, DateTimeOffset at)
     {
-        IssuePublishFlowCommand.CreatorFactory = () => new StubCreator(
-            $"https://github.com/J-Tech-Japan/intent-system/issues/{issueNumber}");
-        IssuePublishFlowCommand.UtcNowFactory = () => at;
         using var writer = new StringWriter();
-        var exitCode = IssuePublishFlowCommand.Execute(
+        var exitCode = IssuePublishFlowCommandTests.ExecuteWriterFixture(
             workspace.Context,
             [unit, "--repo", Repo, "--write", "--format", "json"],
-            writer);
+            writer,
+            new StubCreator($"https://github.com/J-Tech-Japan/intent-system/issues/{issueNumber}"),
+            new ExistingIssueNone(),
+            at);
         Assert.True(exitCode == 0, writer.ToString());
     }
 
     private static void PublishMarker(AdoptionWorkspace workspace, string unit, DateTimeOffset at)
     {
-        IssuePublishCommand.TimestampFactory = () => at;
         using var writer = new StringWriter();
-        var exitCode = IssuePublishCommand.Execute(workspace.Context, [unit], writer);
+        var exitCode = IssuePublishCommandTests.ExecuteWriterFixture(workspace.Context, [unit], writer,
+            new FakePublisher(), new FakeGitRunner(), at);
         Assert.True(exitCode == 0, writer.ToString());
     }
 
     private static void WriteCloseout(AdoptionWorkspace workspace, string unit, int pr, DateTimeOffset at)
     {
         workspace.AttachPrsAndSetReviewState([unit], [pr]);
-        CloseoutPrCommand.UtcNowFactory = () => at;
         using var writer = new StringWriter();
-        Assert.Equal(0, CloseoutPrCommand.Execute(
+        Assert.Equal(0, CloseoutPrCommandTests.ExecuteWriterFixture(
             workspace.Context,
             ["--repo", Repo, "--pr", pr.ToString(System.Globalization.CultureInfo.InvariantCulture),
              "--pr-merged", "true", "--write", "--format", "json"],
-            writer));
+            writer,
+            new EmptyClosingIssuesFetcher(),
+            at));
     }
 
     [Fact]
@@ -107,12 +107,9 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
         const string unit = "G858-url-only";
         workspace.WriteDebtPacket(unit);
         workspace.WriteDraftPublishArtifact(unit);
-        IssueCreateCommand.PublisherFactory = () => new FakePublisher(412);
-        IssueCreateCommand.GitCommandRunnerFactory = () => new FakeGitRunner();
-        IssueCreateCommand.TimestampFactory = () => createdAt;
-
         using var writer = new StringWriter();
-        var exitCode = IssueCreateCommand.Execute(workspace.Context, [unit], writer);
+        var exitCode = IssueCreateCommandTests.ExecuteWriterFixture(workspace.Context, [unit], writer,
+            new FakePublisher(412), new FakeGitRunner(), createdAt);
         Assert.True(exitCode == 0, writer.ToString());
         var emitted = Assert.Single(RunLogSerializer.DeserializeAll(File.ReadAllText(workspace.RunLogPath)));
         Assert.Equal("issue-created", emitted.Event);
@@ -295,10 +292,12 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
             exact.WriteDebtPacket("G858-exact-team");
             exact.WriteClaim("G858-exact-team", Team, cutoff.AddDays(-1));
             exact.WriteCloseoutOnly("G858-exact-team", cutoff.AddDays(1), 2801);
+            SetMode(exact.Context, TeamMode.SoloConductor, cutoff.AddDays(-5));
             SetMode(exact.Context, TeamMode.SoloConductor, cutoff, Team);
             using var report = Report(exact.Context, ["--team", Team], now: cutoff.AddDays(2));
             Assert.Equal("team-specific", report.RootElement.GetProperty("debt_window").GetProperty("resolved_scope").GetString());
             Assert.Equal(Team, report.RootElement.GetProperty("debt_window").GetProperty("resolved_team").GetString());
+            Assert.Equal(cutoff, report.RootElement.GetProperty("debt_window").GetProperty("cutoff").GetDateTimeOffset());
             Assert.Contains(report.RootElement.GetProperty("excluded").EnumerateArray(), item =>
                 item.GetProperty("execution_unit").GetString() == "G858-exact-team"
                 && item.GetProperty("reason").GetString() == "debt-window-historical");
@@ -313,6 +312,21 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
             using var report = Report(fallback.Context, now: cutoff.AddDays(2));
             Assert.Equal("unique-team-fallback", report.RootElement.GetProperty("debt_window").GetProperty("resolved_scope").GetString());
             Assert.Equal(Team, report.RootElement.GetProperty("debt_window").GetProperty("resolved_team").GetString());
+        }
+
+        using (var explicitTeamFallback = new AdoptionWorkspace())
+        {
+            explicitTeamFallback.WriteDebtPacket("G858-explicit-team-domain-fallback");
+            explicitTeamFallback.WriteClaim("G858-explicit-team-domain-fallback", "foreign-team", cutoff.AddDays(-1));
+            explicitTeamFallback.WriteCloseoutOnly("G858-explicit-team-domain-fallback", cutoff.AddDays(1), 2804);
+            SetMode(explicitTeamFallback.Context, TeamMode.SoloConductor, cutoff);
+            using var report = Report(explicitTeamFallback.Context, ["--team", Team], now: cutoff.AddDays(2));
+            Assert.Equal("domain-wide", report.RootElement.GetProperty("debt_window").GetProperty("resolved_scope").GetString());
+            Assert.Null(report.RootElement.GetProperty("debt_window").GetProperty("resolved_team").GetString());
+            Assert.Equal(cutoff, report.RootElement.GetProperty("debt_window").GetProperty("cutoff").GetDateTimeOffset());
+            Assert.Contains(report.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == "G858-explicit-team-domain-fallback"
+                && item.GetProperty("reason").GetString() == "debt-window-historical");
         }
 
         using (var domainWide = new AdoptionWorkspace())
@@ -347,7 +361,7 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
     {
         using var workspace = new AdoptionWorkspace();
         var cutoff = new DateTimeOffset(2026, 8, 12, 0, 0, 0, TimeSpan.Zero);
-        var units = new[] { "G858-team-match", "G858-team-foreign", "G858-team-missing", "G858-team-conflict" };
+        var units = new[] { "G858-team-match", "G858-team-foreign", "G858-team-missing", "G858-team-conflict", "G858-team-null-claim" };
         foreach (var unit in units)
         {
             workspace.WriteDebtPacket(unit);
@@ -359,6 +373,7 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
             "https://github.com/J-Tech-Japan/intent-system/issues/312"));
         workspace.WriteClaim("G858-team-conflict", Team, cutoff.AddDays(-3));
         workspace.WriteClaimHistory("G858-team-conflict", Team, "foreign-team", cutoff.AddDays(-3), cutoff.AddDays(-1));
+        workspace.WriteClaimWithNullTeam("G858-team-null-claim", cutoff.AddDays(-2));
         SetMode(workspace.Context, TeamMode.SoloConductor, cutoff, Team);
 
         using var teamScoped = Report(workspace.Context, ["--team", Team], now: cutoff.AddDays(2));
@@ -377,6 +392,18 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
         Assert.Contains(teamScoped.RootElement.GetProperty("excluded").EnumerateArray(), item =>
             item.GetProperty("execution_unit").GetString() == "G858-team-conflict"
             && item.GetProperty("reason").GetString() == "debt-window-start-unknown");
+        Assert.Contains(teamScoped.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == "G858-team-null-claim"
+            && item.GetProperty("reason").GetString() == "debt-window-start-unknown");
+        foreach (var unit in new[] { "G858-team-missing", "G858-team-conflict", "G858-team-null-claim" })
+        {
+            Assert.Contains(teamScoped.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+            Assert.Contains(teamScoped.RootElement.GetProperty("items").EnumerateArray(), item =>
+                item.GetProperty("execution_unit").GetString() == unit
+                && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
+        }
 
         using var explicitWindow = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(2));
         Assert.Contains(explicitWindow.RootElement.GetProperty("excluded").EnumerateArray(), item =>
@@ -899,33 +926,55 @@ public sealed partial class StalledWorkAdoptionWindowG858Tests
         using var workspace = new AdoptionWorkspace();
         var cutoff = new DateTimeOffset(2026, 8, 18, 0, 0, 0, TimeSpan.Zero);
         const string unit = "G858-legacy-only";
+        const string scopedOnlyUnit = "G858-scoped-only";
         workspace.WriteDebtPacket(unit);
-        workspace.WriteQueue([unit]);
-        workspace.AppendEvent(IssueEvent(unit, cutoff.AddTicks(-1), "J-Tech-Japan/intent-system#331",
+        workspace.WriteDebtPacket(scopedOnlyUnit);
+        workspace.WriteQueue([unit, scopedOnlyUnit]);
+        workspace.AppendEvent(IssueEvent(unit, cutoff.AddDays(1), "J-Tech-Japan/intent-system#331",
             "https://github.com/J-Tech-Japan/intent-system/issues/331"));
         workspace.WriteCloseoutOnly(unit, cutoff.AddDays(1), 2831);
-        var scopedPath = workspace.WriteScopedRunLog(new RunEvent
-        {
-            Ts = cutoff.AddDays(1),
-            ExecutionUnit = unit,
-            Event = "issue-created",
-            By = "foreign scoped fixture",
-            LinkedIssue = "J-Tech-Japan/intent-system#331",
-            Reason = "https://github.com/J-Tech-Japan/intent-system/issues/331",
-        });
+        workspace.WriteCloseoutOnly(scopedOnlyUnit, cutoff.AddDays(1), 2832);
+        var scopedPath = workspace.WriteScopedRunLog(
+            new RunEvent
+            {
+                Ts = cutoff.AddDays(-1),
+                ExecutionUnit = unit,
+                Event = "issue-created",
+                By = "foreign scoped fixture",
+                LinkedIssue = "J-Tech-Japan/intent-system#331",
+                Reason = "https://github.com/J-Tech-Japan/intent-system/issues/331",
+            },
+            new RunEvent
+            {
+                Ts = cutoff.AddDays(-1),
+                ExecutionUnit = scopedOnlyUnit,
+                Event = "issue-created",
+                By = "foreign scoped-only fixture",
+                LinkedIssue = "J-Tech-Japan/intent-system#332",
+                Reason = "https://github.com/J-Tech-Japan/intent-system/issues/332",
+            });
         var scopedBytes = File.ReadAllBytes(scopedPath);
         using var result = Report(workspace.Context, ["--since", cutoff.ToString("O")], now: cutoff.AddDays(3));
         var exclusions = result.RootElement.GetProperty("excluded").EnumerateArray()
             .Where(item => item.GetProperty("execution_unit").GetString() == unit
                 && item.GetProperty("reason").GetString() == "debt-window-historical")
             .ToArray();
-        Assert.Equal(2, exclusions.Length);
-        Assert.All(exclusions, exclusion =>
-        {
-            Assert.Equal("issue-created", exclusion.GetProperty("debt_window_evidence_kind").GetString());
-            Assert.Equal(cutoff.AddTicks(-1), exclusion.GetProperty("debt_window_evidence_at").GetDateTimeOffset());
-            Assert.Equal(workspace.RunLogPath, exclusion.GetProperty("debt_window_evidence_path").GetString());
-        });
+        Assert.Empty(exclusions);
+        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == unit
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
+        Assert.Contains(result.RootElement.GetProperty("excluded").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == "G858-scoped-only"
+            && item.GetProperty("reason").GetString() == "debt-window-start-unknown");
+        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == scopedOnlyUnit
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindKnowledgeWritebackPending);
+        Assert.Contains(result.RootElement.GetProperty("items").EnumerateArray(), item =>
+            item.GetProperty("execution_unit").GetString() == scopedOnlyUnit
+            && item.GetProperty("kind").GetString() == AutomationStalledWorkCommand.KindGuideReachabilityPending);
         Assert.EndsWith(".intent-cli/runs.jsonl", result.RootElement.GetProperty("debt_window")
             .GetProperty("legacy_run_log_path").GetString(), StringComparison.Ordinal);
         Assert.Equal(scopedBytes, File.ReadAllBytes(scopedPath));
@@ -1138,12 +1187,41 @@ internal sealed class AdoptionWorkspace : IDisposable
         File.WriteAllText(path, json);
     }
 
+    public void WriteClaimWithNullTeam(string unit, DateTimeOffset claimedAt)
+    {
+        var scope = $"execution-unit:{unit}";
+        var path = Path.Combine(Root, ClaimCommand.ClaimPath(scope));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, JsonSerializer.Serialize(new
+        {
+            schema_version = "1",
+            scope,
+            actor = "fixture",
+            team = (string?)null,
+            claimed_at = claimedAt,
+            base_commit = new string('a', 40),
+        }, SnakeCase));
+    }
+
     public void WriteClaim(string unit, string team, DateTimeOffset claimedAt)
     {
         var scope = $"execution-unit:{unit}";
         var path = Path.Combine(Root, ClaimCommand.ClaimPath(scope));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, JsonSerializer.Serialize(new ClaimRecord("1", scope, "fixture", team, claimedAt, new string('a', 40)), SnakeCase));
+    }
+
+    public void WritePacketWithNonscalarTargetRepo(string unit)
+    {
+        var path = Path.Combine(Root, ".intent-cli", "issues", unit, "packet.yaml");
+        var text = File.ReadAllText(path);
+        const string canonical = "target_repo: J-Tech-Japan/intent-system";
+        var index = text.IndexOf(canonical, StringComparison.Ordinal);
+        Assert.True(index >= 0, $"Expected packet root target_repo scalar in {path}.");
+        text = text[..index]
+            + "target_repo:\n  owner: J-Tech-Japan\n  repository: intent-system"
+            + text[(index + canonical.Length)..];
+        File.WriteAllText(path, text);
     }
 
     public void WriteClaimHistory(
@@ -1196,11 +1274,11 @@ internal sealed class AdoptionWorkspace : IDisposable
         Directory.CreateSymbolicLink(bucket, Path.Combine(Root, "missing-history-target"));
     }
 
-    public string WriteScopedRunLog(RunEvent runEvent)
+    public string WriteScopedRunLog(params RunEvent[] runEvents)
     {
         var path = Path.Combine(Root, ".intent-cli", "runtime", "intent-cli", "J-Tech-Japan__intent-system", "runs.jsonl");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, RunLogSerializer.SerializeLine(runEvent) + Environment.NewLine);
+        File.WriteAllText(path, string.Join(Environment.NewLine, runEvents.Select(RunLogSerializer.SerializeLine)) + Environment.NewLine);
         return path;
     }
 
