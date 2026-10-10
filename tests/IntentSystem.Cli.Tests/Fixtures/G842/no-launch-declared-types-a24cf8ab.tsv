@@ -3,7 +3,15 @@ AgentLaunchShapeComparer	src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.
 AgentLaunchShapeComparison	src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.cs
 AgentObservation	src/IntentSystem.Cli/Commands/SessionLayerInspectCommand.cs
 AgmsgNotifyTransport	src/IntentSystem.Cli/Commands/NotifyTransport.cs
+ApprovalPostingCheckout	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
+ApprovalPostingOverride	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
+ApprovalPostingOverrideDecidingRecord	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
+ApprovalPostingOverrideRequest	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
+ApprovalPostingOverrideResult	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
+ApprovalPostingPacketIdentity	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
+ApprovalPostingPathInspection	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 ArchivePeriodOutput	src/IntentSystem.Cli/Commands/NotifySupervisionStore.cs
+Assessment	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 AtomicAppendWriter	src/IntentSystem.Cli/Commands/AtomicAppendWriter.cs
 AtomicStandaloneBinaryReplacer	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 AutomationClarificationStopCommand	src/IntentSystem.Cli/Commands/AutomationClarificationStopCommand.cs
@@ -37,6 +45,7 @@ BootstrapStep	src/IntentSystem.Cli/Commands/GuideBootstrapCommand.cs
 BootstrapTriggerPhrases	src/IntentSystem.Cli/Commands/GuideBootstrapCommand.cs
 BugImplementationIssueCommand	src/IntentSystem.Cli/Commands/BugImplementationIssueCommand.cs
 CanonicalClaimEvidence	src/IntentSystem.Cli/Commands/ClaimOwnershipVerifier.cs
+CanonicalTarget	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 CheckoutFreshnessGitCommandRunner	src/IntentSystem.Cli/GitCommandRunner.cs
 CheckoutFreshnessObservation	src/IntentSystem.Cli/Commands/CheckoutFreshnessProbe.cs
 CheckoutFreshnessProbe	src/IntentSystem.Cli/Commands/CheckoutFreshnessProbe.cs
@@ -94,8 +103,10 @@ DesignThreadWakeRule	src/IntentSystem.Cli/Commands/GuideDesignThreadCommand.cs
 DurableStatePreflightProbe	src/IntentSystem.Cli/Commands/AutomationDurableStatePreflightCommand.cs
 EnvelopeResult	src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.cs
 ExecutablePathResolution	src/IntentSystem.Cli/Commands/UpdateCommand.cs
+ExecutionFacts	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 ExecutionUnitResolution	src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs
 ExistingIntakeDelegation	src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs
+ExistingPair	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 ExpectedOption	src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.cs
 FailureProjection	src/IntentSystem.Cli/Commands/TaskingPublishReviewedBridgeCommand.cs
 FileCompactionPlan	src/IntentSystem.Cli/Commands/NotifySupervisionStore.cs
@@ -202,6 +213,7 @@ HerdrAgentState	src/IntentSystem.Cli/Commands/NotifyTransport.cs
 HerdrNotifyTransport	src/IntentSystem.Cli/Commands/NotifyTransport.cs
 HerdrPaneLabelValidation	src/IntentSystem.Cli/Commands/HerdrPaneLabelValidation.cs
 HerdrReadResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
+HistoricalPairReport	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 HostDataRootResolver	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe.cs
 HostLoopIdentityCapture	src/IntentSystem.Cli/Commands/HostLoopIdentityCapture.cs
 HostOwnershipModel	src/IntentSystem.Cli/Commands/HostOwnershipModel.cs
@@ -382,6 +394,7 @@ NotifySupervisorStepResult	src/IntentSystem.Cli/Commands/NotifySupervisor.cs
 NotifyTransportPaths	src/IntentSystem.Cli/Commands/NotifyTransport.cs
 NotifyTransportPreflight	src/IntentSystem.Cli/Commands/NotifyTransportPreflight.cs
 NotifyTransportPreflightFailure	src/IntentSystem.Cli/Commands/NotifyTransportPreflight.cs
+ObservedAudit	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 ObservedHerdrPane	src/IntentSystem.Cli/Commands/HerdrPaneLabelValidation.cs
 Options	src/IntentSystem.Cli/Commands/NotifyAdjudicateCommand.cs
 OrchestratorApprovalModel	src/IntentSystem.Cli/Commands/GuideOrchestratorThreadCommand.cs
@@ -468,11 +481,14 @@ ParentGitlinkInspection	src/IntentSystem.Cli/Commands/NestedSubmodulePointerDrif
 ParentSubmodulePointerUpdater	src/IntentSystem.Review/ParentSubmodulePointerUpdater.cs
 ParsedArgs	src/IntentSystem.Cli/Commands/IntentHostCheckCommand.cs,src/IntentSystem.Cli/Commands/TaskCommand.cs
 ParsedOption	src/IntentSystem.Cli/Commands/AgentLaunchShapeComparer.cs
+PreparedAudit	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 PrivatePreviewExpiryGate	src/IntentSystem.Cli/Infrastructure/PrivatePreviewExpiryGate.cs
 ProcessExecutablePathResolver	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 ProcessOutputEncoding	src/IntentSystem.Cli/ProcessOutputEncoding.cs
+ProcessResult	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 ProcessUpdateRunner	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 ProviderReadResult	src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs
+PublicationResult	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 PublishLifecycleExclusion	src/IntentSystem.Cli/Commands/AutomationPublishLifecycleRepairCommand.cs
 PublishLifecycleRepairResult	src/IntentSystem.Cli/Commands/AutomationPublishLifecycleRepairCommand.cs
 QueueDispatchCommand	src/IntentSystem.Cli/Commands/QueueDispatchCommand.cs
@@ -580,6 +596,7 @@ WorkerResultSummaryAnalyzer	src/IntentSystem.Cli/Commands/WorkerResultSummaryAna
 WorkerResultSummaryCommand	src/IntentSystem.Cli/Commands/WorkerResultSummaryCommand.cs
 WorkerSignalCommand	src/IntentSystem.Cli/Commands/WorkerSignalCommand.cs
 WorkerSignalContract	src/IntentSystem.Cli/Commands/WorkerSignalContract.cs
+WriterOperationsHooks	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 WorkflowGuidePointer	src/IntentSystem.Cli/Commands/GuideHelpCommand.cs
 WorkspaceGuardResult	src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs
 WorkspaceGuardState	src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs

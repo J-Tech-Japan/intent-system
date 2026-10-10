@@ -296,6 +296,16 @@ gate は honest seat を前提とし、GitHub label と SHA は atomic に結び
 **前方互換性。** G856 を含まない intent-cli は posted solo approval を強制しません。この境界に依存する前に、
 PR transition を承認できるすべての host binary を更新してください。
 
+## G834 宣言 team の missing-posting 例外（G861 — preview-through-1.x）
+
+G861 は、現在記録されている solo-conductor team について、G834 local gate が満たされ、G856 の `review-missing` が canonical posting の欠落だけを示す場合に限り、`approved` PR transition の明示的な例外を追加します。canonical queue は同じ unit、repo、PR を結び付ける必要があります。local approval の代用にはならず、negative、unknown、stale-head、ownership、malformed、unavailable evidence を無視しません。
+
+deciding review file と config を先に canonical host branch へ公開してください。`--override-loop-evidence` は caller-local file を公開せず、GitHub comment も作りません。held builder actor/team、full child head、具体的な reason、UUID を明示します。intent-cli は適用条件と現在の binding を検査しますが、外部承認や reason の品質は検証しません。write では label 変更の前に create-only prepared audit と選択済み run event を公開し、head と label を再読した後、観測を確認できた場合だけ二つ目の immutable outcome を公開します。
+
+最初から posting gate が満たされている場合は適用対象外で、audit は作成されません。prepared audit がすでにある同じ UUID の retry なら、以前 missing だった review が投稿されていても、現在 missing の slot が元の missing set の部分集合であれば続行できます。audit は元の missing-posting 状態を保持し、合成した approval receipt は作りません。
+
+prepared record は最初に使った host snapshot を記録します。同じ UUID の retry は canonical state を再読し、互換性のある新しい snapshot を確認できますが、request、claim epoch、child head、queue identity、deciding-record digest は変えられません。不確実な場合は `prepared_published`、`label_state_observed`、`outcome_published` と recovery command を確認してください。label action を盲目的に繰り返したり、元に戻したりしません。GitHub は head SHA と label 更新を atomic に比較できないため、merge では `--match-head-commit` を使います。audit には G834 local gate の成功と G856 posting result の `review-missing` を残します。古い binary は flag を拒否します。
+
 ## claim release 前に公開する solo-conductor completion（G857 — preview-through-1.x）
 
 solo-conductor loop の step 10 は PR merge 後にだけ実行し、closeout queue/runs、submodule pointer、intent-node 変更を公開します。

@@ -744,6 +744,62 @@ before reviews and immediately before labels; GitHub does not offer an atomic
 label/SHA compare, so merge with `--match-head-commit`. G856 adds no override or
 approval receipt; G857 separately gates eligible implementation claim releases.
 
+### Declared-team missing-posting exception (G861 — preview-through-1.x)
+
+G861 adds an explicit, approved-transition-only exception for a recorded
+solo-conductor team whose declared G834 local gate is satisfied and for which
+G856 reports `review-missing` solely because one or both currently deciding
+canonical approval comments are missing. It cannot bypass either local
+approval, a negative or unknown review, head or ownership checks, an unavailable
+or conflicting record, or any other gate cause. The canonical queue must bind
+the same execution unit, repository and PR, and the resolved domain/team's G834
+declaration must include that repository. An already-satisfied or
+undeclared-team request is not applicable.
+
+The flag requires explicit repository, PR, execution unit and full head, plus
+the exact held builder actor/team, a nonblank reason and a UUID. The reason is
+an operator attribution, not authorization checked by intent-cli. The flag
+does not publish local review/config files or create a GitHub review/comment.
+Publish the deciding review records and configuration to the canonical host
+branch first; the command then records a create-only prepared audit and one
+selected run event there before it changes labels:
+
+An initial request is not applicable when the ordinary posting gate is already
+satisfied, and it creates no audit. Only a same-ID retry with an existing
+prepared audit may continue after a previously missing relation is posted; the
+current missing set must remain a subset of the slots recorded in that audit.
+This records the original missing-posting exception and never creates a
+synthetic review receipt.
+
+```bash
+intent-cli automation pr-transition --repo <owner/repo> --pr <pr> \
+  --transition approved --execution-unit <unit> --head-sha <full-head-sha> \
+  --actor implementation --team <team> --reason "specific missing posting" \
+  --override-loop-evidence --override-id <uuid> --format json
+intent-cli automation pr-transition --repo <owner/repo> --pr <pr> \
+  --transition approved --execution-unit <unit> --head-sha <full-head-sha> \
+  --actor implementation --team <team> --reason "specific missing posting" \
+  --override-loop-evidence --override-id <uuid> --write --format json
+```
+
+The prepared audit records the canonical host snapshot used for the first
+publication, exact child head, held claim epoch and deciding review records. A
+retry rereads canonical state and may observe a newer compatible host snapshot,
+but the UUID cannot be rebound to another request, claim epoch, head, queue
+identity or deciding-record digest. A verified observed result is written as a
+second immutable audit/event after the label state and head are read back. If a push, read, label response or
+follow-up check is uncertain, inspect the phase fields and recovery command
+before retrying; the command never blindly repeats a label call or rolls labels
+back. `prepared_published`, `label_state_observed` and `outcome_published`
+report separate facts. The audit preserves the G834 local-gate success and the
+G856 posting-gate `review-missing` result even when the exception is observed. A current
+head change can still race a label update because GitHub cannot atomically
+compare a head SHA and change labels; merge with `--match-head-commit`.
+
+**Forward compatibility.** Older intent-cli binaries reject the new flag.
+Update every host binary that approves PR transitions before relying on this
+exception.
+
 ### Solo-conductor implementation claim release (G857 — preview-through-1.x)
 
 This gate applies only to `claim release` for an `execution-unit:<unit>` when

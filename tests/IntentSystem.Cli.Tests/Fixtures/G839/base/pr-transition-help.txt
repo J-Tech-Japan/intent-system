@@ -1,5 +1,6 @@
 automation pr-transition
 Usage: intent-cli automation pr-transition --repo <owner/repo> --pr <n> --transition <review-start|request-update|approved|review-release> [--head-sha <sha>] [--execution-unit <unit>] [--write] [--dry-run] [--format text|json]
+Approved transition only: --override-loop-evidence --reason <text> --override-id <uuid> --actor <builder|implementation> --team <team>. Requires explicit --repo, --pr, --execution-unit, and --head-sha; applies only when the declared G834 local gate is satisfied and G856 reports review-missing solely for absent canonical posting on the same queue-bound unit/repo/PR. Publishes a prepared audit before labels; it never posts a review comment or bypasses another refusal.
 Supported transitions:
 - review-start
 - request-update
