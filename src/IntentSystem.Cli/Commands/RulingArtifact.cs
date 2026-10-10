@@ -129,6 +129,9 @@ internal sealed record RulingArtifact
 
         try
         {
+            // Validate byte encoding independently from JSON syntax so malformed UTF-8 has
+            // one stable parser result across runtimes.
+            _ = new UTF8Encoding(false, true).GetString(bytes);
             RejectDuplicateKeysAndDepth(bytes);
             using var document = JsonDocument.Parse(bytes.ToArray(), new JsonDocumentOptions
             {
@@ -168,13 +171,13 @@ internal sealed record RulingArtifact
             var hasRecorded = root.TryGetProperty("recorded_at", out var recordedNode);
             DateTimeOffset recorded = default;
             if (!hasRecorded && requireRecordedAt) return Invalid("recorded_at is required in stored records", out cause, out detail);
-            if (hasRecorded && (recordedNode.ValueKind != JsonValueKind.String || !TryTimestamp(recordedNode.GetString(), out recorded)))
+            if (hasRecorded && (recordedNode.ValueKind != JsonValueKind.String || !TryTimestamp(GetString(recordedNode), out recorded)))
                 return Invalid("recorded_at must be a full UTC timestamp", out cause, out detail);
             if (!hasRecorded) recorded = default;
             DateTimeOffset? expires = null;
             if (root.TryGetProperty("expires_at", out var expiresNode) && expiresNode.ValueKind != JsonValueKind.Null)
             {
-                if (expiresNode.ValueKind != JsonValueKind.String || !TryTimestamp(expiresNode.GetString(), out var parsedExpires))
+                if (expiresNode.ValueKind != JsonValueKind.String || !TryTimestamp(GetString(expiresNode), out var parsedExpires))
                     return Invalid("expires_at must be null or a full UTC timestamp", out cause, out detail);
                 expires = parsedExpires;
                 if (hasRecorded && expires <= recorded) return Invalid("expires_at must be strictly later than recorded_at", out cause, out detail);
@@ -222,8 +225,26 @@ internal sealed record RulingArtifact
     {
         value = "";
         if (!obj.TryGetProperty(name, out var element) || element.ValueKind != JsonValueKind.String) return false;
-        value = element.GetString() ?? "";
+        value = GetString(element);
         return !HasUnpairedSurrogate(value);
+    }
+
+    private static string GetString(JsonElement element)
+    {
+        try { return element.GetString() ?? ""; }
+        catch (InvalidOperationException ex) { throw new DecoderFallbackException("JSON string contains invalid UTF-16", ex); }
+    }
+
+    private static string GetPropertyName(JsonProperty property)
+    {
+        try { return property.Name; }
+        catch (InvalidOperationException ex) { throw new DecoderFallbackException("JSON property name contains invalid UTF-16", ex); }
+    }
+
+    private static string GetReaderString(ref Utf8JsonReader reader)
+    {
+        try { return reader.GetString() ?? ""; }
+        catch (InvalidOperationException ex) { throw new DecoderFallbackException("JSON property name contains invalid UTF-16", ex); }
     }
 
     private static bool Array(JsonElement obj, string name, int maximum, out List<string> values)
@@ -233,7 +254,7 @@ internal sealed record RulingArtifact
         foreach (var item in element.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.String) return false;
-            var value = item.GetString() ?? "";
+            var value = GetString(item);
             if (HasUnpairedSurrogate(value)) return false;
             values.Add(value);
         }
@@ -245,7 +266,8 @@ internal sealed record RulingArtifact
         var set = new HashSet<string>(allowed, StringComparer.Ordinal);
         foreach (var p in obj.EnumerateObject())
         {
-            if (!set.Contains(p.Name)) { error = $"unknown field '{p.Name}'"; return false; }
+            var name = GetPropertyName(p);
+            if (!set.Contains(name)) { error = $"unknown field '{name}'"; return false; }
         }
         foreach (var key in allowed)
         {
@@ -282,7 +304,7 @@ internal sealed record RulingArtifact
             else if (reader.TokenType == JsonTokenType.EndObject) stack.Pop();
             else if (reader.TokenType == JsonTokenType.PropertyName)
             {
-                var name = reader.GetString() ?? "";
+                var name = GetReaderString(ref reader);
                 if (stack.Count == 0 || !stack.Peek().Add(name)) throw new JsonException("duplicate JSON object key");
             }
         }
@@ -327,7 +349,9 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         var diagnostics = new List<RulingDiagnostic>();
         var directory = ScopeDirectory(domain, team);
         if (!TryValidatePath(directory, domain, team, id, out var pathCause, out var pathDetail))
-            return Unavailable(pathCause, pathDetail, records, diagnostics, directory);
+            return pathCause == "ruling-identity-conflict"
+                ? Conflict(pathCause, pathDetail, records, diagnostics, directory)
+                : Unavailable(pathCause, pathDetail, records, diagnostics, directory);
         try
         {
             var scopeState = Inspect(directory);
@@ -345,9 +369,14 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
                 foreach (var entry in entries.Order(StringComparer.Ordinal))
                 {
                     var name = Path.GetFileName(entry);
+                    beforeOperation?.Invoke("inventory-inspect", entry);
                     var entryState = Inspect(entry);
                     if (entryState.Error is not null) return Unavailable("ruling-artifact-unavailable", entryState.Error, records, diagnostics, entry);
-                    if (!entryState.Exists) return Unavailable("ruling-artifact-unavailable", "inventory entry disappeared during scan", records, diagnostics, entry);
+                    if (!entryState.Exists)
+                    {
+                        if (name.EndsWith(".tmp", StringComparison.Ordinal)) continue;
+                        return Unavailable("ruling-artifact-unavailable", "inventory entry disappeared during scan", records, diagnostics, entry);
+                    }
                     if (entryState.IsSymlink) return Unavailable("ruling-unsafe-path", "symlink in scoped inventory", records, diagnostics, entry);
                     if (entryState.IsDirectory) return Unavailable("ruling-invalid-layout", "nested directory in scoped inventory", records, diagnostics, entry);
                     if (!name.EndsWith(".json", StringComparison.Ordinal)) continue;
@@ -371,7 +400,7 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
                     if (parsed.AuthorityRole != "operator")
                         return Unavailable("ruling-invalid-authority", "stored authority_role is not the literal operator assertion", records, diagnostics, path);
                     if (parsed.Id != artifactId || parsed.Domain != domain || parsed.Team != team)
-                        return Unavailable("ruling-identity-conflict", "filename and embedded domain/team/id disagree", records, diagnostics, path);
+                        return Conflict("ruling-identity-conflict", "filename and embedded domain/team/id disagree", records, diagnostics, path);
                     var canonical = RulingArtifact.Serialize(parsed);
                     if (!bytes.AsSpan().SequenceEqual(canonical))
                         return Unavailable("ruling-noncanonical-artifact", "stored artifact bytes differ from canonical serialization", records, diagnostics, path);
@@ -397,8 +426,8 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
             if (records.Count + 1 > RulingArtifact.MaximumInventory)
                 return Unavailable("ruling-inventory-limit", "candidate would exceed 500 exact-scope records", records, diagnostics, directory);
             if (candidate.RecordedAt > now) return new("unavailable", "ruling-future-recorded-at", "new candidate recorded_at is later than evaluated_at", [], [], records, diagnostics);
-            if (!ValidateCandidateAdmission(candidate, records, out graphError))
-                return new("conflict", "ruling-supersession-conflict", graphError, [], [], records, diagnostics);
+            if (!ValidateCandidateAdmission(candidate, records, out var admissionCause, out graphError))
+                return new("conflict", admissionCause, graphError, [], [], records, diagnostics);
             var combined = records.Append(candidate).ToArray();
             return Status(candidate, combined, now, diagnostics);
         }
@@ -433,6 +462,8 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
                 var existing = current.Records.FirstOrDefault(x => x.Id == record.Id);
                 if (current.Status == "active" && existing is not null && RulingArtifact.Serialize(existing).AsSpan().SequenceEqual(bytes))
                 { idempotent = true; cause = ""; detail = ""; createdDirectories = created; return true; }
+                if (existing is not null && RulingArtifact.Serialize(existing).AsSpan().SequenceEqual(bytes))
+                { cause = current.Cause.Length == 0 ? "ruling-inactive-target" : current.Cause; detail = current.Detail; createdDirectories = created; return false; }
                 cause = "ruling-content-conflict"; detail = "target already exists with different content"; createdDirectories = created; return false;
             }
             ownedTemp = Path.Combine(directory, "." + record.Id + "." + Guid.NewGuid().ToString("N") + ".tmp");
@@ -450,12 +481,23 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
                 detail = preCommit.Detail;
                 detail = CleanupOwnedTempPreservingFailure(detail); createdDirectories = created; return false;
             }
+            beforeOperation?.Invoke("before-rename-inspect", final);
             var beforeRename = Inspect(final);
             if (beforeRename.Error is not null || beforeRename.Exists)
             {
+                if (beforeRename.Exists && !beforeRename.IsSymlink && !beforeRename.IsDirectory
+                    && TryResolveConcurrentTarget(record, bytes, now, final, out cause, out detail))
+                {
+                    phase = "owned-temp-cleanup";
+                    CleanupOwnedTemp();
+                    idempotent = true;
+                    createdDirectories = created;
+                    return true;
+                }
                 phase = "owned-temp-cleanup";
-                cause = beforeRename.Error is not null ? "ruling-target-unavailable" : "ruling-content-conflict";
-                detail = beforeRename.Error ?? "target appeared before atomic create";
+                if (beforeRename.Error is not null) { cause = "ruling-target-unavailable"; detail = beforeRename.Error; }
+                else if (beforeRename.Exists && !beforeRename.IsSymlink && !beforeRename.IsDirectory && detail.Length > 0) { }
+                else { cause = beforeRename.IsSymlink || beforeRename.IsDirectory ? "ruling-unsafe-path" : "ruling-content-conflict"; detail = beforeRename.IsSymlink || beforeRename.IsDirectory ? "target is a symlink or directory" : "target appeared before atomic create"; }
                 detail = CleanupOwnedTempPreservingFailure(detail); createdDirectories = created; return false;
             }
             phase = "rename";
@@ -476,26 +518,11 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
                 {
                     if (racedState.IsSymlink || racedState.IsDirectory)
                     { phase = "owned-temp-cleanup"; cause = "ruling-unsafe-path"; detail = CleanupOwnedTempPreservingFailure("concurrent destination is a symlink or directory"); createdDirectories = created; return false; }
-                    phase = "read";
-                    beforeOperation?.Invoke("read", final);
-                    if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(final, RulingArtifact.MaximumBytes, out var racedBytes, out _, out var racedError))
-                    { phase = "owned-temp-cleanup"; cause = "ruling-content-conflict"; detail = CleanupOwnedTempPreservingFailure($"concurrent destination is not a readable canonical file: {racedError}"); createdDirectories = created; return false; }
-                    if (racedBytes.AsSpan().SequenceEqual(bytes))
+                    if (TryResolveConcurrentTarget(record, bytes, now, final, out cause, out detail))
                     {
-                        var racedEvaluation = Evaluate(record.Domain, record.Team, record.Id, now);
-                        var racedRecord = racedEvaluation.Records.FirstOrDefault(x => x.Id == record.Id);
-                        if (racedEvaluation.Status == "active" && racedRecord is not null
-                            && RulingArtifact.Serialize(racedRecord).AsSpan().SequenceEqual(racedBytes))
-                        {
-                            phase = "owned-temp-cleanup"; CleanupOwnedTemp();
-                            idempotent = true; cause = ""; detail = "identical canonical artifact is active"; createdDirectories = created; return true;
-                        }
-                        cause = racedEvaluation.Cause.Length == 0 ? "ruling-content-conflict" : racedEvaluation.Cause;
-                        detail = racedEvaluation.Detail.Length == 0 ? "concurrent artifact is not active" : racedEvaluation.Detail;
-                        phase = "owned-temp-cleanup"; detail = CleanupOwnedTempPreservingFailure(detail);
-                        createdDirectories = created; return false;
+                        phase = "owned-temp-cleanup"; CleanupOwnedTemp();
+                        idempotent = true; cause = ""; detail = "identical canonical artifact is active"; createdDirectories = created; return true;
                     }
-                    cause = "ruling-content-conflict"; detail = "concurrent create wrote different or noncanonical content";
                     phase = "owned-temp-cleanup"; detail = CleanupOwnedTempPreservingFailure(detail); createdDirectories = created; return false;
                 }
                 cause = link.Unsupported ? "ruling-atomic-create-unavailable" : "ruling-write-failed";
@@ -549,6 +576,30 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         }
     }
 
+    private bool TryResolveConcurrentTarget(RulingArtifact record, byte[] bytes, DateTimeOffset now, string path,
+        out string cause, out string detail)
+    {
+        cause = "ruling-content-conflict";
+        detail = "concurrent destination has different or noncanonical content";
+        try
+        {
+            beforeOperation?.Invoke("read", path);
+            if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(path, RulingArtifact.MaximumBytes, out var currentBytes, out _, out var readError))
+            { cause = "ruling-target-unavailable"; detail = $"concurrent destination is not a readable regular file: {readError}"; return false; }
+            if (!currentBytes.AsSpan().SequenceEqual(bytes)) return false;
+            var evaluation = Evaluate(record.Domain, record.Team, record.Id, now);
+            var existing = evaluation.Records.FirstOrDefault(x => x.Id == record.Id);
+            if (evaluation.Status == "active" && existing is not null
+                && RulingArtifact.Serialize(existing).AsSpan().SequenceEqual(currentBytes))
+            { cause = ""; detail = "identical canonical artifact is active"; return true; }
+            cause = evaluation.Cause.Length == 0 ? "ruling-inactive-target" : evaluation.Cause;
+            detail = evaluation.Detail.Length == 0 ? "identical concurrent artifact is not active" : evaluation.Detail;
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        { cause = "ruling-target-unavailable"; detail = ex.Message; return false; }
+    }
+
     internal static string ClassifyNativeAtomicCreateError(RulingNativePlatform platform, int errorCode) => platform switch
     {
         RulingNativePlatform.Linux when errorCode is 38 or 95 => "ruling-atomic-create-unavailable",
@@ -594,34 +645,40 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
 
     private bool TryValidatePath(string directory, string domain, string team, string? id, out string cause, out string detail)
     {
-        cause = "ruling-unsafe-path"; detail = "unsafe ruling path";
-        var root = Path.GetFullPath(repoRoot);
-        var segments = new[] { ".intent-cli", "rulings", domain, team };
-        if (id is not null) segments = segments.Append(id + ".json").ToArray();
-        var current = root;
-        foreach (var segment in segments)
+        cause = "ruling-path-unavailable"; detail = "ruling path could not be inspected";
+        try
         {
-            var parentState = Inspect(current);
-            if (parentState.Error is not null) { detail = parentState.Error; return false; }
-            if (!parentState.Exists) break;
-            if (parentState.IsSymlink || !parentState.IsDirectory) { detail = "parent path is not a safe directory"; return false; }
-            foreach (var existing in Directory.EnumerateFileSystemEntries(current))
+            var root = Path.GetFullPath(repoRoot);
+            var segments = new[] { ".intent-cli", "rulings", domain, team };
+            if (id is not null) segments = segments.Append(id + ".json").ToArray();
+            var current = root;
+            foreach (var segment in segments)
             {
-                var name = Path.GetFileName(existing);
-                if (string.Equals(name, segment, StringComparison.OrdinalIgnoreCase) && name != segment)
-                { detail = $"case-insensitive alias '{name}' conflicts with '{segment}'"; return false; }
+                var parentState = Inspect(current);
+                if (parentState.Error is not null) { detail = parentState.Error; return false; }
+                if (!parentState.Exists) break;
+                if (parentState.IsSymlink || !parentState.IsDirectory) { cause = "ruling-unsafe-path"; detail = "parent path is not a safe directory"; return false; }
+                beforeOperation?.Invoke("list-directory", current);
+                foreach (var existing in Directory.EnumerateFileSystemEntries(current))
+                {
+                    var name = Path.GetFileName(existing);
+                    if (string.Equals(name, segment, StringComparison.OrdinalIgnoreCase) && name != segment)
+                    { cause = "ruling-identity-conflict"; detail = $"case-insensitive alias '{name}' conflicts with '{segment}'"; return false; }
+                }
+                current = Path.Combine(current, segment);
+                var state = Inspect(current);
+                if (state.Error is not null) { detail = state.Error; return false; }
+                if (state.Exists && state.IsSymlink) { cause = "ruling-unsafe-path"; detail = "symlink path component refused"; return false; }
+                if (state.Exists && segment != id + ".json" && !state.IsDirectory) { cause = "ruling-unsafe-path"; detail = "file blocks ruling directory path"; return false; }
+                if (state.Exists && segment == id + ".json" && state.IsDirectory) { cause = "ruling-unsafe-path"; detail = "directory occupies ruling target"; return false; }
             }
-            current = Path.Combine(current, segment);
-            var state = Inspect(current);
-            if (state.Error is not null) { detail = state.Error; return false; }
-            if (state.Exists && state.IsSymlink) { detail = "symlink path component refused"; return false; }
-            if (state.Exists && segment != id + ".json" && !state.IsDirectory) { detail = "file blocks ruling directory path"; return false; }
-            if (state.Exists && segment == id + ".json" && state.IsDirectory) { detail = "directory occupies ruling target"; return false; }
+            var full = Path.GetFullPath(directory);
+            var prefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+            if (!full.StartsWith(prefix, StringComparison.Ordinal)) { cause = "ruling-unsafe-path"; detail = "resolved path escapes repository"; return false; }
+            cause = ""; detail = ""; return true;
         }
-        var full = Path.GetFullPath(directory);
-        var prefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.Ordinal)) { detail = "resolved path escapes repository"; return false; }
-        cause = ""; detail = ""; return true;
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        { cause = "ruling-path-unavailable"; detail = ex.Message; return false; }
     }
 
     private void EnsureDirectoryParents(string directory, List<string> created)
@@ -669,8 +726,9 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         error = ""; return true;
     }
 
-    private static bool ValidateCandidateAdmission(RulingArtifact candidate, IReadOnlyList<RulingArtifact> records, out string error)
+    private static bool ValidateCandidateAdmission(RulingArtifact candidate, IReadOnlyList<RulingArtifact> records, out string cause, out string error)
     {
+        cause = "ruling-supersession-conflict";
         var byId = records.ToDictionary(x => x.Id, StringComparer.Ordinal);
         foreach (var predecessorId in candidate.Supersedes)
         {
@@ -686,21 +744,26 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
         while (todo.Count > 0) { var id = todo.Pop(); if (!components.Add(id)) continue; foreach (var n in undirected[id]) todo.Push(n); }
         var hasSuccessor = records.SelectMany(x => x.Supersedes).ToHashSet(StringComparer.Ordinal);
         var tips = components.Where(x => !hasSuccessor.Contains(x)).ToHashSet(StringComparer.Ordinal);
-        if (!tips.SetEquals(candidate.Supersedes)) { error = "candidate must explicitly supersede every current terminal tip in the touched weak component(s)"; return false; }
+        if (!tips.SetEquals(candidate.Supersedes))
+        {
+            if (candidate.Supersedes.All(tips.Contains)) cause = "ruling-incomplete-merge";
+            error = "candidate must explicitly supersede every current terminal tip in the touched weak component(s)";
+            return false;
+        }
         error = ""; return true;
     }
 
     private static RulingEvaluation Status(RulingArtifact target, IReadOnlyList<RulingArtifact> records, DateTimeOffset now, IReadOnlyList<RulingDiagnostic> diagnostics)
     {
-        var successors = records.ToDictionary(x => x.Id, x => x.Supersedes, StringComparer.Ordinal);
         var children = records.ToDictionary(x => x.Id, _ => new List<string>(), StringComparer.Ordinal);
         foreach (var item in records) foreach (var p in item.Supersedes) children[p].Add(item.Id);
+        var direct = children[target.Id].Order(StringComparer.Ordinal).ToArray();
         var reached = new HashSet<string>(StringComparer.Ordinal);
         var queue = new Queue<string>(children[target.Id]);
         while (queue.Count > 0) { var id = queue.Dequeue(); if (!reached.Add(id)) continue; foreach (var c in children[id]) queue.Enqueue(c); }
         var terminals = reached.Where(x => children[x].Count == 0).Order(StringComparer.Ordinal).ToArray();
-        if (terminals.Length > 1) return new("conflict", "ruling-branch-conflict", "multiple terminal successors remain", terminals, terminals, records, diagnostics);
-        if (terminals.Length == 1) return new("superseded", "", "ruling has a terminal successor", terminals, terminals, records, diagnostics);
+        if (terminals.Length > 1) return new("conflict", "ruling-successor-conflict", "multiple terminal successors remain", direct, terminals, records, diagnostics);
+        if (terminals.Length == 1) return new("superseded", "", "ruling has a terminal successor", direct, terminals, records, diagnostics);
         if (target.ExpiresAt is not null && now >= target.ExpiresAt.Value) return new("expired", "", "ruling expired at or before evaluated_at", [], [], records, diagnostics);
         return new("active", "", "ruling is an active terminal record", [], [], records, diagnostics);
     }
@@ -708,6 +771,10 @@ internal sealed class RulingArtifactStore(string repoRoot, Action<string, string
     private static RulingEvaluation Unavailable(string cause, string detail, IReadOnlyList<RulingArtifact> records,
         IReadOnlyList<RulingDiagnostic> diagnostics, string path) =>
         new("unavailable", cause, detail, [], [], records, diagnostics.Append(new(cause, path, detail)).ToArray());
+
+    private static RulingEvaluation Conflict(string cause, string detail, IReadOnlyList<RulingArtifact> records,
+        IReadOnlyList<RulingDiagnostic> diagnostics, string path) =>
+        new("conflict", cause, detail, [], [], records, diagnostics.Append(new(cause, path, detail)).ToArray());
 
     private static (bool Exists, bool IsDirectory, bool IsSymlink, string? Error) Inspect(string path)
     {

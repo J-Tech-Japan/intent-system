@@ -88,7 +88,7 @@ internal static class RulingCommand
             return Emit(writer, parsed.Format, Refused("record", parsed, now, cause, detail));
 
         if (supplied.Id != parsed.Id || supplied.Domain != parsed.Domain || supplied.Team != parsed.Team)
-            return Emit(writer, parsed.Format, Refused("record", parsed, now, "ruling-identity-conflict", "record identity must exactly match --id, --domain and --team"));
+            return Emit(writer, parsed.Format, Refused("record", parsed, now, "ruling-identity-conflict", "record identity must exactly match --id, --domain and --team") with { Status = "conflict" });
         if (supplied.AuthorityRole != parsed.AuthorityRole)
             return Emit(writer, parsed.Format, Refused("record", parsed, now, "ruling-invalid-authority", "authority_role must exactly match --authority-role"));
         if (supplied.AuthorityRole != "operator")
@@ -180,17 +180,29 @@ internal static class RulingCommand
         }
     }
 
-    private static RulingResult ResultFromEvaluation(string operation, Parsed parsed, DateTimeOffset now, RulingEvaluation evaluation, string mode) => new()
+    private static RulingResult ResultFromEvaluation(string operation, Parsed parsed, DateTimeOffset now, RulingEvaluation evaluation, string mode)
     {
-        Operation = operation, Id = parsed.Id!, Domain = parsed.Domain!, Team = parsed.Team!, Mode = mode,
-        Disposition = evaluation.Status switch { "missing" => "refused", "unavailable" => "unavailable", "conflict" => "refused", _ => "shown" },
-        Status = evaluation.Status, Cause = evaluation.Cause, Detail = evaluation.Detail,
-        AuthorityStatus = "supplied-not-authenticated", PublicationStatus = "not-verified",
-        EvaluatedAt = RulingArtifact.FormatTimestamp(now), Wrote = false, Idempotent = false,
-        Expired = evaluation.Status == "expired", SupersededBy = evaluation.SupersededBy,
-        ReplacementIds = evaluation.ReplacementIds, Diagnostics = evaluation.Diagnostics,
-        RecoveryHint = evaluation.Status is "unavailable" or "conflict" ? "Repair the exact-scope record graph through the responsible host process; do not rewrite history." : evaluation.Status == "missing" ? "Check the exact --domain, --team and ID." : null,
-    };
+        var target = operation == "record"
+            ? evaluation.Status == "conflict" ? evaluation.Records.FirstOrDefault(x => x.Id == parsed.Id) : null
+            : evaluation.Status is "active" or "superseded" or "expired" or "conflict"
+                ? evaluation.Records.FirstOrDefault(x => x.Id == parsed.Id)
+                : null;
+        return new()
+        {
+            Operation = operation, Id = parsed.Id!, Domain = parsed.Domain!, Team = parsed.Team!, Mode = mode,
+            Disposition = evaluation.Status switch { "missing" => "refused", "unavailable" => "unavailable", "conflict" => "refused", _ => "shown" },
+            Status = evaluation.Status, Cause = evaluation.Cause, Detail = evaluation.Detail,
+            AuthorityStatus = "supplied-not-authenticated", PublicationStatus = "not-verified",
+            EvaluatedAt = RulingArtifact.FormatTimestamp(now), Wrote = false, Idempotent = false,
+            Expired = target is null ? null : target.ExpiresAt is not null && now >= target.ExpiresAt.Value,
+            NormalizedRecord = target is null ? null : JsonDocument.Parse(RulingArtifact.Serialize(target)).RootElement.Clone(),
+            ContentSha256 = target?.Sha256, ArtifactPath = target?.RelativePath,
+            TimestampSource = target is null ? null : "existing",
+            SupersededBy = evaluation.SupersededBy,
+            ReplacementIds = evaluation.ReplacementIds, Diagnostics = evaluation.Diagnostics,
+            RecoveryHint = evaluation.Status is "unavailable" or "conflict" ? "Repair the exact-scope record graph through the responsible host process; do not rewrite history." : evaluation.Status == "missing" ? "Check the exact --domain, --team and ID." : null,
+        };
+    }
 
     private static RulingResult Refused(string operation, Parsed p, DateTimeOffset now, string cause, string detail) => new()
     {
