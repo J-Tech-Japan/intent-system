@@ -21,7 +21,7 @@ src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ClaimCommand	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ClaimProcessResult	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ClaimRecord	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	CrossRuntimeReviewTransitionOutcome	7
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ExecutionFacts	3
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ExecutionFacts	4
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ExistingPair	8
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	GhCliGitHubLabelMutator	4
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	HistoricalPairReport	14
@@ -29,7 +29,7 @@ src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	HostStateGitRetryEviden
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	HostStateGitRetryRunner	2
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	IGitHubLabelMutator	4
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Kinds	3
-src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Labels	29
+src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	Labels	30
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ObservedAudit	12
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	PreparedAudit	23
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	ProcessResult	5

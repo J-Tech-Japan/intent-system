@@ -276,8 +276,8 @@ internal static class ApprovalPostingOverride
                         outcomeCommit: livePair.ObservedCommit, currentHead: beforeLabels.CurrentHead),
                         beforeLabels.Labels, beforeLabels.Solo, beforeLabels.CrossRuntime, false, false, writer);
                 }
-                return ConfirmSuccess(invokingContext, request, prepared, livePair.Observed, beforeLabels,
-                    preparedCommit, livePair.ObservedCommit, false, false, writer);
+            return ConfirmSuccess(invokingContext, request, prepared, livePair.Observed, beforeLabels,
+                preparedCommit, livePair.ObservedCommit, false, false, sticky, writer);
             }
 
             if (!TryGetMutator(out var mutator, out var mutatorError))
@@ -295,13 +295,18 @@ internal static class ApprovalPostingOverride
             {
                 mutationAttempted = true;
                 mayHaveApplied = true;
-                sticky.MutationAttempted = true;
-                sticky.MayHaveApplied = true;
+                var remove = AutomationPrTransitionCommand.ResolveRemoveLabelsForMode(
+                    "approved", WorkerClaimCompleteConstants.Modes.Write,
+                    prepared.IntendedRemoveLabels, beforeLabels.Labels);
+                var intended = beforeLabels.Labels
+                    .Where(label => !remove.Contains(label, StringComparer.Ordinal))
+                    .Concat(prepared.IntendedAddLabels)
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(label => label, StringComparer.Ordinal)
+                    .ToArray();
+                sticky.RecordMutation(prepared.IntendedAddLabels, remove, intended);
                 try
                 {
-                    var remove = AutomationPrTransitionCommand.ResolveRemoveLabelsForMode(
-                        "approved", WorkerClaimCompleteConstants.Modes.Write,
-                        prepared.IntendedRemoveLabels, beforeLabels.Labels);
                     mutator.ApplyLabelTransitions(request.Repo, GhCliGitHubLabelMutator.Kinds.Pr,
                         request.PullRequest, prepared.IntendedAddLabels, remove);
                 }
@@ -409,7 +414,7 @@ internal static class ApprovalPostingOverride
             }
 
             return ConfirmSuccess(invokingContext, request, prepared, outcome, final,
-                preparedCommit, publicationResult.Commit, mutationAttempted, mayHaveApplied, writer);
+                preparedCommit, publicationResult.Commit, mutationAttempted, mayHaveApplied, sticky, writer);
         }
         catch (Exception exception) when (Expected(exception))
         {
@@ -447,6 +452,7 @@ internal static class ApprovalPostingOverride
         string? outcomeCommit,
         bool mutationAttempted,
         bool mayHaveApplied,
+        ExecutionFacts publicationHistory,
         TextWriter writer)
     {
         var cleared = false;
@@ -467,7 +473,7 @@ internal static class ApprovalPostingOverride
             mutationAttempted: mutationAttempted, mayHaveApplied: mayHaveApplied,
             labelStateObserved: true, authorizationBasis: current.Basis),
             current.Labels, current.Solo, current.CrossRuntime, true, cleared, writer, warning,
-            observedOnly: !mutationAttempted);
+            observedOnly: !mutationAttempted, publicationHistory: publicationHistory);
     }
 
     private static int WriteAssessmentRefusal(ApprovalPostingOverrideRequest request, Assessment assessment, TextWriter writer,
@@ -517,7 +523,7 @@ internal static class ApprovalPostingOverride
         var observedExists = observedInspection.Kind == PathKind.Regular;
         if (!preparedExists && !observedExists && preparedInspection.Kind == PathKind.Absent
             && observedInspection.Kind == PathKind.Absent)
-            return new HistoricalPairReport(false, false, false, preparedPath, observedPath, null, null, null, null);
+            return new HistoricalPairReport(false, false, false, null, null, null, null, null, null);
 
         if (!ReadAudit<PreparedAudit>(checkout, preparedPath, out var prepared, out var parsedPreparedExists, out var preparedError))
             return new HistoricalPairReport(preparedExists || parsedPreparedExists, observedExists, false,
@@ -595,6 +601,9 @@ internal static class ApprovalPostingOverride
         public string? OutcomeCommit { get; private set; }
         public string? CurrentHead { get; set; }
         public string? AuthorizationBasis { get; private set; }
+        public IReadOnlyList<string> AttemptedAddLabels { get; private set; } = [];
+        public IReadOnlyList<string> AttemptedRemoveLabels { get; private set; } = [];
+        public IReadOnlyList<string> IntendedLabels { get; private set; } = [];
         public IReadOnlyList<string> Labels { get; private set; } = [];
         public SoloConductorReviewTransitionOutcome? Solo { get; private set; }
         public CrossRuntimeReviewTransitionOutcome? CrossRuntime { get; private set; }
@@ -614,6 +623,18 @@ internal static class ApprovalPostingOverride
             PreparedPath = preparedPath;
             ObservedPath = observedPath;
             RunPath = runPath ?? RunPath;
+        }
+
+        public void RecordMutation(
+            IReadOnlyList<string> addLabels,
+            IReadOnlyList<string> removeLabels,
+            IReadOnlyList<string> intendedLabels)
+        {
+            MutationAttempted = true;
+            MayHaveApplied = true;
+            AttemptedAddLabels = addLabels.ToArray();
+            AttemptedRemoveLabels = removeLabels.ToArray();
+            IntendedLabels = intendedLabels.ToArray();
         }
 
         public void RecordPair(ExistingPair pair)
@@ -699,6 +720,8 @@ internal static class ApprovalPostingOverride
         var plan = AutomationPrTransitionCommand.PlanTransition("approved");
         var remove = AutomationPrTransitionCommand.ResolveRemoveLabelsForMode(
             "approved", WorkerClaimCompleteConstants.Modes.Write, plan.RemoveLabels, currentLabels);
+        var mayHaveApplied = !applied && overrideResult.MayHaveApplied;
+        var actionApplied = applied && overrideResult.MutationAttempted;
         var result = new AutomationPrTransitionResult
         {
             Repo = request.Repo,
@@ -706,8 +729,8 @@ internal static class ApprovalPostingOverride
             Transition = "approved",
             Mode = request.Mode,
             Applied = applied,
-            AddLabels = applied ? plan.AddLabels : Array.Empty<string>(),
-            RemoveLabels = applied ? remove : Array.Empty<string>(),
+            AddLabels = actionApplied ? publicationHistory?.AttemptedAddLabels ?? Array.Empty<string>() : Array.Empty<string>(),
+            RemoveLabels = actionApplied ? publicationHistory?.AttemptedRemoveLabels ?? Array.Empty<string>() : Array.Empty<string>(),
             CurrentLabels = currentLabels,
             Summary = applied && observedOnly
                 ? $"Observed the approved transition already converged on PR #{request.PullRequest} in {request.Repo}; no label action was applied by this invocation."
@@ -718,6 +741,9 @@ internal static class ApprovalPostingOverride
                         : $"Refused approved transition on PR #{request.PullRequest} in {request.Repo}: {overrideResult.Cause}.",
             CiWaitCleared = ciWaitCleared,
             CiWaitWarning = ciWaitWarning,
+            MayHaveApplied = mayHaveApplied,
+            IntendedLabels = mayHaveApplied ? publicationHistory?.IntendedLabels : null,
+            RecoveryCommand = mayHaveApplied ? overrideResult.RecoveryCommand : null,
             CrossRuntimeReview = crossRuntime,
             SoloConductorReview = solo,
             ApprovalPostingOverride = overrideResult,
@@ -727,9 +753,16 @@ internal static class ApprovalPostingOverride
         if (request.Format == "json")
             writer.WriteLine(JsonSerializer.Serialize(result, ResultJsonOptions));
         else
+        {
             AutomationPrTransitionCommand.WriteText(writer, result);
+            writer.WriteLine("add_labels: " + FormatLabelDelta(result.AddLabels));
+            writer.WriteLine("remove_labels: " + FormatLabelDelta(result.RemoveLabels));
+        }
         return applied || string.Equals(overrideResult.Disposition, "eligible-preview", StringComparison.Ordinal) ? 0 : 1;
     }
+
+    private static string FormatLabelDelta(IReadOnlyList<string> labels) =>
+        labels.Count == 0 ? "(none)" : string.Join(", ", labels);
 
     private static ApprovalPostingOverrideResult Facts(
         ApprovalPostingOverrideRequest request,

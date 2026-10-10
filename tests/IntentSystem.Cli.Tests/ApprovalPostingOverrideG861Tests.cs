@@ -238,7 +238,12 @@ solo_conductor_unscopable_review_ids: (none)
         Assert.True(finalFacts.GetProperty("mutation_attempted").GetBoolean());
         Assert.True(finalFacts.GetProperty("may_have_applied").GetBoolean());
         Assert.True(finalFacts.GetProperty("label_state_observed").GetBoolean());
+        Assert.False(result.RootElement.GetProperty("may_have_applied").GetBoolean());
         Assert.Equal(JsonValueKind.Null, finalFacts.GetProperty("recovery_command").ValueKind);
+        Assert.Equal(["intent-pr-approved"], result.RootElement.GetProperty("add_labels").EnumerateArray()
+            .Select(label => label.GetString()));
+        Assert.Equal(["intent-pr-reviewing"], result.RootElement.GetProperty("remove_labels").EnumerateArray()
+            .Select(label => label.GetString()));
         Assert.True(result.RootElement.GetProperty("ci_wait_cleared").GetBoolean());
         Assert.Empty(CiWaitStore.ReadOpen(repos.Caller, repo: Repo).Records);
         Assert.NotEqual(Convert.ToBase64String(ciWaitBefore), Convert.ToBase64String(File.ReadAllBytes(ciWaitPath)));
@@ -2512,6 +2517,10 @@ solo_conductor_unscopable_review_ids: (none)
             Assert.True(facts.GetProperty("prepared_published").GetBoolean());
             Assert.True(facts.GetProperty("outcome_published").GetBoolean());
             Assert.False(facts.GetProperty("mutation_attempted").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("may_have_applied").GetBoolean());
+            Assert.False(facts.GetProperty("may_have_applied").GetBoolean());
+            Assert.Empty(result.RootElement.GetProperty("add_labels").EnumerateArray());
+            Assert.Empty(result.RootElement.GetProperty("remove_labels").EnumerateArray());
             Assert.Equal(callCount, mutator.Applied.Count);
             Assert.Equal(["intent-pr-approved"], mutator.Labels);
             Assert.StartsWith("Observed the approved transition already converged", result.RootElement.GetProperty("summary").GetString());
@@ -3132,9 +3141,17 @@ solo_conductor_unscopable_review_ids: (none)
         AssertOverrideFacts(firstOutput, "post-mutation-observation-unavailable", "unresolved", prepared: true, outcome: false, mutationAttempted: true);
         using (var first = JsonDocument.Parse(firstOutput))
         {
+            var root = first.RootElement;
             var facts = first.RootElement.GetProperty("approval_posting_override");
             Assert.True(facts.GetProperty("may_have_applied").GetBoolean());
             Assert.False(facts.GetProperty("label_state_observed").GetBoolean());
+            Assert.True(root.GetProperty("may_have_applied").GetBoolean());
+            Assert.True(root.GetProperty("mayHaveApplied").GetBoolean());
+            Assert.Equal(
+                mutator.Labels.OrderBy(label => label, StringComparer.Ordinal),
+                root.GetProperty("intended_labels").EnumerateArray().Select(label => label.GetString()));
+            Assert.Equal(facts.GetProperty("recovery_command").GetString(),
+                root.GetProperty("recovery_command").GetString());
         }
         Assert.Single(mutator.Applied);
         var calls = mutator.Applied.Count;
@@ -3237,13 +3254,26 @@ solo_conductor_unscopable_review_ids: (none)
         ResetSeams();
         using (var repos = CreateEligibleRepositories())
         {
-            var (exit, output) = Run(repos, Guid.NewGuid().ToString("D"), write: false, flagged: true,
+            var id = Guid.NewGuid().ToString("D");
+            var (exit, output) = Run(repos, id, write: false, flagged: true,
                 team: "other-team", format: "text");
             Assert.Equal(1, exit);
             Assert.Contains("approval_posting_override: requested=true", output, StringComparison.Ordinal);
             Assert.Contains("disposition=refused", output, StringComparison.Ordinal);
             Assert.Contains("cause=claim-holder-mismatch", output, StringComparison.Ordinal);
             Assert.Contains("prepared_published=false", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("approval_posting_override_prepared_path:", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("approval_posting_override_observed_path:", output, StringComparison.Ordinal);
+
+            var (jsonExit, jsonOutput) = Run(repos, id, write: false, flagged: true,
+                team: "other-team", format: "json");
+            Assert.Equal(1, jsonExit);
+            using var json = JsonDocument.Parse(jsonOutput);
+            var facts = json.RootElement.GetProperty("approval_posting_override");
+            Assert.False(facts.GetProperty("prepared_published").GetBoolean());
+            Assert.False(facts.GetProperty("outcome_published").GetBoolean());
+            foreach (var field in new[] { "prepared_path", "observed_path", "prepared_commit", "outcome_commit" })
+                Assert.Equal(JsonValueKind.Null, facts.GetProperty(field).ValueKind);
         }
 
         ResetSeams();
@@ -3257,8 +3287,34 @@ solo_conductor_unscopable_review_ids: (none)
             Assert.Contains("cause=label-state-unconfirmed", output, StringComparison.Ordinal);
             Assert.Contains("prepared_published=true", output, StringComparison.Ordinal);
             Assert.Contains("outcome_published=false", output, StringComparison.Ordinal);
+            Assert.Contains("approval_posting_override_prepared_path:", output, StringComparison.Ordinal);
             Assert.Contains("approval_posting_override_recovery_command:", output, StringComparison.Ordinal);
+            Assert.Contains("may_have_applied: true", output, StringComparison.Ordinal);
+            Assert.Contains("intended_labels: intent-pr-approved", output, StringComparison.Ordinal);
+            Assert.Contains("add_labels: (none)", output, StringComparison.Ordinal);
+            Assert.Contains("remove_labels: (none)", output, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void TextReportsOnlyTheActionDeltaAndNoDeltaForObservationOnlyReplay_G861()
+    {
+        ResetSeams();
+        using var repos = CreateEligibleRepositories();
+
+        var (writeExit, writeOutput) = Run(repos, OverrideId, write: true, flagged: true, format: "text");
+        Assert.Equal(0, writeExit);
+        Assert.Contains("add_labels: intent-pr-approved", writeOutput, StringComparison.Ordinal);
+        Assert.Contains("remove_labels: intent-pr-reviewing", writeOutput, StringComparison.Ordinal);
+        Assert.Single(mutator.Applied);
+
+        var (observedExit, observedOutput) = Run(repos, OverrideId, write: true, flagged: true, format: "text");
+        Assert.Equal(0, observedExit);
+        Assert.Contains("Observed the approved transition already converged", observedOutput, StringComparison.Ordinal);
+        Assert.Contains("add_labels: (none)", observedOutput, StringComparison.Ordinal);
+        Assert.Contains("remove_labels: (none)", observedOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Applied approved transition", observedOutput, StringComparison.Ordinal);
+        Assert.Single(mutator.Applied);
     }
 
     private (int Exit, string Output) Run(
