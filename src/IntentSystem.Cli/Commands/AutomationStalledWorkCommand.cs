@@ -3474,6 +3474,22 @@ internal static class AutomationStalledWorkCommand
         return false;
     }
 
+    /// <summary>
+    /// G544: fires <see cref="KindBacklogReadyIdle"/> when WIP is empty for
+    /// <paramref name="domain"/> (<see cref="DomainWipIsEmpty"/>), the SAME
+    /// canonical selector <c>issue publish-flow</c> preflight itself uses
+    /// (<see cref="IntentNextSliceCommand.Analyze"/> — no separate
+    /// heuristic) reports a publishable candidate, and no <c>runs.jsonl</c>
+    /// activity has been recorded for at least <paramref
+    /// name="backlogIdleMinutes"/>. "Activity" here is the most recent
+    /// <c>ts</c> across every row in <c>runs.jsonl</c> — a different signal
+    /// than every other collector's GitHub-entity-timestamp approach, since
+    /// by construction nothing has been published yet for this candidate to
+    /// carry a GitHub timestamp of its own. A missing/unparseable/empty
+    /// runs.jsonl cannot establish a baseline and fails closed into
+    /// <c>excluded[]</c>, never a guessed age — same philosophy as
+    /// <see cref="ReasonActivityDataUnusable"/> above.
+    /// </summary>
     private static void CollectBacklogReadyIdle(
         CliContext context,
         string domain,

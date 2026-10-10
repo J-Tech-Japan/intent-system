@@ -246,7 +246,7 @@ src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	AutomationStalledW
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	CheckoutFreshnessGitCommandRunner	1
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	CheckoutFreshnessObservation	3
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	CheckoutFreshnessProbe	5
-src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	ClaimCommand	2
+src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	ClaimCommand	1
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	ClaimRecord	2
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	DelegationOutcomeEvidence	3
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	ExecutionUnitResolution	19
@@ -266,7 +266,7 @@ src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	Labels	38
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	StalledWorkCiBreakdown	4
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	StalledWorkCiOutcomes	11
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	StalledWorkCiProjection	4
-src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	StalledWorkExcluded	55
+src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	StalledWorkExcluded	54
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	StalledWorkItem	49
 src/IntentSystem.Cli/Commands/AutomationStalledWorkCommand.cs	StalledWorkRef	35
 src/IntentSystem.Cli/Commands/AutomationStateDoctorCommand.cs	AutomationInstalledCliSurfaceProbe	1
