@@ -170,12 +170,16 @@ internal static class GuideSoloConductorCommand
             {
                 Number = 2,
                 Id = "bug-chain-or-ruling",
-                Instruction = "Start from a bug chain or from an operator ruling recorded in the host; do not author a packet without one.",
+                Instruction = "Start from a bug chain or from an operator ruling recorded in the host; do not author a packet without one. When using an explicitly supplied ruling, treat `ruling record` as a local immutable record only: operator authority is not authenticated, and a ruling does not satisfy packet publication, unit-status, approval, or release gates. Commit and plain-push the artifact separately, then verify it from a fresh clone before relying on its availability.",
                 Commands =
                 [
                     IntentCli("intent-cli bug report <domain> --title <text> --from-file <path>"),
                     IntentCli("intent-cli bug triage <bug-id>"),
                     IntentCli("intent-cli bug plan <bug-id>"),
+                    IntentCli("intent-cli ruling record --id <id> --domain <domain> --team <team> --from-file <ruling.json> --authority-role operator --format json"),
+                    IntentCli("intent-cli ruling record --id <id> --domain <domain> --team <team> --from-file <ruling.json> --authority-role operator --write --format json"),
+                    IntentCli("intent-cli ruling show <id> --domain <domain> --team <team> --format json"),
+                    IntentCli("intent-cli ruling validate <id> --domain <domain> --team <team> --format json"),
                 ],
             },
             new SoloConductorLoopStep

@@ -120,6 +120,7 @@ src/IntentSystem.Cli/Commands/NotifyTransport.cs	ProcessStartInfo	2
 src/IntentSystem.Cli/Commands/NotifyTransportPreflight.cs	INotifyProcessRunner	2
 src/IntentSystem.Cli/Commands/QueueDispatchCommand.cs	GitRemoteCommandRunner	1
 src/IntentSystem.Cli/Commands/QueueDispatchCommand.cs	IGitRemoteCommandRunner	1
+src/IntentSystem.Cli/Commands/RulingArtifact.cs	DllImport	2
 src/IntentSystem.Cli/Commands/SafetyNestedProviderHandoffCommand.cs	NestedProviderLauncher	1
 src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs	INotifyProcessRunner	2
 src/IntentSystem.Cli/Commands/ScopedModelResolutionObservation.cs	Process	13

@@ -503,6 +503,11 @@ RepairOptions	src/IntentSystem.Cli/Commands/NotifySuperviseRepairCycleHistoryCom
 ReplaceLabelsRequestBody	src/IntentSystem.Cli/Commands/IGitHubLabelMutator.cs
 RequiredSurface	src/IntentSystem.Cli/Commands/AutomationInstalledCliSurfaceProbe.cs
 ReviewBlocker	src/IntentSystem.Cli/Commands/SoloConductorApprovalGate.cs
+RulingArtifact	src/IntentSystem.Cli/Commands/RulingArtifact.cs
+RulingArtifactStore	src/IntentSystem.Cli/Commands/RulingArtifact.cs
+RulingAtomicLinkResult	src/IntentSystem.Cli/Commands/RulingArtifact.cs
+RulingDiagnostic	src/IntentSystem.Cli/Commands/RulingArtifact.cs
+RulingEvaluation	src/IntentSystem.Cli/Commands/RulingArtifact.cs
 SafetyNestedProviderHandoffCommand	src/IntentSystem.Cli/Commands/SafetyNestedProviderHandoffCommand.cs
 SameRepoMetadataPreflightProbe	src/IntentSystem.Cli/Commands/AutomationSameRepoMetadataPreflightCommand.cs
 SameRepoMetadataPreflightResult	src/IntentSystem.Cli/Commands/AutomationSameRepoMetadataPreflightCommand.cs
