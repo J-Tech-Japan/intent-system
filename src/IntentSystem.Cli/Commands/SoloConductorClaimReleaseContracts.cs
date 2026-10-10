@@ -174,5 +174,8 @@ internal sealed record SoloConductorClaimReleaseGateResult(
 {
     public bool IsRefused => Completion?.Decision == "refused";
 
+    [JsonIgnore]
+    public string? RunLogRelativePath { get; init; }
+
     public static SoloConductorClaimReleaseGateResult NotApplicable() => new(false, null);
 }

@@ -839,6 +839,35 @@ omitted when inactive and otherwise appears in JSON and Markdown as
 `debt_window`, including distinct-unit counts and evidence for historical
 exclusions.
 
+### Audited missing-receipt exception at claim release (G860 — preview-through-1.x)
+
+`claim release --override-loop-evidence` is a deliberate, reasoned exception for
+only the missing architect/orchestrator knowledge receipts and architect guide
+receipt. It applies to an exactly held builder claim in recorded solo-conductor
+mode, and only after canonical closeout identity, completed queue item, merge,
+and closeout-recorded evidence are satisfied. Ordinary `--reason` alone never
+overrides the completion gate. Approval, ownership, closeout, declaration, or
+other unavailable/conflicting evidence cannot be waived.
+
+```bash
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason "specific missing-receipt exception" \
+  --override-loop-evidence --format json
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason "specific missing-receipt exception" \
+  --override-loop-evidence --write --format json
+```
+
+Preview reports the eligible exception without writing. A release writes the
+existing release history, an immutable `.intent-cli/loop-evidence-overrides/`
+audit, and one `loop-evidence-override` event to the already selected canonical
+run log in the same claim transaction. The completion snapshot keeps each
+waived receipt visibly `missing`; the audit records the exact skipped duties
+and reason. If receipts become complete during a bounded retry, the normal
+release may proceed without an override audit or event. This flag does not
+publish receipts, close out a PR, alter approval evidence, or change claim or
+run-log schemas.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by
