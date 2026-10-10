@@ -117,6 +117,1313 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Single(ClaimHistory(releasedSnapshot));
     }
 
+    [Fact]
+    public void ExplicitLoopEvidenceOverrideUsesActualWritersAndPublishesOneAtomicAudit_G860()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: []);
+        Acquire(repos.Writer);
+        PullCanonicalHead(repos.Writer);
+
+        var hostCommit = Git(repos.Writer, "rev-parse", "HEAD").Trim();
+        RecordKnowledge(repos.Writer, "orchestrator", hostCommit);
+        RecordGuide(repos.Writer, "architect", hostCommit);
+        var knowledgePath = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+            KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "orchestrator");
+        var guidePath = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+            GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect");
+        Assert.True(File.Exists(Path.Combine(repos.Writer, knowledgePath.Replace('/', Path.DirectorySeparatorChar))));
+        Assert.True(File.Exists(Path.Combine(repos.Writer, guidePath.Replace('/', Path.DirectorySeparatorChar))));
+
+        var closeoutOutput = new StringWriter();
+        var closeoutExit = CloseoutPrCommand.Execute(Context(repos.Writer),
+            ["--pr", PullRequest.ToString(System.Globalization.CultureInfo.InvariantCulture),
+             "--repo", Repo, "--domain", Domain, "--pr-merged", "true", "--repair-runs", "--write", "--format", "json"],
+            closeoutOutput);
+        Assert.Equal(0, closeoutExit);
+        using (var closeoutJson = JsonDocument.Parse(closeoutOutput.ToString()))
+            Assert.True(closeoutJson.RootElement.GetProperty("runs_appended").GetBoolean());
+        var selectedRunsPath = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        var emittedEvents = RunLogSerializer.DeserializeAll(File.ReadAllText(selectedRunsPath));
+        Assert.Contains(emittedEvents, item => item.Event == "pr-merged" && item.ExecutionUnit == Unit
+            && item.Repo == Repo && item.Pr == PullRequest);
+        Assert.Contains(emittedEvents, item => item.Event == "closeout-recorded" && item.ExecutionUnit == Unit
+            && item.Repo == Repo && item.Pr == PullRequest);
+        var queuePath = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+        var queue = QueueStateSerializer.Deserialize(File.ReadAllText(queuePath));
+        var completed = Assert.Single(queue.Items!, item => item.ExecutionUnit == Unit);
+        Assert.Equal(QueueItemState.Completed, completed.State);
+        Assert.Equal($"https://github.com/{Repo}/pull/{PullRequest}", completed.LinkedPr);
+
+        repos.PublishIntentChanges(repos.Writer, "main");
+        var canonicalBeforeRelease = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var ordinary = Release(repos.Reader);
+        Assert.Equal("completion-blocked", ordinary.Status);
+        Assert.Equal("missing", Duty(ordinary, "knowledge-architect").State);
+        Assert.Equal("attributed-knowledge-record-missing", Duty(ordinary, "knowledge-architect").Cause);
+        Assert.Equal("satisfied", Duty(ordinary, "knowledge-orchestrator").State);
+        Assert.Equal("satisfied", Duty(ordinary, "guide-reachability").State);
+        Assert.Equal(canonicalBeforeRelease, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+
+        using var before = JsonDocument.Parse(Git(repos.Bare, "show", $"refs/heads/main:{ClaimCommand.ClaimPath($"execution-unit:{Unit}")}"));
+        var claimedAt = before.RootElement.GetProperty("claimed_at").GetDateTimeOffset();
+        var priorLogBytes = File.ReadAllBytes(Path.Combine(repos.CloneForInspection(),
+            Path.GetRelativePath(repos.Writer, selectedRunsPath)));
+        var snapshotOid = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+
+        var output = new StringWriter();
+        var exit = ClaimCommand.ExecuteRelease(Context(repos.Reader),
+            ["--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+             "--reason", "deliberate-fixture-waiver", "--override-loop-evidence", "--write", "--format", "json"], output);
+        Assert.Equal(0, exit);
+        using var result = JsonDocument.Parse(output.ToString());
+        var root = result.RootElement;
+        Assert.Equal("released", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("push_succeeded").GetBoolean());
+        var historyPath = root.GetProperty("history_path").GetString()!;
+        var overrideResult = root.GetProperty("loop_evidence_override");
+        Assert.Equal("applied", overrideResult.GetProperty("disposition").GetString());
+        Assert.True(overrideResult.GetProperty("published").GetBoolean());
+        Assert.Equal("knowledge-architect", Assert.Single(overrideResult.GetProperty("skipped_duties").EnumerateArray()).GetProperty("id").GetString());
+        var auditPath = overrideResult.GetProperty("audit_path").GetString()!;
+        var expectedAuditPath = $".intent-cli/loop-evidence-overrides/{Unit}/{Path.GetFileName(historyPath)}";
+        Assert.Equal(expectedAuditPath, auditPath);
+        Assert.EndsWith(".json", auditPath, StringComparison.Ordinal);
+        Assert.DoesNotContain(".json.json", auditPath, StringComparison.Ordinal);
+        Assert.Equal(historyPath, overrideResult.GetProperty("history_path").GetString());
+        var transactionCommit = root.GetProperty("commit").GetString()!;
+        Assert.Equal(transactionCommit, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        var auditText = Git(repos.Bare, "show", $"{transactionCommit}:{auditPath}");
+        using var audit = JsonDocument.Parse(auditText);
+        Assert.Equal(1, audit.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal("claim-release", audit.RootElement.GetProperty("operation").GetString());
+        Assert.Equal($"execution-unit:{Unit}", audit.RootElement.GetProperty("scope").GetString());
+        Assert.Equal(Unit, audit.RootElement.GetProperty("execution_unit").GetString());
+        Assert.Equal(Domain, audit.RootElement.GetProperty("domain").GetString());
+        Assert.Equal(Team, audit.RootElement.GetProperty("team").GetString());
+        Assert.Equal("implementation", audit.RootElement.GetProperty("actor").GetString());
+        Assert.Equal("builder", audit.RootElement.GetProperty("normalized_role").GetString());
+        Assert.Equal(claimedAt, audit.RootElement.GetProperty("displaced_claimed_at").GetDateTimeOffset());
+        Assert.Equal(Repo, audit.RootElement.GetProperty("target_repo").GetString());
+        Assert.Equal(PullRequest, audit.RootElement.GetProperty("linked_pr").GetInt32());
+        Assert.Equal(snapshotOid, audit.RootElement.GetProperty("canonical_snapshot_oid").GetString());
+        Assert.Equal("refs/heads/main", audit.RootElement.GetProperty("canonical_target_ref").GetString());
+        Assert.Equal("deliberate-fixture-waiver", audit.RootElement.GetProperty("reason").GetString());
+        Assert.Equal(historyPath, audit.RootElement.GetProperty("release_history_path").GetString());
+        Assert.Equal(Path.GetRelativePath(repos.Writer, selectedRunsPath).Replace(Path.DirectorySeparatorChar, '/'),
+            audit.RootElement.GetProperty("run_log_path").GetString());
+        var historyText = Git(repos.Bare, "show", $"{transactionCommit}:{historyPath}");
+        using var history = JsonDocument.Parse(historyText);
+        Assert.Equal(audit.RootElement.GetProperty("recorded_at").GetDateTimeOffset(),
+            history.RootElement.GetProperty("recorded_at").GetDateTimeOffset());
+        Assert.Equal(snapshotOid, history.RootElement.GetProperty("base_commit").GetString());
+        var committedRuns = Git(repos.Bare, "show", $"{transactionCommit}:{overrideResult.GetProperty("run_log_path").GetString()}");
+        Assert.StartsWith(System.Text.Encoding.UTF8.GetString(priorLogBytes), committedRuns, StringComparison.Ordinal);
+        var runEvents = RunLogSerializer.DeserializeAll(committedRuns);
+        var overrideEvent = Assert.Single(runEvents, item => item.Event == "loop-evidence-override");
+        Assert.Equal(Unit, overrideEvent.ExecutionUnit);
+        Assert.Equal("intent-cli claim release", overrideEvent.By);
+        Assert.Equal("deliberate-fixture-waiver", overrideEvent.Reason);
+        Assert.Equal(Repo, overrideEvent.Repo);
+        Assert.Equal(PullRequest, overrideEvent.Pr);
+        Assert.Equal($"https://github.com/{Repo}/pull/{PullRequest}", overrideEvent.LinkedPr);
+        Assert.Equal("solo-conductor", overrideEvent.TeamMode);
+        Assert.Equal("builder", overrideEvent.ActorRole);
+        Assert.Equal(auditPath, overrideEvent.ResultRef);
+        Assert.DoesNotContain(ClaimCommand.ClaimPath($"execution-unit:{Unit}"),
+            Git(repos.Bare, "ls-tree", "-r", "--name-only", transactionCommit));
+        Assert.Equal("refused", root.GetProperty("solo_conductor_completion").GetProperty("decision").GetString());
+        Assert.Equal("missing", Assert.Single(root.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray(),
+            item => item.GetProperty("id").GetString() == "knowledge-architect").GetProperty("state").GetString());
+        var inspection = repos.CloneForInspection();
+        Assert.False(File.Exists(Path.Combine(inspection, ClaimCommand.ClaimPath($"execution-unit:{Unit}"))));
+        Assert.Single(ClaimHistory(inspection));
+    }
+
+    [Fact]
+    public void LoopEvidenceOverridePureEligibilityUsesClosedAllowlist_G860()
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: ["pr-merged", "closeout-recorded"]);
+        var gate = EvaluateCanonicalSnapshot(repos.Writer);
+        var completion = gate.Completion!;
+
+        var allThreeMissing = ClaimLoopEvidenceOverride.Evaluate(gate);
+        Assert.True(allThreeMissing.Eligible);
+        Assert.Equal(new[] { "knowledge-architect", "knowledge-orchestrator", "guide-reachability" },
+            allThreeMissing.SkippedDuties.Select(duty => duty.Id));
+        Assert.Equal(new[] { "architect", "orchestrator", "architect" },
+            allThreeMissing.SkippedDuties.Select(duty => duty.Role));
+
+        var onlyArchitectMissing = completion.Duties.Select(duty => duty.Id switch
+        {
+            "knowledge-orchestrator" => duty with { State = "satisfied", Cause = "attributed-knowledge-record-present" },
+            "guide-reachability" => duty with { State = "satisfied", Cause = "architect-guide-record-present" },
+            _ => duty,
+        }).ToArray();
+        var onlyArchitectGate = gate with { Completion = completion with { Duties = onlyArchitectMissing } };
+        var onlyArchitect = ClaimLoopEvidenceOverride.Evaluate(onlyArchitectGate);
+        Assert.True(onlyArchitect.Eligible);
+        Assert.Equal("knowledge-architect", Assert.Single(onlyArchitect.SkippedDuties).Id);
+
+        var satisfiedDuties = completion.Duties.Select(duty => duty.Id switch
+        {
+            "knowledge-architect" => duty with { State = "satisfied", Cause = "attributed-knowledge-record-present" },
+            "knowledge-orchestrator" => duty with { State = "satisfied", Cause = "attributed-knowledge-record-present" },
+            "guide-reachability" => duty with { State = "satisfied", Cause = "architect-guide-record-present" },
+            _ => duty,
+        }).ToArray();
+        var satisfied = completion with { Decision = "satisfied", Duties = satisfiedDuties };
+        var satisfiedGate = gate with { Completion = satisfied };
+        Assert.False(ClaimLoopEvidenceOverride.Evaluate(satisfiedGate).Eligible);
+        Assert.Equal("no-missing-receipts", ClaimLoopEvidenceOverride.Evaluate(satisfiedGate).Cause);
+
+        var satisfiedWithUnknownDuty = satisfied with
+        {
+            Duties = satisfiedDuties.Append(new SoloConductorClaimReleaseDuty
+            {
+                Id = "future-duty", State = "satisfied", Cause = "future-receipt-present",
+                Detail = "synthetic forward-compatible duty", Evidence = [], RecoveryCommands = [],
+            }).ToArray(),
+        };
+        var malformedSatisfied = ClaimLoopEvidenceOverride.Evaluate(gate with { Completion = satisfiedWithUnknownDuty });
+        Assert.False(malformedSatisfied.Eligible);
+        Assert.Equal("duty-shape-unknown", malformedSatisfied.Cause);
+        var duplicateSatisfied = ClaimLoopEvidenceOverride.Evaluate(gate with
+        {
+            Completion = satisfied with { Duties = satisfiedDuties.Append(Duty(satisfied, "pr-merged")).ToArray() },
+        });
+        Assert.False(duplicateSatisfied.Eligible);
+        Assert.Equal("duty-shape-unknown", duplicateSatisfied.Cause);
+        var unsafeSatisfied = ClaimLoopEvidenceOverride.Evaluate(satisfiedGate with { RunLogRelativePath = "../outside.jsonl" });
+        Assert.False(unsafeSatisfied.Eligible);
+        Assert.Equal("identity-unavailable", unsafeSatisfied.Cause);
+
+        var queue = Duty(completion, "closeout-queue");
+        var malformedCases = new[]
+        {
+            completion.Duties.Append(queue).ToArray(),
+            completion.Duties.Append(null!).ToArray(),
+            completion.Duties.Append(queue with { Id = "future-required-duty" }).ToArray(),
+            completion.Duties.Where(item => item.Id != "closeout-recorded").ToArray(),
+            completion.Duties.Select(item => item.Id == "closeout-queue" ? item with { State = "missing" } : item).ToArray(),
+            completion.Duties.Select(item => item.Id == "pr-merged" ? item with { Cause = "legacy-closeout-receipt" } : item).ToArray(),
+            completion.Duties.Append(new SoloConductorClaimReleaseDuty
+            {
+                Id = "knowledge-writeback", State = "not-applicable", Cause = "explicit-no-required-duty",
+                Detail = "synthetic mixed shape", Evidence = [], RecoveryCommands = [],
+            }).ToArray(),
+            completion.Duties.Select(item => item.Id == "knowledge-architect" ? item with { Cause = "knowledge-record-unavailable" } : item).ToArray(),
+            completion.Duties.Select(item => item.Id == "guide-reachability" ? item with { State = "unknown" } : item).ToArray(),
+            completion.Duties.Select(item => item.Id == "guide-reachability" ? item with { Cause = "unknown-guide-cause" } : item).ToArray(),
+        };
+        foreach (var duties in malformedCases)
+        {
+            var result = ClaimLoopEvidenceOverride.Evaluate(gate with { Completion = completion with { Duties = duties } });
+            Assert.False(result.Eligible);
+            Assert.NotEmpty(result.Cause);
+        }
+
+        var noSelectedLog = ClaimLoopEvidenceOverride.Evaluate(gate with { RunLogRelativePath = null });
+        Assert.False(noSelectedLog.Eligible);
+        Assert.Equal("identity-unavailable", noSelectedLog.Cause);
+    }
+
+    [Theory]
+    [InlineData("knowledge-orchestrator", "orchestrator")]
+    [InlineData("guide-reachability", "architect")]
+    public void OverrideCanWaiveEachRemainingSingleAllowedDuty_G860(string missingId, string expectedRole)
+    {
+        using var repos = new ClaimRepositories();
+        PrepareActualOverrideSnapshot(repos, missingId);
+
+        var output = new StringWriter();
+        Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("released", result.RootElement.GetProperty("status").GetString());
+        var skipped = Assert.Single(result.RootElement.GetProperty("loop_evidence_override").GetProperty("skipped_duties").EnumerateArray());
+        Assert.Equal(missingId, skipped.GetProperty("id").GetString());
+        Assert.Equal(expectedRole, skipped.GetProperty("role").GetString());
+        var completion = result.RootElement.GetProperty("solo_conductor_completion");
+        Assert.Equal("refused", completion.GetProperty("decision").GetString());
+        Assert.Equal("missing", Assert.Single(completion.GetProperty("duties").EnumerateArray(),
+            duty => duty.GetProperty("id").GetString() == missingId).GetProperty("state").GetString());
+        foreach (var other in new[] { "knowledge-architect", "knowledge-orchestrator", "guide-reachability" }.Where(id => id != missingId))
+            Assert.Equal("satisfied", Assert.Single(completion.GetProperty("duties").EnumerateArray(),
+                duty => duty.GetProperty("id").GetString() == other).GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public void OverridePreservesAllThreeMissingDutiesAndEmptyOptionalTargets_G860()
+    {
+        using var repos = new ClaimRepositories();
+        PrepareActualOverrideSnapshot(repos, PacketWithEmptyOptionalTargetsYaml,
+            ["knowledge-architect", "knowledge-orchestrator", "guide-reachability"]);
+
+        var output = new StringWriter();
+        Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+        using var result = JsonDocument.Parse(output.ToString());
+        var skipped = result.RootElement.GetProperty("loop_evidence_override").GetProperty("skipped_duties").EnumerateArray().ToArray();
+        Assert.Equal(new[] { "knowledge-architect", "knowledge-orchestrator", "guide-reachability" },
+            skipped.Select(item => item.GetProperty("id").GetString()));
+        Assert.Equal(new[] { "architect", "orchestrator", "architect" },
+            skipped.Select(item => item.GetProperty("role").GetString()));
+        Assert.Empty(skipped[0].GetProperty("declared_targets").EnumerateArray());
+        Assert.Empty(skipped[1].GetProperty("declared_targets").EnumerateArray());
+        Assert.Equal("released", result.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void OverrideIsNotApplicableWhenNothingIsMissingOrThePacketDeclaresNoDuty_G860()
+    {
+        using (var complete = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(complete);
+            var head = Git(complete.Bare, "rev-parse", "refs/heads/main").Trim();
+            var output = new StringWriter();
+            Assert.Equal(1, RunOverrideCli(complete.Reader, output));
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("override-not-applicable", result.RootElement.GetProperty("status").GetString());
+            Assert.Equal("no-missing-receipts", result.RootElement.GetProperty("loop_evidence_override").GetProperty("cause").GetString());
+            Assert.Equal(head, Git(complete.Bare, "rev-parse", "refs/heads/main").Trim());
+            Assert.Empty(ClaimHistory(complete.CloneForInspection()));
+        }
+
+        using (var noDuty = new ClaimRepositories())
+        {
+            noDuty.PublishSnapshot(queueState: QueueItemState.Completed,
+                runEvents: ["pr-merged", "closeout-recorded"], packetYaml: ExplicitNoDutyPacketYaml);
+            Acquire(noDuty.Writer);
+            var head = Git(noDuty.Bare, "rev-parse", "refs/heads/main").Trim();
+            var output = new StringWriter();
+            var exit = ClaimCommand.ExecuteRelease(Context(noDuty.Reader),
+                ["--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+                 "--reason", "deliberate-fixture-waiver", "--override-loop-evidence", "--format", "json"], output);
+            Assert.Equal(1, exit);
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("override-not-applicable", result.RootElement.GetProperty("status").GetString());
+            Assert.Equal("not-applicable", Assert.Single(result.RootElement.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray(),
+                duty => duty.GetProperty("id").GetString() == "knowledge-writeback").GetProperty("state").GetString());
+            Assert.Equal("not-applicable", Assert.Single(result.RootElement.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray(),
+                duty => duty.GetProperty("id").GetString() == "guide-reachability").GetProperty("state").GetString());
+            Assert.Equal(head, Git(noDuty.Bare, "rev-parse", "refs/heads/main").Trim());
+        }
+    }
+
+    [Fact]
+    public void OverrideDoesNotApplyToRecordedNonSoloMode_G860()
+    {
+        using var repos = new ClaimRepositories();
+        PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var now = DateTimeOffset.UtcNow;
+        TeamModeStore.Write(repos.Writer, new TeamModeState
+        {
+            SchemaVersion = TeamModeStore.SchemaVersion,
+            Entries =
+            [
+                new TeamModeEntry
+                {
+                    Domain = Domain,
+                    Team = Team,
+                    Mode = TeamMode.Delivery,
+                    UpdatedAt = now,
+                    Transitions = [new TeamModeTransition { From = TeamMode.Default, To = TeamMode.Delivery, At = now }],
+                },
+            ],
+        });
+        repos.PublishIntentChanges(repos.Writer, "main");
+        var head = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+
+        var output = new StringWriter();
+        Assert.Equal(1, RunOverrideCli(repos.Reader, output));
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("override-not-applicable", result.RootElement.GetProperty("status").GetString());
+        Assert.Equal("not-applicable", result.RootElement.GetProperty("loop_evidence_override").GetProperty("cause").GetString());
+        Assert.Equal(head, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+    }
+
+    [Theory]
+    [InlineData("knowledge-malformed")]
+    [InlineData("queue-incomplete")]
+    [InlineData("missing-pr-merged")]
+    [InlineData("missing-closeout-recorded")]
+    public void OverrideRefusesOneDisallowedDeclarationOrCloseoutCondition_G860(string condition)
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var packetPath = Path.Combine(repos.Writer, KnowledgeWriteBackRecord.PacketRootRelativePath, Unit, "packet.yaml");
+        var queuePath = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+        var runsPath = Path.Combine(repos.Writer, runsRelative.Replace('/', Path.DirectorySeparatorChar));
+        switch (condition)
+        {
+            case "knowledge-malformed":
+                File.WriteAllText(packetPath, File.ReadAllText(packetPath).Replace("required: true", "required: maybe", StringComparison.Ordinal));
+                break;
+            case "queue-incomplete":
+            {
+                var queue = QueueStateSerializer.Deserialize(File.ReadAllText(queuePath));
+                var changed = queue with
+                {
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    Items = queue.Items!.Select(item => item with
+                    {
+                        State = item.ExecutionUnit == Unit ? QueueItemState.Active : item.State,
+                    }).ToArray(),
+                };
+                File.WriteAllText(queuePath, QueueStateSerializer.Serialize(changed));
+                break;
+            }
+            case "missing-pr-merged":
+            case "missing-closeout-recorded":
+            {
+                var missingEvent = condition == "missing-pr-merged" ? "pr-merged" : "closeout-recorded";
+                var events = RunLogSerializer.DeserializeAll(File.ReadAllText(runsPath));
+                Assert.Contains(events, item => item.Event == missingEvent && item.ExecutionUnit == Unit);
+                File.WriteAllText(runsPath, string.Join(Environment.NewLine,
+                    events.Where(item => !(item.Event == missingEvent && item.ExecutionUnit == Unit))
+                        .Select(RunLogSerializer.SerializeLine)) + Environment.NewLine);
+                break;
+            }
+        }
+        repos.PublishIntentChanges(repos.Writer, "main");
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var output = new StringWriter();
+        Assert.Equal(1, RunOverrideCli(repos.Reader, output));
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("completion-blocked", result.RootElement.GetProperty("status").GetString());
+        var duties = result.RootElement.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray().ToArray();
+        if (condition == "knowledge-malformed")
+        {
+            Assert.Contains(duties, duty => duty.GetProperty("id").GetString() == "knowledge-declaration"
+                && duty.GetProperty("state").GetString() == "unavailable");
+        }
+        else if (condition == "queue-incomplete")
+        {
+            Assert.Contains(duties, duty => duty.GetProperty("id").GetString() == "closeout-queue"
+                && duty.GetProperty("state").GetString() == "missing");
+        }
+        else
+        {
+            var missingEvent = condition == "missing-pr-merged" ? "pr-merged" : "closeout-recorded";
+            Assert.Contains(duties, duty => duty.GetProperty("id").GetString() == missingEvent
+                && duty.GetProperty("state").GetString() == "missing");
+            var otherEvent = missingEvent == "pr-merged" ? "closeout-recorded" : "pr-merged";
+            Assert.Contains(duties, duty => duty.GetProperty("id").GetString() == otherEvent
+                && duty.GetProperty("state").GetString() == "satisfied");
+        }
+        Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+        Assert.Equal("refused", result.RootElement.GetProperty("loop_evidence_override").GetProperty("disposition").GetString());
+        Assert.False(result.RootElement.GetProperty("loop_evidence_override").GetProperty("published").GetBoolean());
+    }
+
+    [Fact]
+    public void EligibleOverridePreviewIsTruthfulAndLeavesCallerAndRemoteUntouched_G860()
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        File.WriteAllText(Path.Combine(repos.Reader, "README.md"), "dirty caller edit\n");
+        File.WriteAllText(Path.Combine(repos.Reader, "g860-staged.txt"), "staged caller bytes\n");
+        Git(repos.Reader, "add", "--", "g860-staged.txt");
+        File.WriteAllText(Path.Combine(repos.Reader, "g860-untracked.txt"), "untracked caller bytes\n");
+        var callerHead = Git(repos.Reader, "rev-parse", "HEAD").Trim();
+        var callerStatus = Git(repos.Reader, "status", "--porcelain=v1");
+        var callerIndex = File.ReadAllBytes(Path.Combine(repos.Reader, ".git", "index"));
+        var callerRefs = Git(repos.Reader, "for-each-ref", "--format=%(refname) %(objectname)");
+        var readme = File.ReadAllBytes(Path.Combine(repos.Reader, "README.md"));
+        var stagedFile = File.ReadAllBytes(Path.Combine(repos.Reader, "g860-staged.txt"));
+        var untrackedFile = File.ReadAllBytes(Path.Combine(repos.Reader, "g860-untracked.txt"));
+        var remoteHead = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var runLog = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+        var staleRoot = Path.Combine(Path.GetTempPath(), $"intent-cli-claim-g860-stale-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(staleRoot);
+        File.WriteAllText(Path.Combine(staleRoot, "sentinel"), "preview must not sweep\n");
+        Directory.SetLastWriteTimeUtc(staleRoot, DateTime.UtcNow.AddMinutes(-10));
+
+        var output = new StringWriter();
+        var exit = ClaimCommand.ExecuteRelease(Context(repos.Reader),
+            ["--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+             "--reason", "deliberate-fixture-waiver", "--override-loop-evidence", "--format", "json"], output);
+        Assert.Equal(0, exit);
+        using var result = JsonDocument.Parse(output.ToString());
+        var root = result.RootElement;
+        Assert.Equal("planned", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("push_succeeded").GetBoolean());
+        Assert.Equal("refused", root.GetProperty("solo_conductor_completion").GetProperty("decision").GetString());
+        var waiver = root.GetProperty("loop_evidence_override");
+        Assert.Equal("eligible-preview", waiver.GetProperty("disposition").GetString());
+        Assert.False(waiver.GetProperty("published").GetBoolean());
+        Assert.Contains("<release-history-filename>", waiver.GetProperty("history_path").GetString(), StringComparison.Ordinal);
+        Assert.Contains("<release-history-filename>", waiver.GetProperty("audit_path").GetString(), StringComparison.Ordinal);
+        Assert.Equal(runsRelative, waiver.GetProperty("run_log_path").GetString());
+        Assert.Equal(callerHead, Git(repos.Reader, "rev-parse", "HEAD").Trim());
+        Assert.Equal(callerStatus, Git(repos.Reader, "status", "--porcelain=v1"));
+        Assert.Equal(callerIndex, File.ReadAllBytes(Path.Combine(repos.Reader, ".git", "index")));
+        Assert.Equal(callerRefs, Git(repos.Reader, "for-each-ref", "--format=%(refname) %(objectname)"));
+        Assert.Equal(readme, File.ReadAllBytes(Path.Combine(repos.Reader, "README.md")));
+        Assert.Equal(stagedFile, File.ReadAllBytes(Path.Combine(repos.Reader, "g860-staged.txt")));
+        Assert.Equal(untrackedFile, File.ReadAllBytes(Path.Combine(repos.Reader, "g860-untracked.txt")));
+        Assert.Equal(remoteHead, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(runLog, Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}"));
+        Assert.True(File.Exists(Path.Combine(staleRoot, "sentinel")));
+        var inspection = repos.CloneForInspection();
+        Assert.Empty(ClaimHistory(inspection));
+        Assert.False(Directory.Exists(Path.Combine(inspection, ".intent-cli", "loop-evidence-overrides")));
+        Directory.Delete(staleRoot, recursive: true);
+    }
+
+    [Theory]
+    [InlineData("--override-loop-evidence", "--override-loop-evidence")]
+    [InlineData("--override-loop-evidence=true")]
+    public void OverrideFlagRejectsDuplicateOrValueBearingFormsBeforeTransaction_G860(params string[] malformedFlag)
+    {
+        var args = new List<string>
+        {
+            "--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+            "--reason", "parser fixture",
+        };
+        args.AddRange(malformedFlag);
+        var output = new StringWriter();
+        var exit = ClaimCommand.ExecuteRelease(Context(Path.GetTempPath()), args.ToArray(), output);
+        Assert.Equal(1, exit);
+        Assert.Contains("--override-loop-evidence", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public void OverrideStillRequiresNonblankReasonBeforeTransaction_G860(string? reason)
+    {
+        using var repos = new ClaimRepositories();
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: []);
+        Acquire(repos.Writer);
+        var before = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var args = new List<string>
+        {
+            "--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+            "--override-loop-evidence", "--write", "--format", "json",
+        };
+        if (reason is not null) args.AddRange(["--reason", reason]);
+        var output = new StringWriter();
+        Assert.Equal(1, ClaimCommand.ExecuteRelease(Context(repos.Reader), args.ToArray(), output));
+        Assert.Contains("require --reason", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+    }
+
+    [Fact]
+    public void OverrideFlagRejectsUnsupportedOperationsScopesAndActors_G860()
+    {
+        var supportedArgs = new[]
+        {
+            "--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+            "--reason", "parser fixture", "--override-loop-evidence", "--write", "--format", "json",
+        };
+        foreach (var scope in new[] { "release-prep:J-Tech-Japan/intent-system:1.0", "execution-unit:../unsafe", "intent-node:G860", "unknown-scope:G860" })
+        {
+            var args = (string[])supportedArgs.Clone();
+            args[1] = scope;
+            var output = new StringWriter();
+            Assert.Equal(1, ClaimCommand.ExecuteRelease(Context(Path.GetTempPath()), args, output));
+            Assert.Contains("--override-loop-evidence", output.ToString(), StringComparison.Ordinal);
+        }
+
+        foreach (var actor in new[] { "architect", "design", "orchestrator" })
+        {
+            var wrongActor = (string[])supportedArgs.Clone();
+            wrongActor[3] = actor;
+            var actorOutput = new StringWriter();
+            Assert.Equal(1, ClaimCommand.ExecuteRelease(Context(Path.GetTempPath()), wrongActor, actorOutput));
+            Assert.Contains("builder-normalized actor", actorOutput.ToString(), StringComparison.Ordinal);
+        }
+
+        var acquireOutput = new StringWriter();
+        Assert.Equal(1, ClaimCommand.ExecuteAcquire(Context(Path.GetTempPath()), supportedArgs, acquireOutput));
+        Assert.Contains("only by claim release", acquireOutput.ToString(), StringComparison.Ordinal);
+
+        foreach (var (route, prefix) in new[]
+        {
+            (new[] { "claim", "takeover" }, Array.Empty<string>()),
+            (new[] { "claim", "verify" }, Array.Empty<string>()),
+            (new[] { "claim", "stranded", "migrate" }, Array.Empty<string>()),
+        })
+        {
+            var output = new StringWriter();
+            var routeArgs = new List<string> { "--override-loop-evidence" };
+            routeArgs.AddRange(supportedArgs.Where(argument => argument != "--override-loop-evidence"));
+            Assert.Equal(1, CommandRouter.Execute([.. route, .. prefix, .. routeArgs], Context(Path.GetTempPath()), output));
+            Assert.Contains("--override-loop-evidence", output.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FlaggedAbsentClaimAndWrongTeamRemainOwnershipRefusals_G860(bool write)
+    {
+        using (var absent = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(absent, "knowledge-architect");
+            var active = Path.Combine(absent.Writer, ClaimCommand.ClaimPath($"execution-unit:{Unit}")
+                .Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(active));
+            File.Delete(active);
+            absent.PublishIntentChanges(absent.Writer, "main");
+            var before = Git(absent.Bare, "rev-parse", "refs/heads/main").Trim();
+            foreach (var format in new[] { "json", "markdown" })
+            {
+                var output = new StringWriter();
+                Assert.Equal(1, RunOverrideCli(absent.Reader, output, write: write, format: format));
+                AssertOwnershipRefusalOutput(output.ToString(), format, "not-held", "claim-not-held");
+                Assert.Equal(before, Git(absent.Bare, "rev-parse", "refs/heads/main").Trim());
+            }
+            Assert.Empty(ClaimHistory(absent.CloneForInspection()));
+            Assert.DoesNotContain(Git(absent.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main"),
+                $".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal);
+        }
+        using (var wrongTeam = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(wrongTeam, "knowledge-architect");
+            var before = Git(wrongTeam.Bare, "rev-parse", "refs/heads/main").Trim();
+            foreach (var (actor, team) in new[] { ("implementation", "another-team"), ("builder", Team) })
+            {
+                foreach (var format in new[] { "json", "markdown" })
+                {
+                    var output = new StringWriter();
+                    Assert.Equal(1, RunOverrideCli(wrongTeam.Reader, output, actor: actor, team: team, write: write, format: format));
+                    AssertOwnershipRefusalOutput(output.ToString(), format, "held", "holder-identity-mismatch");
+                    if (format == "json")
+                    {
+                        using var result = JsonDocument.Parse(output.ToString());
+                        Assert.Equal(Team, result.RootElement.GetProperty("holder_team").GetString());
+                    }
+                    else
+                    {
+                        Assert.Contains($"- holder_team: {Team}", output.ToString(), StringComparison.Ordinal);
+                    }
+                    Assert.Equal(before, Git(wrongTeam.Bare, "rev-parse", "refs/heads/main").Trim());
+                }
+            }
+
+            foreach (var format in new[] { "json", "markdown" })
+            {
+                var output = new StringWriter();
+                Assert.Equal(1, RunOverrideCli(wrongTeam.Reader, output, team: "another-team", write: false,
+                    format: format, overrideLoopEvidence: false));
+                AssertOwnershipRefusalOmitsOverride(output.ToString(), format, "held");
+            }
+            Assert.Empty(ClaimHistory(wrongTeam.CloneForInspection()));
+            Assert.DoesNotContain(Git(wrongTeam.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main"),
+                $".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void OverrideAuditUnsafeAncestorAbortsBeforeAnyCanonicalReleaseMutation_G860()
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var collision = Path.Combine(repos.Writer, ".intent-cli", "loop-evidence-overrides", Unit);
+        Directory.CreateDirectory(Path.GetDirectoryName(collision)!);
+        File.WriteAllText(collision, "occupied by unrelated evidence\n");
+        repos.PublishIntentChanges(repos.Writer, "main");
+
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var logBefore = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+        var output = new StringWriter();
+        var exit = RunOverrideCli(repos.Reader, output);
+        Assert.Equal(1, exit);
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("error", result.RootElement.GetProperty("status").GetString());
+        Assert.Contains("Transaction path ancestor is not a directory: .intent-cli/loop-evidence-overrides/G857", result.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.False(result.RootElement.GetProperty("push_succeeded").GetBoolean());
+        Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(logBefore, Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}"));
+        var inspection = repos.CloneForInspection();
+        Assert.Empty(ClaimHistory(inspection));
+        Assert.False(Directory.Exists(Path.Combine(inspection, ".intent-cli", "loop-evidence-overrides", Unit)));
+    }
+
+    [Theory]
+    [InlineData("stage")]
+    [InlineData("commit")]
+    public void OverrideStageAndCommitFailuresAreReachedAfterAuditPreparation_G860(string fault)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var logBefore = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+        var bin = Path.Combine(Path.GetDirectoryName(repos.Reader)!, $"g860-{fault}-bin");
+        Directory.CreateDirectory(bin);
+        var wrapper = Path.Combine(bin, "git");
+        var marker = Path.Combine(bin, "fault-reached.txt");
+        var staged = Path.Combine(bin, "stage-succeeded.txt");
+        var realGit = FindGitExecutable();
+        var transactionClaimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        File.WriteAllText(wrapper,
+            "#!/bin/sh\nset -eu\nPWD=$(pwd)\n"
+            + $"REAL={ShellQuote(realGit)}\nBARE={ShellQuote(repos.Bare)}\nMARKER={ShellQuote(marker)}\nSTAGED={ShellQuote(staged)}\nCLAIM={ShellQuote(transactionClaimPath)}\n"
+            + "case \"$PWD\" in */intent-cli-claim-*) ;; *) exec \"$REAL\" \"$@\" ;; esac\n"
+            + "origin=$(\"$REAL\" -C \"$PWD\" remote get-url origin)\n"
+            + "[ \"$origin\" = \"$BARE\" ] || exec \"$REAL\" \"$@\"\n"
+            + (fault == "stage"
+                ? "if [ \"$1\" = add ] && [ \"$2\" = -- ]; then\n"
+                  + "  audit=$(find \"$PWD/.intent-cli/loop-evidence-overrides/G857\" -type f -name '*.json' -print -quit)\n"
+                  + "  history=$(find \"$PWD/.intent-cli/claims/history\" -type f -name '*-release.json' -print -quit)\n"
+                  + "  runs=$(find \"$PWD/.intent-cli\" -type f -name '*.jsonl' -print | while IFS= read -r file; do grep -q 'loop-evidence-override' \"$file\" && { echo \"$file\"; break; }; done)\n"
+                  + "  [ -n \"$audit\" ] && [ -n \"$history\" ] && [ -n \"$runs\" ]\n"
+                  + "  [ ! -e \"$PWD/$CLAIM\" ]\n"
+                  + "  printf '%s\\n' \"$PWD\" \"$@\" > \"$MARKER\"\n"
+                  + "  echo G860_STAGE_FAULT_REACHED >&2\n  exit 1\nfi\n"
+                : "if [ \"$1\" = add ] && [ \"$2\" = -- ]; then\n  \"$REAL\" \"$@\"\n  : > \"$STAGED\"\n  exit 0\nfi\n"
+                  + "if [ \"$1\" = -c ] && [ \"$2\" = user.name=implementation ] && [ \"$3\" = -c ] && [ \"$4\" = user.email=implementation@claims.invalid ] && [ \"$5\" = commit ] && [ \"$6\" = --quiet ] && [ \"$7\" = -m ]; then\n"
+                  + "  [ -f \"$STAGED\" ]\n"
+                  + "  audit=$(find \"$PWD/.intent-cli/loop-evidence-overrides/G857\" -type f -name '*.json' -print -quit)\n"
+                  + "  history=$(find \"$PWD/.intent-cli/claims/history\" -type f -name '*-release.json' -print -quit)\n"
+                  + "  [ -n \"$audit\" ] && [ -n \"$history\" ]\n"
+                  + "  printf '%s\\n' \"$PWD\" \"$@\" > \"$MARKER\"\n"
+                  + "  echo G860_COMMIT_FAULT_REACHED >&2\n  exit 1\nfi\n")
+            + "exec \"$REAL\" \"$@\"\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", bin + Path.PathSeparator + previousPath);
+            var output = new StringWriter();
+            var exit = RunOverrideCli(repos.Reader, output);
+            Assert.Equal(1, exit);
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("error", result.RootElement.GetProperty("status").GetString());
+            Assert.False(result.RootElement.GetProperty("push_succeeded").GetBoolean());
+            Assert.True(File.Exists(marker), $"the {fault} wrapper branch must be reached");
+            var markerLines = File.ReadAllLines(marker);
+            Assert.Contains("intent-cli-claim-", markerLines[0], StringComparison.Ordinal);
+            if (fault == "stage")
+            {
+                Assert.Equal("add", markerLines[1]);
+                Assert.Equal("--", markerLines[2]);
+                Assert.Equal(transactionClaimPath, markerLines[3]);
+                Assert.StartsWith(".intent-cli/claims/history/", markerLines[4], StringComparison.Ordinal);
+                Assert.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", markerLines[5], StringComparison.Ordinal);
+                Assert.Equal(runsRelative, markerLines[6]);
+                Assert.Contains("G860_STAGE_FAULT_REACHED", result.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Equal(new[] { "-c", "user.name=implementation", "-c", "user.email=implementation@claims.invalid", "commit", "--quiet", "-m", $"claim: release execution-unit:{Unit}" }, markerLines.Skip(1));
+                Assert.Contains("G860_COMMIT_FAULT_REACHED", result.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+                Assert.True(File.Exists(staged), "real git add must succeed before the commit fault");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+        }
+
+        Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(logBefore, Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}"));
+        var inspection = repos.CloneForInspection();
+        Assert.Empty(ClaimHistory(inspection));
+        Assert.False(Directory.Exists(Path.Combine(inspection, ".intent-cli", "loop-evidence-overrides", Unit)));
+    }
+
+    [Fact]
+    public void OverrideReleaseReportsAppliedPointersWhenPushReturnedFailureAfterExactRemoteCommit_G860()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+        var bin = Path.Combine(Path.GetDirectoryName(repos.Reader)!, "g860-may-have-applied-bin");
+        Directory.CreateDirectory(bin);
+        var wrapper = Path.Combine(bin, "git");
+        var marker = Path.Combine(bin, "push-applied-before-error.txt");
+        var realGit = FindGitExecutable();
+        File.WriteAllText(wrapper,
+            "#!/bin/sh\nset -eu\nPWD=$(pwd)\n"
+            + $"REAL={ShellQuote(realGit)}\nBARE={ShellQuote(repos.Bare)}\nMARKER={ShellQuote(marker)}\n"
+            + "case \"$PWD\" in */intent-cli-claim-*) ;; *) exec \"$REAL\" \"$@\" ;; esac\n"
+            + "origin=$(\"$REAL\" -C \"$PWD\" remote get-url origin)\n"
+            + "[ \"$origin\" = \"$BARE\" ] || exec \"$REAL\" \"$@\"\n"
+            + "if [ \"$1\" = push ] && [ \"$2\" = origin ]; then\n"
+            + "  \"$REAL\" \"$@\"\n"
+            + "  printf '%s\\n' \"$PWD\" \"$@\" > \"$MARKER\"\n"
+            + "  echo G860_PUSH_APPLIED_THEN_ERROR >&2\n  exit 73\nfi\n"
+            + "exec \"$REAL\" \"$@\"\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", bin + Path.PathSeparator + previousPath);
+            var output = new StringWriter();
+            Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+            Assert.True(File.Exists(marker), "the push wrapper must publish, then return a failure");
+            var markerText = File.ReadAllText(marker);
+            Assert.Contains("push", markerText, StringComparison.Ordinal);
+            Assert.Contains("refs/heads/main", markerText, StringComparison.Ordinal);
+            using var result = JsonDocument.Parse(output.ToString());
+            var root = result.RootElement;
+            Assert.Equal("released", root.GetProperty("status").GetString());
+            Assert.True(root.GetProperty("push_succeeded").GetBoolean());
+            var transactionCommit = root.GetProperty("commit").GetString()!;
+            Assert.Equal(transactionCommit, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            var overrideResult = root.GetProperty("loop_evidence_override");
+            Assert.Equal("applied", overrideResult.GetProperty("disposition").GetString());
+            Assert.Equal("allowed-missing-receipts", overrideResult.GetProperty("cause").GetString());
+            Assert.True(overrideResult.GetProperty("published").GetBoolean());
+            Assert.NotEmpty(overrideResult.GetProperty("audit_path").GetString()!);
+            Assert.NotEmpty(overrideResult.GetProperty("history_path").GetString()!);
+            Assert.Equal(runsRelative, overrideResult.GetProperty("run_log_path").GetString());
+            var tree = Git(repos.Bare, "ls-tree", "-r", "--name-only", transactionCommit);
+            Assert.Contains(overrideResult.GetProperty("audit_path").GetString()!, tree, StringComparison.Ordinal);
+            Assert.Contains(overrideResult.GetProperty("history_path").GetString()!, tree, StringComparison.Ordinal);
+            Assert.Contains(runsRelative, tree, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+        }
+    }
+
+    [Fact]
+    public void OverrideRebuildsAuditAfterUnrelatedRemoteAdvance_G860()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var initialHead = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var racer = repos.CreateRacer();
+        File.WriteAllText(Path.Combine(racer, "g860-unrelated-advance.txt"), "one unrelated canonical advance\n");
+        Git(racer, "add", "--", "g860-unrelated-advance.txt");
+        Git(racer, "-c", "user.name=race", "-c", "user.email=race@example.invalid",
+            "commit", "--quiet", "-m", "advance canonical ref before override retry");
+        var racerHead = Git(racer, "rev-parse", "HEAD").Trim();
+        var marker = InstallRacerAdvanceOnFirstPush(repos, racer, "g860-retry-race");
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", Path.GetDirectoryName(marker) + Path.PathSeparator + previousPath);
+            var output = new StringWriter();
+            Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+            Assert.True(File.Exists(marker), "the first transaction push must lose to the racer");
+            using var result = JsonDocument.Parse(output.ToString());
+            var root = result.RootElement;
+            Assert.Equal("released", root.GetProperty("status").GetString());
+            Assert.Equal(2, root.GetProperty("attempts").GetInt32());
+            Assert.Equal(racerHead, root.GetProperty("solo_conductor_completion").GetProperty("canonical_snapshot_oid").GetString());
+            var overrideResult = root.GetProperty("loop_evidence_override");
+            Assert.Equal("applied", overrideResult.GetProperty("disposition").GetString());
+            Assert.True(overrideResult.GetProperty("published").GetBoolean());
+            var transactionCommit = root.GetProperty("commit").GetString()!;
+            Assert.Equal(transactionCommit, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            var auditPath = overrideResult.GetProperty("audit_path").GetString()!;
+            using var audit = JsonDocument.Parse(Git(repos.Bare, "show", $"{transactionCommit}:{auditPath}"));
+            Assert.Equal(racerHead, audit.RootElement.GetProperty("canonical_snapshot_oid").GetString());
+            var committedRunLog = Git(repos.Bare, "show", $"{transactionCommit}:{runsRelative}");
+            Assert.Single(RunLogSerializer.DeserializeAll(committedRunLog), item => item.Event == "loop-evidence-override");
+            var auditRows = Git(repos.Bare, "ls-tree", "-r", "--name-only", transactionCommit)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Where(path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Single(auditRows);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+        }
+
+        Assert.NotEqual(initialHead, racerHead);
+        var inspection = repos.CloneForInspection();
+        Assert.False(File.Exists(Path.Combine(inspection, ClaimCommand.ClaimPath($"execution-unit:{Unit}"))));
+        Assert.Single(ClaimHistory(inspection));
+    }
+
+    [Theory]
+    [InlineData("all")]
+    [InlineData("partial")]
+    public void OverrideRetryUsesOnlyFreshlyMissingReceiptSet_G860(string repair)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect", "guide-reachability");
+        var racer = repos.CreateRacer();
+        var racerBase = Git(racer, "rev-parse", "HEAD").Trim();
+        var knowledgePath = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+            KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "architect");
+        var guidePath = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+            GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect");
+        RecordKnowledge(racer, "architect", racerBase);
+        Assert.True(File.Exists(Path.Combine(racer, knowledgePath.Replace('/', Path.DirectorySeparatorChar))));
+        if (repair == "all")
+        {
+            RecordGuide(racer, "architect", racerBase);
+            Assert.True(File.Exists(Path.Combine(racer, guidePath.Replace('/', Path.DirectorySeparatorChar))));
+        }
+        else
+        {
+            Assert.False(File.Exists(Path.Combine(racer, guidePath.Replace('/', Path.DirectorySeparatorChar))));
+        }
+        var repairPaths = repair == "all" ? new[] { knowledgePath, guidePath } : [knowledgePath];
+        Git(racer, ["add", "--", .. repairPaths]);
+        Git(racer, "-c", "user.name=race", "-c", "user.email=race@example.invalid",
+            "commit", "--quiet", "-m", $"publish actual {repair} receipt repair during override retry");
+        var repairedHead = Git(racer, "rev-parse", "HEAD").Trim();
+        var marker = InstallRacerAdvanceOnFirstPush(repos, racer, $"g860-receipt-{repair}-race");
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", Path.GetDirectoryName(marker) + Path.PathSeparator + previousPath);
+            var output = new StringWriter();
+            Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+            Assert.True(File.Exists(marker), "the first transaction push must be rejected by the actual receipt repair push");
+            using var result = JsonDocument.Parse(output.ToString());
+            var root = result.RootElement;
+            Assert.Equal("released", root.GetProperty("status").GetString());
+            Assert.Equal(2, root.GetProperty("attempts").GetInt32());
+            Assert.Equal(repairedHead, root.GetProperty("solo_conductor_completion").GetProperty("canonical_snapshot_oid").GetString());
+            var waiver = root.GetProperty("loop_evidence_override");
+            var transactionCommit = root.GetProperty("commit").GetString()!;
+            Assert.Equal(transactionCommit, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            var finalRunLog = Git(repos.Bare, "show", $"{transactionCommit}:{runsRelative}");
+            var overrideEvents = RunLogSerializer.DeserializeAll(finalRunLog)
+                .Where(item => item.Event == "loop-evidence-override").ToArray();
+            if (repair == "all")
+            {
+                Assert.Equal("not-used-evidence-now-satisfied", waiver.GetProperty("disposition").GetString());
+                Assert.False(waiver.GetProperty("published").GetBoolean());
+                Assert.Empty(overrideEvents);
+                Assert.DoesNotContain("audit_path", waiver.EnumerateObject().Select(property => property.Name));
+                Assert.Equal("satisfied", root.GetProperty("solo_conductor_completion").GetProperty("decision").GetString());
+                Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", transactionCommit)
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                    path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+            }
+            else
+            {
+                Assert.Equal("applied", waiver.GetProperty("disposition").GetString());
+                Assert.True(waiver.GetProperty("published").GetBoolean());
+                Assert.Equal("refused", root.GetProperty("solo_conductor_completion").GetProperty("decision").GetString());
+                var duties = root.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray().ToArray();
+                Assert.Equal("satisfied", Assert.Single(duties, item => item.GetProperty("id").GetString() == "knowledge-architect").GetProperty("state").GetString());
+                Assert.Equal("missing", Assert.Single(duties, item => item.GetProperty("id").GetString() == "guide-reachability").GetProperty("state").GetString());
+                Assert.Equal("guide-reachability", Assert.Single(waiver.GetProperty("skipped_duties").EnumerateArray()).GetProperty("id").GetString());
+                Assert.Single(overrideEvents);
+                var auditPath = waiver.GetProperty("audit_path").GetString()!;
+                using var audit = JsonDocument.Parse(Git(repos.Bare, "show", $"{transactionCommit}:{auditPath}"));
+                Assert.Equal(repairedHead, audit.RootElement.GetProperty("canonical_snapshot_oid").GetString());
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+        }
+    }
+
+    [Fact]
+    public void OverrideSameBasePushRejectionPreservesFailureAndPublishesNothing_G860()
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var head = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var runBefore = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+        var hookMarker = repos.InstallRejectingPreReceiveHook();
+        var output = new StringWriter();
+
+        Assert.Equal(1, RunOverrideCli(repos.Reader, output));
+
+        Assert.True(File.Exists(hookMarker), "the actual bare-remote receive hook must reject the transaction push");
+        using var result = JsonDocument.Parse(output.ToString());
+        var root = result.RootElement;
+        Assert.Equal("push-rejected", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("push_succeeded").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("git_push_error").GetString()));
+        Assert.Equal(head, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(runBefore, Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}"));
+        Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+        Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+        Assert.Equal("refused", root.GetProperty("loop_evidence_override").GetProperty("disposition").GetString());
+        Assert.False(root.GetProperty("loop_evidence_override").GetProperty("published").GetBoolean());
+    }
+
+    [Fact]
+    public void OverrideUsesLegacySelectedRunsAndConfiguredMetadataBranch_G860()
+    {
+        using var repos = new ClaimRepositories();
+        const string metadataBranch = "intent-metadata";
+        repos.ConfigureMetadataWriteBranch(metadataBranch);
+        var defaultHeadBeforeSetup = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, packetYaml: null,
+            missingDutyIds: ["knowledge-architect"], legacyOnly: true);
+        Assert.Equal(".intent-cli/runs.jsonl", runsRelative);
+        var canonicalBefore = Git(repos.Bare, $"rev-parse", $"refs/heads/{metadataBranch}").Trim();
+        Assert.Equal(defaultHeadBeforeSetup, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+
+        var localArchitectPath = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+            KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "architect");
+        var localWriter = repos.CreateRacer();
+        Git(localWriter, "checkout", "--quiet", "-b", metadataBranch, $"origin/{metadataBranch}");
+        RecordKnowledge(localWriter, "architect", canonicalBefore);
+        Assert.True(File.Exists(Path.Combine(localWriter, localArchitectPath.Replace('/', Path.DirectorySeparatorChar))),
+            "the actual writer must emit a local unpublished receipt");
+        var defaultHeadBeforeRelease = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var output = new StringWriter();
+
+        Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+
+        using var result = JsonDocument.Parse(output.ToString());
+        var root = result.RootElement;
+        Assert.Equal("released", root.GetProperty("status").GetString());
+        Assert.Equal($"refs/heads/{metadataBranch}", root.GetProperty("target_ref").GetString());
+        Assert.Equal($"refs/heads/{metadataBranch}", root.GetProperty("solo_conductor_completion").GetProperty("canonical_target_ref").GetString());
+        Assert.Equal(defaultHeadBeforeRelease, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        var transactionCommit = root.GetProperty("commit").GetString()!;
+        Assert.Equal(transactionCommit, Git(repos.Bare, $"rev-parse", $"refs/heads/{metadataBranch}").Trim());
+        var waiver = root.GetProperty("loop_evidence_override");
+        Assert.Equal(runsRelative, waiver.GetProperty("run_log_path").GetString());
+        Assert.Equal("knowledge-architect", Assert.Single(waiver.GetProperty("skipped_duties").EnumerateArray()).GetProperty("id").GetString());
+        var auditPath = waiver.GetProperty("audit_path").GetString()!;
+        using var audit = JsonDocument.Parse(Git(repos.Bare, "show", $"{transactionCommit}:{auditPath}"));
+        Assert.Equal(canonicalBefore, audit.RootElement.GetProperty("canonical_snapshot_oid").GetString());
+        Assert.Equal($"refs/heads/{metadataBranch}", audit.RootElement.GetProperty("canonical_target_ref").GetString());
+        Assert.False(audit.RootElement.TryGetProperty("head_sha", out _));
+        var committedLegacyRuns = Git(repos.Bare, "show", $"{transactionCommit}:{runsRelative}");
+        Assert.Single(RunLogSerializer.DeserializeAll(committedLegacyRuns), item => item.Event == "loop-evidence-override");
+        Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", transactionCommit)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            path => path.Contains("scoped", StringComparison.Ordinal) && path.EndsWith("runs.jsonl", StringComparison.Ordinal));
+        var duties = root.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray().ToArray();
+        Assert.Equal("missing", Assert.Single(duties, item => item.GetProperty("id").GetString() == "knowledge-architect").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public void OverridePreservesUnterminatedSelectedRunLogPrefix_G860()
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, packetYaml: null,
+            missingDutyIds: ["knowledge-architect"], unterminatedRunLog: true);
+        var original = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+        Assert.EndsWith("}", original, StringComparison.Ordinal);
+        var priorBytes = System.Text.Encoding.UTF8.GetBytes(original);
+        Assert.NotEqual((byte)'\n', priorBytes[^1]);
+        Assert.NotEqual((byte)'\r', priorBytes[^1]);
+
+        var output = new StringWriter();
+        Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+        using var result = JsonDocument.Parse(output.ToString());
+        var root = result.RootElement;
+        Assert.Equal("released", root.GetProperty("status").GetString());
+        var transactionCommit = root.GetProperty("commit").GetString()!;
+        var waiver = root.GetProperty("loop_evidence_override");
+        var finalLog = Git(repos.Bare, "show", $"{transactionCommit}:{runsRelative}");
+        Assert.StartsWith(System.Text.Encoding.UTF8.GetString(priorBytes) + "\n", finalLog, StringComparison.Ordinal);
+        Assert.Single(RunLogSerializer.DeserializeAll(finalLog), item => item.Event == "loop-evidence-override");
+        Assert.Equal(runsRelative, waiver.GetProperty("run_log_path").GetString());
+    }
+
+    [Fact]
+    public void OverrideBuilderAliasRequiresExactStoredHolder_G860()
+    {
+        using (var matching = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(matching, packetYaml: null,
+                missingDutyIds: ["knowledge-architect"], claimActor: "builder");
+            var output = new StringWriter();
+            Assert.Equal(0, RunOverrideCli(matching.Reader, output, actor: "builder"));
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("released", result.RootElement.GetProperty("status").GetString());
+            var auditPath = result.RootElement.GetProperty("loop_evidence_override").GetProperty("audit_path").GetString()!;
+            using var audit = JsonDocument.Parse(Git(matching.Bare,
+                "show", $"refs/heads/main:{auditPath}"));
+            Assert.Equal("builder", audit.RootElement.GetProperty("actor").GetString());
+            Assert.Equal("builder", audit.RootElement.GetProperty("normalized_role").GetString());
+        }
+
+        using (var mismatched = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(mismatched, packetYaml: null,
+                missingDutyIds: ["knowledge-architect"], claimActor: "implementation");
+            var before = Git(mismatched.Bare, "rev-parse", "refs/heads/main").Trim();
+            var output = new StringWriter();
+            Assert.Equal(1, RunOverrideCli(mismatched.Reader, output, actor: "builder"));
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("held", result.RootElement.GetProperty("status").GetString());
+            Assert.Equal("implementation", result.RootElement.GetProperty("holder").GetString());
+            Assert.Equal(before, Git(mismatched.Bare, "rev-parse", "refs/heads/main").Trim());
+            Assert.Empty(ClaimHistory(mismatched.CloneForInspection()));
+            Assert.DoesNotContain(Git(mismatched.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void OverridePreviewMarkdownAndLegacyReleaseOutputAreTruthful_G860()
+    {
+        using (var eligible = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(eligible, "knowledge-architect");
+            var output = new StringWriter();
+            var exit = ClaimCommand.ExecuteRelease(Context(eligible.Reader),
+                ["--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+                 "--reason", "markdown preview", "--override-loop-evidence", "--format", "markdown"], output);
+            Assert.Equal(0, exit);
+            var markdown = output.ToString();
+            Assert.Contains("# Claim planned", markdown, StringComparison.Ordinal);
+            Assert.Contains("## Solo-conductor completion", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"decision\": \"refused\"", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"missing\"", markdown, StringComparison.Ordinal);
+            Assert.Contains("## Loop-evidence override", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"disposition\": \"eligible-preview\"", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"published\": false", markdown, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"head_sha\"", markdown, StringComparison.Ordinal);
+        }
+
+        using (var ordinary = new ClaimRepositories())
+        {
+            ordinary.PublishSnapshot(queueState: QueueItemState.Completed,
+                runEvents: ["pr-merged", "closeout-recorded"], packetYaml: ExplicitNoDutyPacketYaml);
+            Acquire(ordinary.Writer);
+            var output = new StringWriter();
+            var exit = ClaimCommand.ExecuteRelease(Context(ordinary.Reader),
+                ["--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+                 "--reason", "ordinary release", "--format", "json", "--write"], output);
+            Assert.Equal(0, exit);
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("released", result.RootElement.GetProperty("status").GetString());
+            Assert.DoesNotContain("loop_evidence_override", result.RootElement.EnumerateObject().Select(property => property.Name));
+            Assert.DoesNotContain(Git(ordinary.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void PrTransitionKeepsOverrideAsUnknownArgument_G860()
+    {
+        var output = new StringWriter();
+        var exit = AutomationPrTransitionCommand.Execute(Context(Path.GetTempPath()),
+            ["--repo", Repo, "--pr", PullRequest.ToString(System.Globalization.CultureInfo.InvariantCulture),
+             "--transition", "request-update", "--override-loop-evidence", "--format", "json"], output);
+        Assert.Equal(1, exit);
+        Assert.Contains("Unknown argument '--override-loop-evidence'", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("usage:", output.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void OverrideRetryExhaustionPreservesCanonicalClaimAndRunLog_G860()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var headBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var runBefore = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+        var racer = repos.CreateRacer();
+        var bin = Path.Combine(Path.GetDirectoryName(repos.Reader)!, "g860-retry-exhaustion-bin");
+        Directory.CreateDirectory(bin);
+        var countPath = Path.Combine(bin, "race-count.txt");
+        var wrapper = Path.Combine(bin, "git");
+        var realGit = FindGitExecutable();
+        File.WriteAllText(wrapper,
+            "#!/bin/sh\nset -eu\nPWD=$(pwd)\n"
+            + $"REAL={ShellQuote(realGit)}\nBARE={ShellQuote(repos.Bare)}\nRACER={ShellQuote(racer)}\nCOUNT={ShellQuote(countPath)}\n"
+            + "case \"$PWD\" in */intent-cli-claim-*) ;; *) exec \"$REAL\" \"$@\" ;; esac\n"
+            + "origin=$(\"$REAL\" -C \"$PWD\" remote get-url origin)\n"
+            + "[ \"$origin\" = \"$BARE\" ] || exec \"$REAL\" \"$@\"\n"
+            + "if [ \"$1\" = push ] && [ \"$2\" = origin ]; then\n"
+            + "  n=0; [ ! -f \"$COUNT\" ] || n=$(cat \"$COUNT\"); n=$((n + 1)); printf '%s\\n' \"$n\" > \"$COUNT\"\n"
+            + "  \"$REAL\" -C \"$RACER\" pull --ff-only origin main >/dev/null\n"
+            + "  printf 'advance %s\\n' \"$n\" > \"$RACER/g860-retry-advance-$n.txt\"\n"
+            + "  \"$REAL\" -C \"$RACER\" add -- \"g860-retry-advance-$n.txt\"\n"
+            + "  \"$REAL\" -C \"$RACER\" -c user.name=race -c user.email=race@example.invalid commit --quiet -m \"advance retry $n\"\n"
+            + "  \"$REAL\" -C \"$RACER\" push origin HEAD:refs/heads/main\nfi\n"
+            + "exec \"$REAL\" \"$@\"\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", bin + Path.PathSeparator + previousPath);
+            var output = new StringWriter();
+            Assert.Equal(1, RunOverrideCli(repos.Reader, output));
+            Assert.Equal("2", File.ReadAllText(countPath).Trim());
+            using var result = JsonDocument.Parse(output.ToString());
+            var root = result.RootElement;
+            Assert.Equal("retry-exhausted", root.GetProperty("status").GetString());
+            Assert.Equal(2, root.GetProperty("attempts").GetInt32());
+            Assert.False(root.GetProperty("push_succeeded").GetBoolean());
+            Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("git_push_error").GetString()));
+            Assert.NotEqual(headBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+            Assert.Equal(runBefore, Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}"));
+            Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+            Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("closeout")]
+    [InlineData("mode")]
+    [InlineData("holder")]
+    [InlineData("receipt-unavailable")]
+    public void OverrideRetryRefusesChangedCloseoutModeHolderOrReceipt_G860(string changedState)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var racer = repos.CreateRacer();
+        var changedPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        switch (changedState)
+        {
+            case "closeout":
+            {
+                var runPath = Path.Combine(racer, runsRelative.Replace('/', Path.DirectorySeparatorChar));
+                var existing = RunLogSerializer.DeserializeAll(File.ReadAllText(runPath));
+                Assert.Contains(existing, item => item.Event == "pr-merged" && item.ExecutionUnit == Unit);
+                Assert.Contains(existing, item => item.Event == "closeout-recorded" && item.ExecutionUnit == Unit);
+                File.WriteAllText(runPath, string.Join(Environment.NewLine,
+                    existing.Where(item => !(item.Event == "pr-merged" && item.ExecutionUnit == Unit))
+                        .Select(RunLogSerializer.SerializeLine)) + Environment.NewLine);
+                var changed = RunLogSerializer.DeserializeAll(File.ReadAllText(runPath));
+                Assert.DoesNotContain(changed, item => item.Event == "pr-merged" && item.ExecutionUnit == Unit);
+                Assert.Contains(changed, item => item.Event == "closeout-recorded" && item.ExecutionUnit == Unit);
+                break;
+            }
+            case "mode":
+            {
+                var modeState = TeamModeStore.TryRead(racer)!;
+                var entry = Assert.Single(modeState.Entries, item => item.Domain == Domain && item.Team == Team);
+                Assert.Equal(TeamMode.SoloConductor, entry.Mode);
+                var transitionAt = DateTimeOffset.UtcNow.AddSeconds(1);
+                var changedEntry = entry with
+                {
+                    Mode = TeamMode.Delivery,
+                    UpdatedAt = transitionAt,
+                    Transitions = entry.Transitions.Append(new TeamModeTransition
+                    {
+                        From = TeamMode.SoloConductor, To = TeamMode.Delivery, At = transitionAt,
+                    }).ToArray(),
+                };
+                TeamModeStore.Write(racer, modeState with
+                {
+                    Entries = modeState.Entries.Select(item => item == entry ? changedEntry : item).ToArray(),
+                });
+                Assert.Equal(TeamMode.Delivery, TeamModeStore.TryRead(racer)!.Entries.Single(item => item.Domain == Domain && item.Team == Team).Mode);
+                break;
+            }
+            case "holder":
+            {
+                var claimFile = Path.Combine(racer, changedPath.Replace('/', Path.DirectorySeparatorChar));
+                var claim = JsonNode.Parse(File.ReadAllText(claimFile))!.AsObject();
+                Assert.Equal("implementation", claim["actor"]!.GetValue<string>());
+                claim["actor"] = "different-builder";
+                File.WriteAllText(claimFile, claim.ToJsonString() + Environment.NewLine);
+                Assert.Equal("different-builder", JsonNode.Parse(File.ReadAllText(claimFile))!["actor"]!.GetValue<string>());
+                break;
+            }
+            case "receipt-unavailable":
+            {
+                var presentReceipt = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                    KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "orchestrator");
+                var receiptPath = Path.Combine(racer, presentReceipt.Replace('/', Path.DirectorySeparatorChar));
+                Assert.True(File.Exists(receiptPath));
+                var originalReceipt = File.ReadAllText(receiptPath);
+                Assert.Contains("\"role\": \"orchestrator\"", originalReceipt, StringComparison.Ordinal);
+                File.WriteAllText(receiptPath, "{ malformed raced receipt\n");
+                Assert.NotEqual(originalReceipt, File.ReadAllText(receiptPath));
+                break;
+            }
+        }
+        Git(racer, "add", "-A", "--", ".intent-cli");
+        Git(racer, "-c", "user.name=race", "-c", "user.email=race@example.invalid",
+            "commit", "--quiet", "-m", $"change canonical {changedState} before override retry");
+        var racerHead = Git(racer, "rev-parse", "HEAD").Trim();
+        var marker = InstallRacerAdvanceOnFirstPush(repos, racer, $"g860-{changedState}-race");
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", Path.GetDirectoryName(marker) + Path.PathSeparator + previousPath);
+            var output = new StringWriter();
+            Assert.Equal(1, RunOverrideCli(repos.Reader, output));
+            Assert.True(File.Exists(marker));
+            using var result = JsonDocument.Parse(output.ToString());
+            var root = result.RootElement;
+            Assert.NotEqual("released", root.GetProperty("status").GetString());
+            Assert.Equal(changedState == "holder" ? 1 : 2, root.GetProperty("attempts").GetInt32());
+            Assert.Equal(racerHead, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            if (changedState == "closeout")
+            {
+                Assert.Equal("completion-blocked", root.GetProperty("status").GetString());
+                Assert.Equal("missing", Assert.Single(root.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray(),
+                    item => item.GetProperty("id").GetString() == "pr-merged").GetProperty("state").GetString());
+            }
+            if (changedState == "mode") Assert.Equal("override-not-applicable", root.GetProperty("status").GetString());
+            if (changedState == "holder")
+            {
+                Assert.Equal("held", root.GetProperty("status").GetString());
+                Assert.Equal("different-builder", root.GetProperty("holder").GetString());
+                var overrideResult = root.GetProperty("loop_evidence_override");
+                Assert.True(overrideResult.GetProperty("requested").GetBoolean());
+                Assert.Equal("refused", overrideResult.GetProperty("disposition").GetString());
+                Assert.Equal("holder-identity-mismatch", overrideResult.GetProperty("cause").GetString());
+                Assert.False(overrideResult.GetProperty("published").GetBoolean());
+                Assert.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/",
+                    overrideResult.GetProperty("audit_path").GetString(), StringComparison.Ordinal);
+                Assert.StartsWith(".intent-cli/claims/history/",
+                    overrideResult.GetProperty("history_path").GetString(), StringComparison.Ordinal);
+                Assert.Equal(runsRelative, overrideResult.GetProperty("run_log_path").GetString());
+            }
+            if (changedState == "receipt-unavailable")
+            {
+                Assert.Equal("completion-blocked", root.GetProperty("status").GetString());
+                Assert.Equal("knowledge-record-unavailable", Assert.Single(
+                    root.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray(),
+                    item => item.GetProperty("id").GetString() == "knowledge-orchestrator").GetProperty("cause").GetString());
+                Assert.Equal("refused", root.GetProperty("loop_evidence_override").GetProperty("disposition").GetString());
+                Assert.False(root.GetProperty("loop_evidence_override").GetProperty("published").GetBoolean());
+            }
+            Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+            Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+            var finalRunsPath = Path.Combine(repos.CloneForInspection(), runsRelative.Replace('/', Path.DirectorySeparatorChar));
+            Assert.DoesNotContain(RunLogSerializer.DeserializeAll(File.ReadAllText(finalRunsPath)),
+                item => item.Event == "loop-evidence-override");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+        }
+    }
+
     [Theory]
     [InlineData("queue-absent", "closeout-queue", "missing")]
     [InlineData("queue-incomplete", "closeout-queue", "missing")]
@@ -2774,6 +4081,963 @@ public sealed class SoloConductorClaimReleaseG857Tests
         Assert.Equal(0, exitCode);
     }
 
+    [Theory]
+    [InlineData("domain-missing", "applicability", "packet-domain-missing")]
+    [InlineData("domain-invalid", "applicability", "packet-domain-missing")]
+    [InlineData("domain-conflict", "applicability", "packet-identity-conflict")]
+    [InlineData("source-unit-conflict", "applicability", "packet-identity-conflict")]
+    [InlineData("team-mode-invalid-duplicate", "applicability", "team-mode-unavailable")]
+    [InlineData("target-repo-missing", "target-repo", "target-repo-unavailable")]
+    [InlineData("target-repo-invalid", "target-repo", "target-repo-unavailable")]
+    [InlineData("target-repo-conflict", "target-repo", "target-repo-identity-conflict")]
+    [InlineData("knowledge-declaration-missing", "knowledge-declaration", "knowledge-declaration-missing")]
+    [InlineData("knowledge-declaration-malformed", "knowledge-declaration", "knowledge-declaration-unavailable")]
+    [InlineData("guide-declaration-missing", "guide-declaration", "guide-declaration-missing")]
+    [InlineData("guide-declaration-malformed", "guide-declaration", "guide-declaration-unavailable")]
+    [InlineData("knowledge-duplicate-orchestrator", "knowledge-orchestrator", "duplicate-role-record")]
+    [InlineData("knowledge-malformed-orchestrator", "knowledge-orchestrator", "knowledge-record-unavailable")]
+    [InlineData("guide-duplicate-architect", "guide-reachability", "duplicate-role-record")]
+    [InlineData("guide-malformed-architect", "guide-reachability", "guide-record-unavailable")]
+    [InlineData("queue-absent", "closeout-queue", "queue-item-missing")]
+    [InlineData("queue-link-missing", "closeout-queue", "linked-pr-missing")]
+    [InlineData("queue-repo-conflict", "closeout-queue", "queue-pr-identity-conflict")]
+    [InlineData("runs-malformed", "pr-merged", "run-log-unavailable")]
+    [InlineData("run-identity-conflict", "pr-merged", "run-identity-conflict")]
+    public void OverrideFlaggedTransactionRefusesOneForbiddenCanonicalCondition_G860(
+        string condition, string expectedDuty, string expectedCause)
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var baseline = EvaluateCanonicalSnapshot(repos.Writer);
+        var baselineEligibility = ClaimLoopEvidenceOverride.Evaluate(baseline);
+        Assert.True(baselineEligibility.Eligible, baselineEligibility.Detail);
+        Assert.Equal("knowledge-architect", Assert.Single(baselineEligibility.SkippedDuties).Id);
+
+        var packetPath = Path.Combine(repos.Writer, KnowledgeWriteBackRecord.PacketRootRelativePath,
+            Unit, "packet.yaml");
+        var originalPacket = File.ReadAllText(packetPath);
+        switch (condition)
+        {
+            case "domain-missing":
+                File.WriteAllText(packetPath, originalPacket.Replace("  domain: intent-cli\n", "", StringComparison.Ordinal));
+                break;
+            case "domain-invalid":
+                File.WriteAllText(packetPath, originalPacket.Replace("domain: intent-cli", "domain: ../invalid", StringComparison.Ordinal));
+                break;
+            case "domain-conflict":
+                File.WriteAllText(packetPath, "domain: another-domain\n" + originalPacket);
+                break;
+            case "source-unit-conflict":
+                File.WriteAllText(packetPath, originalPacket.Replace("source_execution_unit: G857", "source_execution_unit: OTHER", StringComparison.Ordinal));
+                break;
+            case "team-mode-invalid-duplicate":
+            {
+                var mode = TeamModeStore.TryRead(repos.Writer)!;
+                Assert.Single(mode.Entries, entry => entry.Domain == Domain && entry.Team == Team);
+                TeamModeStore.Write(repos.Writer, mode with
+                {
+                    Entries = [.. mode.Entries, ModeEntry(TeamMode.Delivery, Team)],
+                });
+                break;
+            }
+            case "target-repo-missing":
+                File.WriteAllText(packetPath, originalPacket.Replace("  target_repo: J-Tech-Japan/intent-system\n", "", StringComparison.Ordinal));
+                break;
+            case "target-repo-invalid":
+                File.WriteAllText(packetPath, originalPacket.Replace("target_repo: J-Tech-Japan/intent-system", "target_repo: ../unsafe", StringComparison.Ordinal));
+                break;
+            case "target-repo-conflict":
+                File.WriteAllText(packetPath, "target_repo: foreign/repo\n" + originalPacket);
+                break;
+            case "knowledge-declaration-missing":
+                File.WriteAllText(packetPath, PacketWithoutKnowledgeDeclarationYaml);
+                break;
+            case "knowledge-declaration-malformed":
+                File.WriteAllText(packetPath, PacketWithMalformedKnowledgeDeclarationYaml);
+                break;
+            case "guide-declaration-missing":
+                File.WriteAllText(packetPath, PacketWithoutGuideDeclarationYaml);
+                break;
+            case "guide-declaration-malformed":
+                File.WriteAllText(packetPath, PacketWithMalformedGuideDeclarationYaml);
+                break;
+            case "knowledge-duplicate-orchestrator":
+            {
+                var path = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                    KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "orchestrator");
+                var duplicate = Path.Combine(Path.GetDirectoryName(Path.Combine(repos.Writer,
+                    path.Replace('/', Path.DirectorySeparatorChar)))!, "duplicate.json");
+                File.Copy(Path.Combine(repos.Writer, path.Replace('/', Path.DirectorySeparatorChar)), duplicate);
+                Assert.True(File.Exists(duplicate));
+                break;
+            }
+            case "knowledge-malformed-orchestrator":
+            {
+                var path = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                    KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "orchestrator");
+                File.WriteAllText(Path.Combine(repos.Writer, path.Replace('/', Path.DirectorySeparatorChar)), "{ malformed receipt\n");
+                break;
+            }
+            case "guide-malformed-architect":
+            {
+                var path = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                    GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect");
+                File.WriteAllText(Path.Combine(repos.Writer, path.Replace('/', Path.DirectorySeparatorChar)), "{ malformed receipt\n");
+                break;
+            }
+            case "guide-duplicate-architect":
+            {
+                var scoped = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                    GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect");
+                var legacy = GuideReachabilityRecord.ResolveRelativePath(Unit);
+                var scopedPath = Path.Combine(repos.Writer, scoped.Replace('/', Path.DirectorySeparatorChar));
+                var legacyPath = Path.Combine(repos.Writer, legacy.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+                File.Copy(scopedPath, legacyPath);
+                Assert.True(File.Exists(scopedPath));
+                Assert.True(File.Exists(legacyPath));
+                Assert.Equal("architect", JsonDocument.Parse(File.ReadAllText(scopedPath)).RootElement.GetProperty("role").GetString());
+                Assert.Equal("architect", JsonDocument.Parse(File.ReadAllText(legacyPath)).RootElement.GetProperty("role").GetString());
+                break;
+            }
+            case "queue-absent":
+            {
+                var path = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+                File.Delete(path);
+                break;
+            }
+            case "queue-link-missing":
+            {
+                var path = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+                var queue = QueueStateSerializer.Deserialize(File.ReadAllText(path));
+                File.WriteAllText(path, QueueStateSerializer.Serialize(queue with
+                {
+                    Items = queue.Items!.Select(item => item.ExecutionUnit == Unit ? item with { LinkedPr = null } : item).ToArray(),
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                }));
+                break;
+            }
+            case "queue-repo-conflict":
+            {
+                var path = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+                var queue = QueueStateSerializer.Deserialize(File.ReadAllText(path));
+                File.WriteAllText(path, QueueStateSerializer.Serialize(queue with
+                {
+                    Items = queue.Items!.Select(item => item.ExecutionUnit == Unit
+                        ? item with { LinkedPr = "https://github.com/foreign/repository/pull/99" }
+                        : item).ToArray(),
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                }));
+                break;
+            }
+            case "runs-malformed":
+                File.WriteAllText(Path.Combine(repos.Writer, runsRelative.Replace('/', Path.DirectorySeparatorChar)), "{ malformed run line\n");
+                break;
+            case "run-identity-conflict":
+            {
+                var path = Path.Combine(repos.Writer, runsRelative.Replace('/', Path.DirectorySeparatorChar));
+                File.AppendAllText(path, RunLogSerializer.SerializeLine(new RunEvent
+                {
+                    Ts = DateTimeOffset.UtcNow,
+                    ExecutionUnit = Unit,
+                    Event = "pr-merged",
+                    By = "contradictory selected run identity",
+                    Repo = Repo,
+                    Pr = PullRequest,
+                    LinkedPr = "https://github.com/foreign/repository/pull/99",
+                }) + Environment.NewLine);
+                break;
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(condition), condition, "Unknown G860 forbidden-condition fixture.");
+        }
+
+        repos.PublishIntentChanges(repos.Writer, "main");
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var output = new StringWriter();
+        Assert.Equal(1, RunOverrideCli(repos.Reader, output));
+        using var result = JsonDocument.Parse(output.ToString());
+        var root = result.RootElement;
+        Assert.Equal("completion-blocked", root.GetProperty("status").GetString());
+        Assert.Equal("refused", root.GetProperty("loop_evidence_override").GetProperty("disposition").GetString());
+        Assert.False(root.GetProperty("loop_evidence_override").GetProperty("published").GetBoolean());
+        var completion = root.GetProperty("solo_conductor_completion");
+        var observed = Assert.Single(completion.GetProperty("duties").EnumerateArray(),
+            item => item.GetProperty("id").GetString() == expectedDuty);
+        Assert.Equal(expectedCause, observed.GetProperty("cause").GetString());
+        Assert.NotEqual("satisfied", observed.GetProperty("state").GetString());
+        Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        var inspection = repos.CloneForInspection();
+        Assert.Empty(ClaimHistory(inspection));
+        Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void OverrideExactHeldTeamWinsOverUnrelatedTeamModeEntry_G860()
+    {
+        using var repos = new ClaimRepositories();
+        PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var now = DateTimeOffset.UtcNow;
+        TeamModeStore.Write(repos.Writer, new TeamModeState
+        {
+            SchemaVersion = TeamModeStore.SchemaVersion,
+            Entries =
+            [
+                new TeamModeEntry
+                {
+                    Domain = Domain,
+                    Team = Team,
+                    Mode = TeamMode.SoloConductor,
+                    UpdatedAt = now,
+                    Transitions = [new TeamModeTransition { From = TeamMode.Default, To = TeamMode.SoloConductor, At = now }],
+                },
+                new TeamModeEntry
+                {
+                    Domain = Domain,
+                    Team = "other-team",
+                    Mode = TeamMode.Delivery,
+                    UpdatedAt = now,
+                    Transitions = [new TeamModeTransition { From = TeamMode.Default, To = TeamMode.Delivery, At = now }],
+                },
+            ],
+        });
+        repos.PublishIntentChanges(repos.Writer, "main");
+        Assert.Equal(2, TeamModeStore.TryRead(repos.Writer)!.Entries.Count);
+
+        var gate = EvaluateCanonicalSnapshot(repos.Writer);
+        Assert.True(gate.IsApplicable);
+        Assert.Equal("solo-conductor", gate.Completion?.Applicability.Mode);
+        Assert.Equal("team", gate.Completion?.Applicability.ModeSource);
+        Assert.True(ClaimLoopEvidenceOverride.Evaluate(gate).Eligible);
+
+        var output = new StringWriter();
+        Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("released", result.RootElement.GetProperty("status").GetString());
+        Assert.Equal("applied", result.RootElement.GetProperty("loop_evidence_override").GetProperty("disposition").GetString());
+    }
+
+    [Theory]
+    [InlineData("knowledge-orchestrator", "knowledge-orchestrator", "knowledge-record-unavailable")]
+    [InlineData("guide-architect", "guide-reachability", "guide-record-unavailable")]
+    [InlineData("selected-runs", "pr-merged", "run-log-unavailable")]
+    public void OverrideFlaggedTransactionRefusesProvenUnreadableCanonicalEvidence_G860(
+        string input, string expectedDuty, string expectedCause)
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var baseline = ClaimLoopEvidenceOverride.Evaluate(EvaluateCanonicalSnapshot(repos.Writer));
+        Assert.True(baseline.Eligible, baseline.Detail);
+        var target = (input switch
+        {
+            "knowledge-orchestrator" => RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "orchestrator"),
+            "guide-architect" => RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+                GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect"),
+            _ => runsRelative,
+        }).Replace('/', Path.DirectorySeparatorChar);
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var selectedRunsBefore = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+        var originalFactory = GuardedFileRead.ReadAllTextFactory;
+        var reached = 0;
+        GuardedFileRead.ReadAllTextFactory = path =>
+        {
+            if (path.EndsWith(target, StringComparison.Ordinal))
+            {
+                reached++;
+                throw new IOException($"G860_UNREADABLE_{input}_REACHED");
+            }
+            return (originalFactory ?? File.ReadAllText)(path);
+        };
+        var output = new StringWriter();
+        try
+        {
+            Assert.Equal(1, RunOverrideCli(repos.Reader, output));
+        }
+        finally
+        {
+            GuardedFileRead.ReadAllTextFactory = originalFactory;
+        }
+        Assert.True(reached > 0, $"the {input} read fault must be reached");
+        using var result = JsonDocument.Parse(output.ToString());
+        var root = result.RootElement;
+        Assert.Equal("completion-blocked", root.GetProperty("status").GetString());
+        Assert.Equal("refused", root.GetProperty("loop_evidence_override").GetProperty("disposition").GetString());
+        Assert.False(root.GetProperty("loop_evidence_override").GetProperty("published").GetBoolean());
+        var duties = root.GetProperty("solo_conductor_completion").GetProperty("duties").EnumerateArray().ToArray();
+        if (input == "selected-runs")
+        {
+            foreach (var id in new[] { "pr-merged", "closeout-recorded" })
+                Assert.Equal(expectedCause, Assert.Single(duties, item => item.GetProperty("id").GetString() == id).GetProperty("cause").GetString());
+        }
+        else
+        {
+            Assert.Equal(expectedCause, Assert.Single(duties, item => item.GetProperty("id").GetString() == expectedDuty).GetProperty("cause").GetString());
+        }
+        Assert.Contains($"G860_UNREADABLE_{input}_REACHED", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(selectedRunsBefore, Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}"));
+        Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+        Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExplicitFlagAcceptsIndependentRepoWithLegacyNumericRunIdentity_G860()
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, packetYaml: null,
+            missingDutyIds: ["knowledge-architect"], legacyOnly: true);
+        var runsPath = Path.Combine(repos.Writer, runsRelative.Replace('/', Path.DirectorySeparatorChar));
+        var now = DateTimeOffset.UtcNow;
+        File.WriteAllLines(runsPath, new[] { "pr-merged", "closeout-recorded" }.Select(eventName =>
+            RunLogSerializer.SerializeLine(new RunEvent
+            {
+                Ts = now,
+                ExecutionUnit = Unit,
+                Event = eventName,
+                By = "legacy closeout writer",
+                Repo = Repo,
+                LinkedPr = $"#{PullRequest}",
+            })));
+        repos.PublishIntentChanges(repos.Writer, "main");
+        var gate = EvaluateCanonicalSnapshot(repos.Writer);
+        Assert.Equal("satisfied", Duty(gate.Completion!, "pr-merged").State);
+        Assert.Equal("satisfied", Duty(gate.Completion!, "closeout-recorded").State);
+        Assert.True(ClaimLoopEvidenceOverride.Evaluate(gate).Eligible);
+
+        var output = new StringWriter();
+        Assert.Equal(0, RunOverrideCli(repos.Reader, output));
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("released", result.RootElement.GetProperty("status").GetString());
+        var waiver = result.RootElement.GetProperty("loop_evidence_override");
+        Assert.True(waiver.GetProperty("published").GetBoolean());
+        Assert.Equal(".intent-cli/runs.jsonl", waiver.GetProperty("run_log_path").GetString());
+        var committed = result.RootElement.GetProperty("commit").GetString()!;
+        var eventLine = RunLogSerializer.DeserializeAll(Git(repos.Bare,
+            "show", $"{committed}:{runsRelative}")).Single(item => item.Event == "loop-evidence-override");
+        Assert.Equal(Repo, eventLine.Repo);
+        Assert.Equal(PullRequest, eventLine.Pr);
+        Assert.Equal($"https://github.com/{Repo}/pull/{PullRequest}", eventLine.LinkedPr);
+    }
+
+    [Fact]
+    public void FlaggedIneligiblePreviewKeepsDirtyCallerAndDeletesOnlyItsCandidateClone_G860()
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var packetPath = Path.Combine(repos.Writer, KnowledgeWriteBackRecord.PacketRootRelativePath, Unit, "packet.yaml");
+        File.WriteAllText(packetPath, PacketWithMalformedKnowledgeDeclarationYaml);
+        repos.PublishIntentChanges(repos.Writer, "main");
+        var staleRoot = PreparePreviewCallerState(repos.Reader);
+        var callerBefore = CaptureTree(repos.Reader);
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var runBefore = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+        var cleaned = new List<string>();
+        using var warnings = new StringWriter();
+        try
+        {
+            var result = ClaimCommand.RunTransaction(repos.Reader,
+                Request(ClaimOperation.Release, write: false) with { OverrideLoopEvidence = true },
+                warnings,
+                path =>
+                {
+                    cleaned.Add(path);
+                    if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+                });
+            Assert.Equal("completion-blocked", result.Status);
+            Assert.Equal("refused", result.LoopEvidenceOverride?.Disposition);
+            Assert.Equal("knowledge-declaration-unavailable", Duty(result.SoloConductorCompletion!, "knowledge-declaration").Cause);
+            Assert.Single(cleaned);
+            Assert.False(Directory.Exists(cleaned[0]));
+            Assert.False(File.Exists(cleaned[0] + ".lease"));
+            Assert.Equal(callerBefore.ToArray(), CaptureTree(repos.Reader).ToArray());
+            Assert.True(Directory.Exists(staleRoot));
+            Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+            Assert.Equal(runBefore, Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}"));
+            Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+            Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(staleRoot)) Directory.Delete(staleRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CompletedAndNonSoloOverrideAreRejectedInPreviewAndWrite_G860()
+    {
+        using (var complete = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(complete);
+            var completeGate = EvaluateCanonicalSnapshot(complete.Writer);
+            Assert.True(completeGate.IsApplicable);
+            Assert.Equal("satisfied", completeGate.Completion?.Decision);
+            Assert.Equal("no-missing-receipts", ClaimLoopEvidenceOverride.Evaluate(completeGate).Cause);
+            foreach (var write in new[] { false, true })
+            {
+                var before = Git(complete.Bare, "rev-parse", "refs/heads/main").Trim();
+                var output = new StringWriter();
+                Assert.Equal(1, RunOverrideCli(complete.Reader, output, write: write));
+                using var result = JsonDocument.Parse(output.ToString());
+                Assert.Equal("override-not-applicable", result.RootElement.GetProperty("status").GetString());
+                Assert.Equal("no-missing-receipts", result.RootElement.GetProperty("loop_evidence_override").GetProperty("cause").GetString());
+                Assert.Equal(before, Git(complete.Bare, "rev-parse", "refs/heads/main").Trim());
+            }
+        }
+        using (var nonSolo = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(nonSolo, "knowledge-architect");
+            var nonSoloAt = DateTimeOffset.UtcNow;
+            TeamModeStore.Write(nonSolo.Writer, new TeamModeState
+            {
+                SchemaVersion = TeamModeStore.SchemaVersion,
+                Entries =
+                [
+                    new TeamModeEntry
+                    {
+                        Domain = Domain,
+                        Team = Team,
+                        Mode = TeamMode.Delivery,
+                        UpdatedAt = nonSoloAt,
+                        Transitions = [new TeamModeTransition { From = TeamMode.Default, To = TeamMode.Delivery, At = nonSoloAt }],
+                    },
+                ],
+            });
+            nonSolo.PublishIntentChanges(nonSolo.Writer, "main");
+            Assert.Equal(TeamMode.Delivery, TeamModeStore.TryRead(nonSolo.Writer)!.Entries.Single().Mode);
+            var nonSoloGate = EvaluateCanonicalSnapshot(nonSolo.Writer);
+            Assert.False(nonSoloGate.IsApplicable);
+            Assert.Null(nonSoloGate.Completion);
+            foreach (var write in new[] { false, true })
+            {
+                var before = Git(nonSolo.Bare, "rev-parse", "refs/heads/main").Trim();
+                var output = new StringWriter();
+                Assert.Equal(1, RunOverrideCli(nonSolo.Reader, output, write: write));
+                using var result = JsonDocument.Parse(output.ToString());
+                Assert.Equal("override-not-applicable", result.RootElement.GetProperty("status").GetString());
+                Assert.Equal("not-applicable", result.RootElement.GetProperty("loop_evidence_override").GetProperty("cause").GetString());
+                Assert.Equal(before, Git(nonSolo.Bare, "rev-parse", "refs/heads/main").Trim());
+            }
+        }
+    }
+
+    [Fact]
+    public void OrdinaryDesignReleaseHandoffDoesNotCreateOverrideEvidence_G860()
+    {
+        using var repos = new ClaimRepositories();
+        PrepareActualOverrideSnapshot(repos, packetYaml: null,
+            missingDutyIds: ["knowledge-architect"], claimActor: "design");
+        var output = new StringWriter();
+        Assert.Equal(0, ClaimCommand.ExecuteRelease(Context(repos.Reader),
+            ["--scope", $"execution-unit:{Unit}", "--actor", "design", "--team", Team,
+             "--reason", "ordinary design handoff", "--write", "--format", "json"], output));
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("released", result.RootElement.GetProperty("status").GetString());
+        Assert.DoesNotContain("loop_evidence_override", result.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void OverrideDocumentationAndReleaseHelpStateTheVerificationBoundary_G860()
+    {
+        var root = RepoVersionPolicySource.RepoRoot();
+        foreach (var relative in new[]
+        {
+            "docs/en/08-command-reference.md", "docs/ja/08-command-reference.md",
+            "docs/en/12-agent-message-orchestration.md", "docs/ja/12-agent-message-orchestration.md",
+            "docs/en/1.0-compatibility-ledger.md", "docs/ja/1.0-compatibility-ledger.md",
+        })
+        {
+            var content = File.ReadAllText(Path.Combine(root, relative));
+            Assert.Contains("--override-loop-evidence", content, StringComparison.Ordinal);
+            Assert.Contains("canonical_snapshot_oid", content, StringComparison.Ordinal);
+            Assert.Contains("child PR head", content, StringComparison.Ordinal);
+            Assert.True(content.Contains("external authorization", StringComparison.Ordinal)
+                || content.Contains("外部承認", StringComparison.Ordinal), relative);
+        }
+        var step = Assert.Single(GuideSoloConductorCommand.BuildGuide().Loop, item => item.Number == 10);
+        Assert.Contains("does not verify external authorization or reason quality", step.Instruction, StringComparison.Ordinal);
+        Assert.Contains("canonical_snapshot_oid", step.Instruction, StringComparison.Ordinal);
+        Assert.Contains("non-solo-conductor modes", step.Instruction, StringComparison.Ordinal);
+        var help = new StringWriter();
+        Assert.Equal(0, ClaimCommand.ExecuteRelease(Context(Path.GetTempPath()), ["--help"], help));
+        Assert.Contains("--override-loop-evidence", help.ToString(), StringComparison.Ordinal);
+        Assert.Contains("does not verify external authorization or reason quality", help.ToString(), StringComparison.Ordinal);
+        Assert.Contains("canonical_snapshot_oid", help.ToString(), StringComparison.Ordinal);
+        Assert.Contains("non-execution-unit scopes", help.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("guide claim", help.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FlaggedAppliedAndRefusedMarkdownExposeOverrideDecision_G860()
+    {
+        using (var applied = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(applied, "knowledge-architect");
+            var output = new StringWriter();
+            Assert.Equal(0, RunOverrideCli(applied.Reader, output, format: "markdown"));
+            var markdown = output.ToString();
+            Assert.Contains("# Claim released", markdown, StringComparison.Ordinal);
+            Assert.Contains("## Loop-evidence override", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"disposition\": \"applied\"", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"published\": true", markdown, StringComparison.Ordinal);
+            Assert.Contains("canonical_snapshot_oid", markdown, StringComparison.Ordinal);
+            Assert.DoesNotContain("head_sha", markdown, StringComparison.Ordinal);
+        }
+        using (var refused = new ClaimRepositories())
+        {
+            PrepareActualOverrideSnapshot(refused, "knowledge-architect");
+            var packetPath = Path.Combine(refused.Writer, KnowledgeWriteBackRecord.PacketRootRelativePath, Unit, "packet.yaml");
+            File.WriteAllText(packetPath, PacketWithMalformedKnowledgeDeclarationYaml);
+            refused.PublishIntentChanges(refused.Writer, "main");
+            var output = new StringWriter();
+            Assert.Equal(1, RunOverrideCli(refused.Reader, output, format: "markdown"));
+            var markdown = output.ToString();
+            Assert.Contains("# Claim completion-blocked", markdown, StringComparison.Ordinal);
+            Assert.Contains("## Solo-conductor completion", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"cause\": \"knowledge-declaration-unavailable\"", markdown, StringComparison.Ordinal);
+            Assert.Contains("## Loop-evidence override", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"disposition\": \"refused\"", markdown, StringComparison.Ordinal);
+            Assert.Contains("\"published\": false", markdown, StringComparison.Ordinal);
+            Assert.Empty(ClaimHistory(refused.CloneForInspection()));
+        }
+    }
+
+    [Fact]
+    public void OverrideAuditCollisionAtExactDestinationPreservesForeignFileAndCanonicalState_G860()
+    {
+        using var repos = new ClaimRepositories();
+        PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var gate = EvaluateCanonicalSnapshot(repos.Writer);
+        var eligibility = ClaimLoopEvidenceOverride.Evaluate(gate);
+        Assert.True(eligibility.Eligible, eligibility.Detail);
+        var scope = $"execution-unit:{Unit}";
+        var claimPath = Path.Combine(repos.Writer, ClaimCommand.ClaimPath(scope).Replace('/', Path.DirectorySeparatorChar));
+        var holder = JsonSerializer.Deserialize<ClaimRecord>(File.ReadAllText(claimPath))!;
+        var request = new ClaimRequest(ClaimOperation.Release, scope, holder.Actor, holder.Team,
+            "fixed audit collision", null, true, "json", ClaimCommand.DefaultMaxAttempts)
+        { OverrideLoopEvidence = true };
+        var historyPath = $".intent-cli/claims/history/G857/20261010T0000000000000Z-release.json";
+        var auditPath = Path.Combine(repos.Writer, ".intent-cli", "loop-evidence-overrides", Unit,
+            Path.GetFileName(historyPath));
+        Directory.CreateDirectory(Path.GetDirectoryName(auditPath)!);
+        var foreignBytes = System.Text.Encoding.UTF8.GetBytes("foreign immutable evidence\n");
+        File.WriteAllBytes(auditPath, foreignBytes);
+        var canonicalBefore = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimBefore = File.ReadAllBytes(claimPath);
+        var runBefore = File.ReadAllBytes(Path.Combine(repos.Writer, gate.RunLogRelativePath!.Replace('/', Path.DirectorySeparatorChar)));
+        var exception = Assert.Throws<IOException>(() => ClaimLoopEvidenceOverride.Write(
+            repos.Writer, request, holder, gate, eligibility, historyPath, DateTimeOffset.Parse("2026-10-10T00:00:00Z")));
+        Assert.Equal($"Loop-evidence override audit destination already exists: .intent-cli/loop-evidence-overrides/{Unit}/{Path.GetFileName(historyPath)}", exception.Message);
+        Assert.Equal(foreignBytes, File.ReadAllBytes(auditPath));
+        Assert.Equal(claimBefore, File.ReadAllBytes(claimPath));
+        Assert.Equal(runBefore, File.ReadAllBytes(Path.Combine(repos.Writer, gate.RunLogRelativePath.Replace('/', Path.DirectorySeparatorChar))));
+        Assert.Equal(canonicalBefore, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+    }
+
+    [Fact]
+    public void OverrideAuditSymlinkDestinationDoesNotMutateExternalSentinel_G860()
+    {
+        using var repos = new ClaimRepositories();
+        PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var gate = EvaluateCanonicalSnapshot(repos.Writer);
+        var eligibility = ClaimLoopEvidenceOverride.Evaluate(gate);
+        Assert.True(eligibility.Eligible, eligibility.Detail);
+        var scope = $"execution-unit:{Unit}";
+        var claimPath = Path.Combine(repos.Writer, ClaimCommand.ClaimPath(scope).Replace('/', Path.DirectorySeparatorChar));
+        var holder = JsonSerializer.Deserialize<ClaimRecord>(File.ReadAllText(claimPath))!;
+        var request = new ClaimRequest(ClaimOperation.Release, scope, holder.Actor, holder.Team,
+            "symlink audit collision", null, true, "json", ClaimCommand.DefaultMaxAttempts)
+        { OverrideLoopEvidence = true };
+        var historyPath = ".intent-cli/claims/history/G857/20261010T0000000000001Z-release.json";
+        var auditPath = Path.Combine(repos.Writer, ".intent-cli", "loop-evidence-overrides", Unit,
+            Path.GetFileName(historyPath));
+        var sentinel = Path.Combine(Path.GetDirectoryName(repos.Bare)!, "g860-external-audit-sentinel.json");
+        var sentinelBytes = System.Text.Encoding.UTF8.GetBytes("external sentinel must stay untouched\n");
+        File.WriteAllBytes(sentinel, sentinelBytes);
+        Directory.CreateDirectory(Path.GetDirectoryName(auditPath)!);
+        File.CreateSymbolicLink(auditPath, sentinel);
+        var exception = Assert.Throws<IOException>(() => ClaimLoopEvidenceOverride.Write(
+            repos.Writer, request, holder, gate, eligibility, historyPath, DateTimeOffset.Parse("2026-10-10T00:00:01Z")));
+        Assert.Equal($"Transaction path follows a link: .intent-cli/loop-evidence-overrides/{Unit}/{Path.GetFileName(historyPath)}", exception.Message);
+        Assert.Equal(sentinelBytes, File.ReadAllBytes(sentinel));
+        Assert.True(File.Exists(auditPath));
+        Assert.Equal("external sentinel must stay untouched\n", File.ReadAllText(sentinel));
+    }
+
+    [Theory]
+    [InlineData("serialize")]
+    [InlineData("append")]
+    public void OverrideSerializationAndSelectedLogAppendFaultsAreReachedBeforeAnyRemoteMutation_G860(string fault)
+    {
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var beforeHead = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        var claimPath = ClaimCommand.ClaimPath($"execution-unit:{Unit}");
+        var claimBefore = Git(repos.Bare, "show", $"refs/heads/main:{claimPath}");
+        var runBefore = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+        var original = ClaimLoopEvidenceOverride.WriterOperations;
+        var reached = 0;
+        ClaimLoopEvidenceOverride.WriterOperations = fault == "serialize"
+            ? original with
+            {
+                SerializeAudit = audit =>
+                {
+                    reached++;
+                    Assert.Equal(Unit, audit.ExecutionUnit);
+                    Assert.Equal("implementation", audit.Actor);
+                    Assert.Equal("knowledge-architect", Assert.Single(audit.SkippedDuties).Id);
+                    throw new InvalidOperationException("G860_AUDIT_SERIALIZE_REACHED");
+                },
+            }
+            : original with
+            {
+                WriteRunLog = (path, bytes) =>
+                {
+                    reached++;
+                    Assert.EndsWith(runsRelative.Replace('/', Path.DirectorySeparatorChar), path, StringComparison.Ordinal);
+                    var logText = System.Text.Encoding.UTF8.GetString(bytes);
+                    Assert.StartsWith(runBefore.TrimEnd('\n') + "\n", logText, StringComparison.Ordinal);
+                    var eventLine = Assert.Single(RunLogSerializer.DeserializeAll(logText), item => item.Event == "loop-evidence-override");
+                    Assert.Equal(Unit, eventLine.ExecutionUnit);
+                    Assert.Equal(Repo, eventLine.Repo);
+                    Assert.Equal(PullRequest, eventLine.Pr);
+                    Assert.False(string.IsNullOrWhiteSpace(eventLine.ResultRef));
+                    DirectoryInfo? metadataRoot = new(Path.GetDirectoryName(path)!);
+                    while (metadataRoot is not null && metadataRoot.Name != ".intent-cli") metadataRoot = metadataRoot.Parent;
+                    Assert.NotNull(metadataRoot);
+                    var transactionRoot = metadataRoot!.Parent!;
+                    var auditPath = Path.Combine(transactionRoot.FullName, eventLine.ResultRef.Replace('/', Path.DirectorySeparatorChar));
+                    Assert.True(File.Exists(auditPath), "the immutable audit must exist before selected-log append is attempted");
+                    using var audit = JsonDocument.Parse(File.ReadAllText(auditPath));
+                    Assert.Equal(Unit, audit.RootElement.GetProperty("execution_unit").GetString());
+                    throw new IOException("G860_RUN_LOG_APPEND_REACHED");
+                },
+            };
+        try
+        {
+            var output = new StringWriter();
+            Assert.Equal(1, RunOverrideCli(repos.Reader, output));
+            Assert.Equal(1, reached);
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("error", result.RootElement.GetProperty("status").GetString());
+            Assert.False(result.RootElement.GetProperty("push_succeeded").GetBoolean());
+            Assert.Equal("transaction-error", result.RootElement.GetProperty("loop_evidence_override").GetProperty("cause").GetString());
+            Assert.Contains(fault == "serialize" ? "G860_AUDIT_SERIALIZE_REACHED" : "G860_RUN_LOG_APPEND_REACHED",
+                result.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            ClaimLoopEvidenceOverride.WriterOperations = original;
+        }
+        Assert.Equal(beforeHead, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(claimBefore, Git(repos.Bare, "show", $"refs/heads/main:{claimPath}"));
+        Assert.Equal(runBefore, Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}"));
+        Assert.Empty(ClaimHistory(repos.CloneForInspection()));
+        Assert.DoesNotContain(Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            path => path.StartsWith($".intent-cli/loop-evidence-overrides/{Unit}/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RejectedOverridePushCannotClaimUnrelatedReleaseAtDifferentRemoteCommit_G860()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var repos = new ClaimRepositories();
+        var runsRelative = PrepareActualOverrideSnapshot(repos, "knowledge-architect");
+        var racer = repos.CreateRacer();
+        var hostCommit = Git(racer, "rev-parse", "HEAD").Trim();
+        var knowledgePath = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(
+            KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, "architect");
+        RecordKnowledge(racer, "architect", hostCommit);
+        Assert.True(File.Exists(Path.Combine(racer, knowledgePath.Replace('/', Path.DirectorySeparatorChar))));
+        Git(racer, "add", "--", knowledgePath);
+        Git(racer, "-c", "user.name=independent", "-c", "user.email=independent@example.invalid",
+            "commit", "--quiet", "-m", "publish the final required receipt");
+        var bin = Path.Combine(Path.GetDirectoryName(repos.Reader)!, "g860-independent-release-race-bin");
+        Directory.CreateDirectory(bin);
+        var wrapper = Path.Combine(bin, "git");
+        var reached = Path.Combine(bin, "outer-push-reached");
+        var continuePush = Path.Combine(bin, "continue-outer-push");
+        var realGit = FindGitExecutable();
+        File.WriteAllText(wrapper, $"""
+            #!/bin/sh
+            set -eu
+            PWD=$(pwd)
+            REAL={ShellQuote(realGit)}
+            BARE={ShellQuote(repos.Bare)}
+            REACHED={ShellQuote(reached)}
+            CONTINUE={ShellQuote(continuePush)}
+            case "$PWD" in */intent-cli-claim-*) ;; *) exec "$REAL" "$@" ;; esac
+            origin=$("$REAL" -C "$PWD" remote get-url origin)
+            [ "$origin" = "$BARE" ] || exec "$REAL" "$@"
+            if [ "$1" = push ] && [ "$2" = origin ] && [ ! -e "$REACHED" ]; then
+              printf '%s\n' "$PWD" "$3" > "$REACHED"
+              while [ ! -e "$CONTINUE" ]; do sleep 0.05; done
+            fi
+            exec "$REAL" "$@"
+            """);
+        File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+        var beforeHead = Git(repos.Bare, "rev-parse", "refs/heads/main").Trim();
+        Task<(int exit, string output)>? outerTask = null;
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", bin + Path.PathSeparator + previousPath);
+            outerTask = Task.Run(() =>
+            {
+                var output = new StringWriter();
+                var exit = RunOverrideCli(repos.Reader, output, maxAttempts: 1);
+                return (exit, output: output.ToString());
+            });
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (!File.Exists(reached) && DateTime.UtcNow < deadline) await Task.Delay(20);
+            Assert.True(File.Exists(reached), "outer flagged push must reach the bounded wrapper gate");
+            var attempted = File.ReadAllLines(reached);
+            Assert.StartsWith("intent-cli-claim-", Path.GetFileName(attempted[0]).TrimEnd(Path.DirectorySeparatorChar));
+            Assert.Contains(":refs/heads/main", attempted[1], StringComparison.Ordinal);
+            Git(racer, "push", "origin", "HEAD:refs/heads/main");
+            Assert.NotEqual(beforeHead, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            var independentOutput = new StringWriter();
+            Assert.Equal(0, ClaimCommand.ExecuteRelease(Context(racer),
+                ["--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", Team,
+                 "--reason", "ordinary release after independent receipt publication", "--write", "--format", "json"], independentOutput));
+            using var independent = JsonDocument.Parse(independentOutput.ToString());
+            Assert.Equal("released", independent.RootElement.GetProperty("status").GetString());
+            Assert.True(independent.RootElement.GetProperty("push_succeeded").GetBoolean());
+            var independentCommit = independent.RootElement.GetProperty("commit").GetString()!;
+            Assert.NotEqual(beforeHead, independentCommit);
+            Assert.NotEqual(attempted[1].Split(':')[0], independentCommit);
+            Assert.Single(ClaimHistory(repos.CloneForInspection()));
+            File.WriteAllText(continuePush, "continue\n");
+            var outer = await outerTask.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(1, outer.exit);
+            using var result = JsonDocument.Parse(outer.output);
+            var root = result.RootElement;
+            Assert.NotEqual("released", root.GetProperty("status").GetString());
+            Assert.False(root.GetProperty("push_succeeded").GetBoolean());
+            Assert.NotEqual(attempted[1].Split(':')[0], Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+            Assert.Equal(Git(repos.Bare, "rev-parse", "refs/heads/main").Trim(), independentCommit);
+            var waiver = root.GetProperty("loop_evidence_override");
+            Assert.True(waiver.GetProperty("requested").GetBoolean());
+            Assert.Equal("refused", waiver.GetProperty("disposition").GetString());
+            Assert.False(waiver.GetProperty("published").GetBoolean());
+            var tree = Git(repos.Bare, "ls-tree", "-r", "--name-only", "refs/heads/main");
+            Assert.DoesNotContain($".intent-cli/loop-evidence-overrides/{Unit}/", tree, StringComparison.Ordinal);
+            var runLog = Git(repos.Bare, "show", $"refs/heads/main:{runsRelative}");
+            Assert.DoesNotContain("loop-evidence-override", runLog, StringComparison.Ordinal);
+            var independentHistory = Assert.Single(ClaimHistory(repos.CloneForInspection()));
+            using var independentHistoryJson = JsonDocument.Parse(File.ReadAllText(independentHistory));
+            Assert.Equal("ordinary release after independent receipt publication", independentHistoryJson.RootElement.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            if (File.Exists(reached) && !File.Exists(continuePush)) File.WriteAllText(continuePush, "unblock\n");
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+            if (outerTask is not null && !outerTask.IsCompleted)
+                await outerTask.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        Assert.NotEqual(beforeHead, Git(repos.Bare, "rev-parse", "refs/heads/main").Trim());
+    }
+
+    private static string PrepareActualOverrideSnapshot(ClaimRepositories repos, params string[] missingDutyIds) =>
+        PrepareActualOverrideSnapshot(repos, null, missingDutyIds);
+
+    private static string PrepareActualOverrideSnapshot(
+        ClaimRepositories repos,
+        string? packetYaml,
+        IReadOnlyCollection<string> missingDutyIds,
+        bool legacyOnly = false,
+        bool unterminatedRunLog = false,
+        string claimActor = "implementation")
+    {
+        repos.PublishSnapshot(queueState: QueueItemState.Completed, runEvents: [], packetYaml: packetYaml);
+        Acquire(repos.Writer, actor: claimActor);
+        PullCanonicalHead(repos.Writer, repos.CanonicalBranchName);
+        var hostCommit = Git(repos.Writer, "rev-parse", "HEAD").Trim();
+        if (!missingDutyIds.Contains("knowledge-architect", StringComparer.Ordinal))
+            RecordKnowledge(repos.Writer, "architect", hostCommit);
+        if (!missingDutyIds.Contains("knowledge-orchestrator", StringComparer.Ordinal))
+            RecordKnowledge(repos.Writer, "orchestrator", hostCommit);
+        if (!missingDutyIds.Contains("guide-reachability", StringComparer.Ordinal))
+            RecordGuide(repos.Writer, "architect", hostCommit);
+
+        using var closeoutOutput = new StringWriter();
+        var closeoutExit = CloseoutPrCommand.Execute(Context(repos.Writer),
+            ["--pr", PullRequest.ToString(System.Globalization.CultureInfo.InvariantCulture),
+             "--repo", Repo, "--domain", Domain, "--pr-merged", "true", "--repair-runs", "--write", "--format", "json"],
+            closeoutOutput);
+        Assert.Equal(0, closeoutExit);
+        using (var closeoutJson = JsonDocument.Parse(closeoutOutput.ToString()))
+            Assert.True(closeoutJson.RootElement.GetProperty("runs_appended").GetBoolean());
+
+        var runsPath = RuntimeScopedStateResolver.GetScopedRunLogPath(repos.Writer, Domain, Repo);
+        var events = RunLogSerializer.DeserializeAll(File.ReadAllText(runsPath));
+        Assert.Contains(events, item => item.Event == "pr-merged" && item.ExecutionUnit == Unit && item.Repo == Repo && item.Pr == PullRequest);
+        Assert.Contains(events, item => item.Event == "closeout-recorded" && item.ExecutionUnit == Unit && item.Repo == Repo && item.Pr == PullRequest);
+        var queuePath = RuntimeScopedStateResolver.GetScopedQueueStatePath(repos.Writer, Domain, Repo);
+        var queue = QueueStateSerializer.Deserialize(File.ReadAllText(queuePath));
+        var item = Assert.Single(queue.Items!, row => row.ExecutionUnit == Unit);
+        Assert.Equal(QueueItemState.Completed, item.State);
+        Assert.Equal($"https://github.com/{Repo}/pull/{PullRequest}", item.LinkedPr);
+
+        if (unterminatedRunLog)
+        {
+            var writtenBytes = File.ReadAllBytes(runsPath);
+            Assert.NotEmpty(writtenBytes);
+            Assert.Contains((byte)'\n', writtenBytes);
+            Assert.Equal((byte)'\n', writtenBytes[^1]);
+            File.WriteAllBytes(runsPath, writtenBytes[..^1]);
+            Assert.NotEqual((byte)'\n', File.ReadAllBytes(runsPath)[^1]);
+        }
+
+        if (legacyOnly)
+        {
+            var legacyQueuePath = RuntimeScopedStateResolver.GetLegacyQueueStatePath(repos.Writer);
+            var legacyRunPath = RuntimeScopedStateResolver.GetLegacyRunLogPath(repos.Writer);
+            Directory.CreateDirectory(Path.GetDirectoryName(legacyQueuePath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(legacyRunPath)!);
+            File.Move(queuePath, legacyQueuePath);
+            File.Move(runsPath, legacyRunPath);
+            runsPath = legacyRunPath;
+        }
+
+        foreach (var dutyId in new[] { "knowledge-architect", "knowledge-orchestrator" })
+        {
+            var role = dutyId == "knowledge-architect" ? "architect" : "orchestrator";
+            var path = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(KnowledgeWriteBackRecord.RecordRootRelativePath, Unit, role);
+            if (missingDutyIds.Contains(dutyId, StringComparer.Ordinal))
+                Assert.False(File.Exists(Path.Combine(repos.Writer, path.Replace('/', Path.DirectorySeparatorChar))));
+            else
+            {
+                Assert.True(File.Exists(Path.Combine(repos.Writer, path.Replace('/', Path.DirectorySeparatorChar))));
+                var record = JsonSerializer.Deserialize<KnowledgeWriteBackRecord>(File.ReadAllText(Path.Combine(repos.Writer, path.Replace('/', Path.DirectorySeparatorChar))))!;
+                Assert.Equal(role, record.Role);
+            }
+        }
+        var guidePath = RoleScopedCloseoutRecordStore.ResolveRoleRelativePath(GuideReachabilityRecord.RecordRootRelativePath, Unit, "architect");
+        Assert.Equal(missingDutyIds.Contains("guide-reachability", StringComparer.Ordinal),
+            !File.Exists(Path.Combine(repos.Writer, guidePath.Replace('/', Path.DirectorySeparatorChar))));
+
+        repos.PublishIntentChanges(repos.Writer, repos.CanonicalBranchName);
+        return Path.GetRelativePath(repos.Writer, runsPath).Replace(Path.DirectorySeparatorChar, '/');
+    }
+
+    private static int RunOverrideCli(
+        string repoRoot,
+        TextWriter output,
+        string actor = "implementation",
+        string team = Team,
+        bool write = true,
+        string format = "json",
+        int? maxAttempts = null,
+        bool overrideLoopEvidence = true)
+    {
+        var arguments = new List<string>
+        {
+            "--scope", $"execution-unit:{Unit}", "--actor", actor, "--team", team,
+            "--reason", "deliberate-fixture-waiver",
+        };
+        if (overrideLoopEvidence) arguments.Add("--override-loop-evidence");
+        if (maxAttempts is not null)
+            arguments.AddRange(["--max-attempts", maxAttempts.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
+        if (write) arguments.Add("--write");
+        arguments.AddRange(["--format", format]);
+        return ClaimCommand.ExecuteRelease(Context(repoRoot), arguments.ToArray(), output);
+    }
+
+    private static void AssertOwnershipRefusalOutput(string output, string format, string status, string cause)
+    {
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(status, document.RootElement.GetProperty("status").GetString());
+        }
+        else
+        {
+            Assert.Contains($"# Claim {status}", output, StringComparison.Ordinal);
+        }
+
+        var evidence = LoopOverrideFromOutput(output, format);
+        Assert.True(evidence.GetProperty("requested").GetBoolean());
+        Assert.Equal("refused", evidence.GetProperty("disposition").GetString());
+        Assert.Equal(cause, evidence.GetProperty("cause").GetString());
+        Assert.False(evidence.GetProperty("published").GetBoolean());
+    }
+
+    private static void AssertOwnershipRefusalOmitsOverride(string output, string format, string status)
+    {
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(status, document.RootElement.GetProperty("status").GetString());
+            Assert.False(document.RootElement.TryGetProperty("loop_evidence_override", out _));
+        }
+        else
+        {
+            Assert.Contains($"# Claim {status}", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("## Loop-evidence override", output, StringComparison.Ordinal);
+        }
+    }
+
+    private static JsonElement LoopOverrideFromOutput(string output, string format)
+    {
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(output);
+            return document.RootElement.GetProperty("loop_evidence_override").Clone();
+        }
+
+        var heading = string.Join(Environment.NewLine, "## Loop-evidence override", string.Empty, "```json", string.Empty);
+        var start = output.IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(start >= 0, "Markdown must include the loop-evidence override JSON section.");
+        start += heading.Length;
+        var end = output.IndexOf(Environment.NewLine + "```", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Markdown must close the loop-evidence override JSON section.");
+        using var markdown = JsonDocument.Parse(output[start..end]);
+        return markdown.RootElement.Clone();
+    }
+
+    private static string InstallRacerAdvanceOnFirstPush(ClaimRepositories repos, string racer, string suffix)
+    {
+        var bin = Path.Combine(Path.GetDirectoryName(repos.Reader)!, suffix + "-bin");
+        Directory.CreateDirectory(bin);
+        var marker = Path.Combine(bin, "racer-push-reached.txt");
+        var wrapper = Path.Combine(bin, "git");
+        var realGit = FindGitExecutable();
+        File.WriteAllText(wrapper,
+            "#!/bin/sh\nset -eu\nPWD=$(pwd)\n"
+            + $"REAL={ShellQuote(realGit)}\nBARE={ShellQuote(repos.Bare)}\nRACER={ShellQuote(racer)}\nMARKER={ShellQuote(marker)}\n"
+            + "case \"$PWD\" in */intent-cli-claim-*) ;; *) exec \"$REAL\" \"$@\" ;; esac\n"
+            + "origin=$(\"$REAL\" -C \"$PWD\" remote get-url origin)\n"
+            + "[ \"$origin\" = \"$BARE\" ] || exec \"$REAL\" \"$@\"\n"
+            + "if [ \"$1\" = push ] && [ \"$2\" = origin ] && [ ! -e \"$MARKER\" ]; then\n"
+            + "  : > \"$MARKER\"\n"
+            + "  \"$REAL\" -C \"$RACER\" push origin HEAD:refs/heads/main\nfi\n"
+            + "exec \"$REAL\" \"$@\"\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(wrapper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return marker;
+    }
+
     private static CliContext Context(string root) => new()
     {
         RepoRoot = root,
@@ -2839,6 +5103,7 @@ public sealed class SoloConductorClaimReleaseG857Tests
         public string Reader { get; }
         public string MainSeedHead { get; }
         private string CanonicalBranch { get; set; } = "main";
+        public string CanonicalBranchName => CanonicalBranch;
 
         public void ConfigureMetadataWriteBranch(string branch)
         {
@@ -3043,6 +5308,23 @@ public sealed class SoloConductorClaimReleaseG857Tests
             required: true
             target_paths:
               - intents/intent-cli/intent-tree/means/08-agent-message-orchestration.md
+        guide_reachability:
+          no_role_facing_surface: false
+          routes:
+            - guide_surface: "guide workflow task implementation-loop"
+              role: implementation
+              target_surface: "claim release completion"
+        """;
+
+    private const string PacketWithEmptyOptionalTargetsYaml = """
+        implementation_issue_packet:
+          domain: intent-cli
+          source_execution_unit: G857
+          target_repo: J-Tech-Japan/intent-system
+        knowledge_updates:
+          intent_tree:
+            required: true
+            target_paths: []
         guide_reachability:
           no_role_facing_surface: false
           routes:

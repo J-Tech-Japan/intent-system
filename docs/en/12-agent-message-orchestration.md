@@ -458,6 +458,43 @@ issue, declared teams receive `idempotent-not-gated`.
 applies no publish-flow gate. Refresh every intent-cli that publishes packets for a
 declared team before relying on the design gate.
 
+## Audited missing-receipt exception at claim release (G860 — preview-through-1.x)
+
+After canonical closeout and both completed closeout run duties are established,
+an exactly held builder may deliberately release a recorded solo-conductor
+execution-unit claim with `--override-loop-evidence` when one or more permitted
+post-closeout receipts are missing. The allowlist is limited to attributed
+architect/orchestrator knowledge receipts and the architect guide receipt. The
+canonical snapshot must still have a valid unit/repository/PR identity and
+complete, unambiguous duty declarations. The flag cannot waive approval,
+ownership, incomplete closeout, or any unavailable, conflicting, or otherwise
+unsupported evidence. A nonblank reason remains required; a reason by itself
+does not bypass G857.
+
+```bash
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason "specific missing-receipt exception" \
+  --override-loop-evidence --format json
+```
+
+Preview is read-only. A successful write puts the normal release history, a
+create-only immutable audit under `.intent-cli/loop-evidence-overrides/`, and
+one `loop-evidence-override` event in the already selected canonical run log in
+the same claim transaction. The completion result remains truthful: waived
+receipts stay `missing`, with the exact skipped duties separately recorded.
+Retry reevaluates a fresh canonical snapshot; if all receipts become satisfied,
+ordinary release can continue without recording an unused override. No receipt
+is fabricated or published, and no claim-history or run-event schema changes.
+
+**Forward compatibility.** A binary without G860 treats the new flag as
+unsupported and retains G857's blocking behavior. Update every host binary that
+may release these claims before relying on the audited exception. The CLI enforces
+only exact current-holder attribution, the explicit flag and a nonblank reason;
+it does not verify external authorization or reason quality.
+`canonical_snapshot_oid` identifies the evaluated canonical host commit, not the
+child PR head. The flag is unavailable for other operations, non-`execution-unit`
+scopes and non-solo-conductor modes.
+
 ## Copilot CLI and OpenCode runtimes (G842/G849 — preview-through-1.x)
 
 G842 adds `copilot` (GitHub Copilot CLI) and `opencode` (OpenCode) to the

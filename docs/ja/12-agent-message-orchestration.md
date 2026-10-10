@@ -350,6 +350,32 @@ packet と claim から解決し（`--domain` ではない）、create path で 
 適用しません。宣言済み team の packet を publish する intent-cli を更新してから design
 gate に依存してください。
 
+## claim release の監査付き missing-receipt 例外（G860 — preview-through-1.x）
+
+canonical closeout と closeout の両 run duty が満たされた後、正確な holder である builder は、記録済み solo-conductor の
+execution-unit claim を `--override-loop-evidence` 付きで意図的に解放できます。許可するのは closeout 後に missing の
+architect/orchestrator attributed knowledge receipt と architect guide receipt だけです。canonical snapshot の unit/repository/PR identity と
+duty declaration は完全かつ曖昧であってはなりません。この flag は approval、ownership、未完了 closeout、その他の unavailable、conflicting、未対応 evidence を免除しません。
+空でない reason は引き続き必要で、reason 単独では G857 を迂回できません。
+
+```bash
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason "specific missing-receipt exception" \
+  --override-loop-evidence --format json
+```
+
+preview は read-only です。成功した write は通常の `release history`、`.intent-cli/loop-evidence-overrides/` 配下の
+create-only immutable audit、選択済み canonical run log への `loop-evidence-override` event 1 件を同じ claim transaction に含めます。
+completion result は事実を保ち、対象 receipt を `missing` のまま表示し、skipped duty を別途記録します。
+retry は fresh canonical snapshot を再評価し、receipt がすべて満たされていれば unused override の記録なしで通常の claim 解放を進められます。
+receipt の捏造・publish は行わず、claim-history/run-event schema も変更しません。
+CLI が確認するのは現在 holder の actor/team が完全一致すること、明示的な flag、空でない reason だけです。
+外部承認の有無や reason の妥当性は検証しません。`canonical_snapshot_oid` は評価対象の canonical host commit の OID であり、child PR head の OID ではありません。
+この flag は他の operation、`execution-unit` 以外の scope、solo-conductor 以外の mode では使用できません。
+
+**前方互換性。** G860 を含まない binary は新しい flag を unsupported として扱い、G857 の blocking 動作を保ちます。
+この監査付き例外に依存する前に、対象 claim を解放し得る全 host binary を更新してください。
+
 ## Copilot CLI と OpenCode runtime（G842/G849 — preview-through-1.x）
 
 G842/G849 は `codex`、`claude`、`cursor` に加えて `copilot`（GitHub Copilot CLI）と

@@ -310,10 +310,13 @@ src/IntentSystem.Cli/Commands/ClaimCommand.cs	ClaimStrandedMigrationResult	13
 src/IntentSystem.Cli/Commands/ClaimCommand.cs	ClaimStrandedReportResult	6
 src/IntentSystem.Cli/Commands/ClaimCommand.cs	ClaimStrandedScan	3
 src/IntentSystem.Cli/Commands/ClaimCommand.cs	ClaimTransactionLease	7
-src/IntentSystem.Cli/Commands/ClaimCommand.cs	ClaimTransactionResult	22
+src/IntentSystem.Cli/Commands/ClaimCommand.cs	ClaimTransactionResult	32
 src/IntentSystem.Cli/Commands/ClaimCommand.cs	HostStateGitFailureException	4
 src/IntentSystem.Cli/Commands/ClaimCommand.cs	HostStateGitRetryEvidence	7
 src/IntentSystem.Cli/Commands/ClaimCommand.cs	HostStateGitRetryRunner	1
+src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimCommand	2
+src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimRecord	1
+src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimRequest	1
 src/IntentSystem.Cli/Commands/ClaimOwnershipVerifier.cs	CanonicalClaimEvidence	28
 src/IntentSystem.Cli/Commands/ClaimOwnershipVerifier.cs	ClaimCommand	10
 src/IntentSystem.Cli/Commands/ClaimOwnershipVerifier.cs	ClaimOwnershipVerification	20

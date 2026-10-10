@@ -465,7 +465,10 @@ internal static class SoloConductorClaimReleaseGate
             },
             Duties = duties,
         };
-        return new SoloConductorClaimReleaseGateResult(true, completion);
+        return new SoloConductorClaimReleaseGateResult(true, completion)
+        {
+            RunLogRelativePath = Relative(root, runsPath),
+        };
     }
 
     private static QueueReadResult ReadQueue(string root, string unit, string repo, string path)

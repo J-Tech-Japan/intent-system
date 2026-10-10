@@ -120,13 +120,21 @@ internal static class ClaimCommand
                 null, null, null, exception.Message)
             {
                 GitWriteRetry = exception.Evidence,
+                LoopEvidenceOverride = request.OverrideLoopEvidence
+                    ? OverrideResult("refused", "transaction-error", [], null, false)
+                    : null,
             };
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             result = new ClaimTransactionResult(
                 "error", request!.Scope, ClaimPath(request.Scope), false, 0,
-                null, null, null, exception.Message);
+                null, null, null, exception.Message)
+            {
+                LoopEvidenceOverride = request.OverrideLoopEvidence
+                    ? OverrideResult("refused", "transaction-error", [], null, false)
+                    : null,
+            };
         }
 
         WriteResult(writer, request!.Format, result);
@@ -169,6 +177,7 @@ internal static class ClaimCommand
         EnsureSuccess(hostFetch, "refresh canonical claim branch before claim transaction");
 
         ClaimRecord? lastObserved = null;
+        var previouslyEligibleOverride = false;
         for (var attempt = 1; attempt <= request.MaxAttempts; attempt++)
         {
             var transactionRoot = Path.Combine(
@@ -233,6 +242,9 @@ internal static class ClaimCommand
                     {
                         GitWriteRetry = lastGitWriteRetry,
                         TargetRef = targetRef,
+                        LoopEvidenceOverride = request.OverrideLoopEvidence
+                            ? OverrideResult("refused", "claim-not-held", [], null, false)
+                            : null,
                     };
                 }
                 if (request.Operation == ClaimOperation.Release
@@ -244,6 +256,9 @@ internal static class ClaimCommand
                     {
                         GitWriteRetry = lastGitWriteRetry,
                         TargetRef = targetRef,
+                        LoopEvidenceOverride = request.OverrideLoopEvidence
+                            ? OverrideResult("refused", "holder-identity-mismatch", [], null, false)
+                            : null,
                     };
                 }
                 if (request.Operation == ClaimOperation.Takeover
@@ -262,15 +277,95 @@ internal static class ClaimCommand
                 EnsureSuccess(head, "resolve claim base commit");
                 var baseCommit = head.StandardOutput.Trim();
                 SoloConductorClaimReleaseCompletion? soloConductorCompletion = null;
+                ClaimLoopEvidenceOverrideEligibility? overrideEligibility = null;
+                ClaimLoopEvidenceOverrideResult? overrideResult = null;
                 if (request.Operation == ClaimOperation.Release
                     && TryGetSoloConductorCandidate(request, out var executionUnit))
                 {
                     var gate = SoloConductorClaimReleaseGate.Evaluate(
                         transactionRoot, executionUnit, current!.Team, baseCommit, targetRef);
+                    if (request.OverrideLoopEvidence)
+                    {
+                        soloConductorCompletion = gate.Completion;
+                        if (!gate.IsApplicable || gate.Completion is null)
+                        {
+                            return new ClaimTransactionResult(
+                                "override-not-applicable", request.Scope, relativeClaimPath, false, attempt,
+                                current.Actor, null, null,
+                                "The canonical snapshot does not establish recorded solo-conductor completion applicability.")
+                            {
+                                HolderTeam = current.Team,
+                                TargetRef = targetRef,
+                                BaseCommit = baseCommit,
+                                GitWriteRetry = lastGitWriteRetry,
+                                SoloConductorCompletion = gate.Completion,
+                                LoopEvidenceOverride = OverrideResult("refused", "not-applicable", [], null, false),
+                            };
+                        }
+
+                        var eligibility = ClaimLoopEvidenceOverride.Evaluate(gate);
+                        if (gate.Completion.Decision == "satisfied")
+                        {
+                            if (!eligibility.Eligible && eligibility.Cause != "no-missing-receipts")
+                            {
+                                return new ClaimTransactionResult(
+                                    "completion-blocked", request.Scope, relativeClaimPath, false, attempt,
+                                    current.Actor, null, null,
+                                    "The canonical completion is satisfied but its duty shape is not safe for an override retry: " + eligibility.Detail)
+                                {
+                                    HolderTeam = current.Team,
+                                    TargetRef = targetRef,
+                                    BaseCommit = baseCommit,
+                                    GitWriteRetry = lastGitWriteRetry,
+                                    SoloConductorCompletion = gate.Completion,
+                                    LoopEvidenceOverride = OverrideResult("refused", eligibility.Cause, eligibility.SkippedDuties, null, false),
+                                };
+                            }
+                            if (!previouslyEligibleOverride)
+                            {
+                                return new ClaimTransactionResult(
+                                    "override-not-applicable", request.Scope, relativeClaimPath, false, attempt,
+                                    current.Actor, null, null,
+                                    "The initial canonical completion has no required missing receipt to waive.")
+                                {
+                                    HolderTeam = current.Team,
+                                    TargetRef = targetRef,
+                                    BaseCommit = baseCommit,
+                                    GitWriteRetry = lastGitWriteRetry,
+                                    SoloConductorCompletion = gate.Completion,
+                                    LoopEvidenceOverride = OverrideResult("refused", "no-missing-receipts", [], null, false),
+                                };
+                            }
+                            overrideResult = OverrideResult("not-used-evidence-now-satisfied", "receipts-now-satisfied", [], null, false);
+                        }
+                        else if (!eligibility.Eligible)
+                        {
+                            var status = eligibility.Cause == "not-applicable" ? "override-not-applicable" : "completion-blocked";
+                            return new ClaimTransactionResult(
+                                status, request.Scope, relativeClaimPath, false, attempt,
+                                current.Actor, null, null,
+                                "The explicit loop-evidence override does not authorize this completion refusal: " + eligibility.Detail)
+                            {
+                                HolderTeam = current.Team,
+                                TargetRef = targetRef,
+                                BaseCommit = baseCommit,
+                                GitWriteRetry = lastGitWriteRetry,
+                                SoloConductorCompletion = gate.Completion,
+                                LoopEvidenceOverride = OverrideResult("refused", eligibility.Cause, eligibility.SkippedDuties, null, false),
+                            };
+                        }
+                        else
+                        {
+                            previouslyEligibleOverride = true;
+                            overrideEligibility = eligibility;
+                            overrideResult = OverrideResult("eligible-preview", eligibility.Cause,
+                                eligibility.SkippedDuties, ClaimLoopEvidenceOverride.PlannedPaths(executionUnit, request.Scope, gate.RunLogRelativePath!), false);
+                        }
+                    }
                     if (gate.IsApplicable)
                     {
                         soloConductorCompletion = gate.Completion;
-                        if (soloConductorCompletion?.Decision != "satisfied")
+                        if (soloConductorCompletion?.Decision != "satisfied" && overrideEligibility is null)
                         {
                             return new ClaimTransactionResult(
                                 "completion-blocked", request.Scope, relativeClaimPath, false, attempt,
@@ -283,11 +378,29 @@ internal static class ClaimCommand
                                 BaseCommit = baseCommit,
                                 GitWriteRetry = lastGitWriteRetry,
                                 SoloConductorCompletion = soloConductorCompletion,
+                                LoopEvidenceOverride = request.OverrideLoopEvidence
+                                    ? overrideResult
+                                    : null,
                             };
                         }
                     }
+                    else if (request.OverrideLoopEvidence)
+                    {
+                        return new ClaimTransactionResult(
+                            "override-not-applicable", request.Scope, relativeClaimPath, false, attempt,
+                            current.Actor, null, null,
+                            "The canonical snapshot does not establish recorded solo-conductor completion applicability.")
+                        {
+                            HolderTeam = current.Team,
+                            TargetRef = targetRef,
+                            BaseCommit = baseCommit,
+                            GitWriteRetry = lastGitWriteRetry,
+                            LoopEvidenceOverride = OverrideResult("refused", "not-applicable", [], null, false),
+                        };
+                    }
                 }
                 string? historyPath = null;
+                ClaimLoopEvidenceOverrideWriteResult? overrideWrite = null;
 
                 if (request.Operation == ClaimOperation.Acquire)
                 {
@@ -300,6 +413,19 @@ internal static class ClaimCommand
                     historyPath = WriteHistory(transactionRoot, request, current!, now, baseCommit);
                     if (request.Operation == ClaimOperation.Release)
                     {
+                        if (overrideEligibility is not null)
+                        {
+                            overrideWrite = ClaimLoopEvidenceOverride.Write(
+                                transactionRoot, request, current!,
+                                new SoloConductorClaimReleaseGateResult(true, soloConductorCompletion)
+                                {
+                                    RunLogRelativePath = overrideResult?.RunLogPath,
+                                },
+                                overrideEligibility, historyPath, now);
+                            overrideResult = OverrideResult("eligible-preview", overrideEligibility.Cause,
+                                overrideEligibility.SkippedDuties,
+                                new ClaimLoopEvidenceOverridePaths(overrideWrite.HistoryPath, overrideWrite.AuditPath, overrideWrite.RunLogPath), false);
+                        }
                         File.Delete(absoluteClaimPath);
                     }
                     else
@@ -313,6 +439,8 @@ internal static class ClaimCommand
                 var paths = historyPath is null
                     ? new[] { relativeClaimPath }
                     : new[] { relativeClaimPath, historyPath };
+                if (overrideWrite is not null)
+                    paths = [.. paths, overrideWrite.AuditPath, overrideWrite.RunLogPath];
                 var add = RunGit(transactionRoot, ["add", "--", .. paths], hostStateWrite: true);
                 CaptureRetry(ref lastGitWriteRetry, add);
                 EnsureSuccess(add, "stage claim transaction");
@@ -369,6 +497,12 @@ internal static class ClaimCommand
                         GitWriteRetry = lastGitWriteRetry,
                         TargetRef = targetRef,
                         SoloConductorCompletion = soloConductorCompletion,
+                        LoopEvidenceOverride = request.OverrideLoopEvidence
+                            ? overrideWrite is not null
+                                ? OverrideResult("applied", "allowed-missing-receipts", overrideEligibility!.SkippedDuties,
+                                    new ClaimLoopEvidenceOverridePaths(overrideWrite.HistoryPath, overrideWrite.AuditPath, overrideWrite.RunLogPath), true)
+                                : overrideResult
+                            : null,
                     };
                 }
 
@@ -430,6 +564,12 @@ internal static class ClaimCommand
                             GitWriteRetry = lastGitWriteRetry,
                             TargetRef = targetRef,
                             SoloConductorCompletion = soloConductorCompletion,
+                            LoopEvidenceOverride = request.OverrideLoopEvidence
+                                ? overrideWrite is not null
+                                    ? OverrideResult("applied", "allowed-missing-receipts", overrideEligibility!.SkippedDuties,
+                                        new ClaimLoopEvidenceOverridePaths(overrideWrite.HistoryPath, overrideWrite.AuditPath, overrideWrite.RunLogPath), true)
+                                    : overrideResult
+                                : null,
                         };
                     }
 
@@ -442,6 +582,13 @@ internal static class ClaimCommand
                         {
                             GitWriteRetry = lastGitWriteRetry,
                             TargetRef = targetRef,
+                            LoopEvidenceOverride = request.OverrideLoopEvidence
+                                ? OverrideResult("refused", "holder-identity-mismatch",
+                                    overrideEligibility?.SkippedDuties ?? [],
+                                    overrideWrite is null ? null : new ClaimLoopEvidenceOverridePaths(
+                                        overrideWrite.HistoryPath, overrideWrite.AuditPath, overrideWrite.RunLogPath),
+                                    false)
+                                : null,
                         };
                     }
                 }
@@ -464,6 +611,12 @@ internal static class ClaimCommand
                         GitWriteRetry = lastGitWriteRetry,
                         TargetRef = targetRef,
                         SoloConductorCompletion = soloConductorCompletion,
+                        LoopEvidenceOverride = request.OverrideLoopEvidence
+                            ? overrideWrite is not null
+                                ? OverrideResult("applied", "allowed-missing-receipts", overrideEligibility!.SkippedDuties,
+                                    new ClaimLoopEvidenceOverridePaths(overrideWrite.HistoryPath, overrideWrite.AuditPath, overrideWrite.RunLogPath), true)
+                                : overrideResult
+                            : null,
                     };
                 }
 
@@ -482,6 +635,10 @@ internal static class ClaimCommand
                         RemoteAdvanced = false,
                         GitPushError = gitPushError,
                         SoloConductorCompletion = soloConductorCompletion,
+                        LoopEvidenceOverride = request.OverrideLoopEvidence
+                            ? OverrideResult("refused", "push-rejected", overrideEligibility?.SkippedDuties ?? [],
+                                overrideWrite is null ? null : new ClaimLoopEvidenceOverridePaths(overrideWrite.HistoryPath, overrideWrite.AuditPath, overrideWrite.RunLogPath), false)
+                            : null,
                     };
                 }
 
@@ -502,6 +659,10 @@ internal static class ClaimCommand
                         RemoteAdvanced = true,
                         GitPushError = gitPushError,
                         SoloConductorCompletion = soloConductorCompletion,
+                        LoopEvidenceOverride = request.OverrideLoopEvidence
+                            ? OverrideResult("refused", "retry-exhausted", overrideEligibility?.SkippedDuties ?? [],
+                                overrideWrite is null ? null : new ClaimLoopEvidenceOverridePaths(overrideWrite.HistoryPath, overrideWrite.AuditPath, overrideWrite.RunLogPath), false)
+                            : null,
                     };
                 }
             }
@@ -577,6 +738,9 @@ internal static class ClaimCommand
                     "not-held", request.Scope, relativeClaimPath, false, 1,
                     null, null, null, "No active claim exists for this scope.")
                 {
+                    LoopEvidenceOverride = request.OverrideLoopEvidence
+                        ? OverrideResult("refused", "claim-not-held", [], null, false)
+                        : null,
                     TargetRef = targetRef,
                 };
             }
@@ -586,6 +750,9 @@ internal static class ClaimCommand
                 return Held(request, relativeClaimPath, 1, current,
                     "Only the complete attributed holder identity (actor and team) may release; use explicit takeover otherwise.") with
                 {
+                    LoopEvidenceOverride = request.OverrideLoopEvidence
+                        ? OverrideResult("refused", "holder-identity-mismatch", [], null, false)
+                        : null,
                     TargetRef = targetRef,
                 };
             }
@@ -597,6 +764,19 @@ internal static class ClaimCommand
                 transactionRoot, executionUnit, current.Team, snapshotOid, targetRef);
             if (!gate.IsApplicable)
             {
+                if (request.OverrideLoopEvidence)
+                {
+                    return new ClaimTransactionResult(
+                        "override-not-applicable", request.Scope, relativeClaimPath, false, 1,
+                        current.Actor, null, null,
+                        "The canonical snapshot does not establish recorded solo-conductor completion applicability.")
+                    {
+                        HolderTeam = current.Team,
+                        TargetRef = targetRef,
+                        BaseCommit = snapshotOid,
+                        LoopEvidenceOverride = OverrideResult("refused", "not-applicable", [], null, false),
+                    };
+                }
                 // Preserve the old planned result for a candidate whose
                 // canonical mode state proves the release is not gated.
                 return new ClaimTransactionResult(
@@ -608,6 +788,36 @@ internal static class ClaimCommand
             var completion = gate.Completion;
             if (completion?.Decision != "satisfied")
             {
+                if (request.OverrideLoopEvidence)
+                {
+                    var eligibility = ClaimLoopEvidenceOverride.Evaluate(gate);
+                    if (!eligibility.Eligible)
+                    {
+                        return new ClaimTransactionResult(
+                            eligibility.Cause == "not-applicable" ? "override-not-applicable" : "completion-blocked",
+                            request.Scope, relativeClaimPath, false, 1, current.Actor, null, null,
+                            "The explicit loop-evidence override does not authorize this completion refusal: " + eligibility.Detail)
+                        {
+                            HolderTeam = current.Team,
+                            TargetRef = targetRef,
+                            BaseCommit = snapshotOid,
+                            SoloConductorCompletion = completion,
+                            LoopEvidenceOverride = OverrideResult("refused", eligibility.Cause, eligibility.SkippedDuties, null, false),
+                        };
+                    }
+                    var paths = ClaimLoopEvidenceOverride.PlannedPaths(executionUnit, request.Scope, gate.RunLogRelativePath!);
+                    return new ClaimTransactionResult(
+                        "planned", request.Scope, relativeClaimPath, false, 1,
+                        current.Actor, null, null,
+                        "Dry-run only. The explicit override is eligible on this canonical snapshot; re-run with --write to create its audit and run event atomically with release.")
+                    {
+                        HolderTeam = current.Team,
+                        TargetRef = targetRef,
+                        BaseCommit = snapshotOid,
+                        SoloConductorCompletion = completion,
+                        LoopEvidenceOverride = OverrideResult("eligible-preview", eligibility.Cause, eligibility.SkippedDuties, paths, false),
+                    };
+                }
                 return new ClaimTransactionResult(
                     "completion-blocked", request.Scope, relativeClaimPath, false, 1,
                     current.Actor, null, null,
@@ -618,6 +828,36 @@ internal static class ClaimCommand
                     TargetRef = targetRef,
                     BaseCommit = snapshotOid,
                     SoloConductorCompletion = completion,
+                };
+            }
+
+            if (request.OverrideLoopEvidence)
+            {
+                var eligibility = ClaimLoopEvidenceOverride.Evaluate(gate);
+                if (!eligibility.Eligible && eligibility.Cause != "no-missing-receipts")
+                {
+                    return new ClaimTransactionResult(
+                        "completion-blocked", request.Scope, relativeClaimPath, false, 1,
+                        current.Actor, null, null,
+                        "The canonical completion is satisfied but its duty shape is not safe for an override retry: " + eligibility.Detail)
+                    {
+                        HolderTeam = current.Team,
+                        TargetRef = targetRef,
+                        BaseCommit = snapshotOid,
+                        SoloConductorCompletion = completion,
+                        LoopEvidenceOverride = OverrideResult("refused", eligibility.Cause, eligibility.SkippedDuties, null, false),
+                    };
+                }
+                return new ClaimTransactionResult(
+                    "override-not-applicable", request.Scope, relativeClaimPath, false, 1,
+                    current.Actor, null, null,
+                    "The initial canonical completion has no required missing receipt to waive.")
+                {
+                    HolderTeam = current.Team,
+                    TargetRef = targetRef,
+                    BaseCommit = snapshotOid,
+                    SoloConductorCompletion = completion,
+                    LoopEvidenceOverride = OverrideResult("refused", "no-missing-receipts", [], null, false),
                 };
             }
 
@@ -2081,6 +2321,15 @@ internal static class ClaimCommand
             HolderTeam = holder.Team,
         };
 
+    private static ClaimLoopEvidenceOverrideResult OverrideResult(
+        string disposition,
+        string cause,
+        IReadOnlyList<ClaimLoopEvidenceOverrideSkippedDuty> skippedDuties,
+        ClaimLoopEvidenceOverridePaths? paths,
+        bool published) => new(
+            true, disposition, cause, skippedDuties,
+            paths?.AuditPath, paths?.HistoryPath, paths?.RunLogPath, published);
+
     private static string WriteHistory(
         string transactionRoot,
         ClaimRequest request,
@@ -2202,6 +2451,8 @@ internal static class ClaimCommand
         string? displacedHolder = null;
         var format = "json";
         var write = false;
+        var overrideLoopEvidence = false;
+        var overrideLoopEvidenceSeen = false;
         var maxAttempts = DefaultMaxAttempts;
 
         for (var i = 0; i < args.Length; i++)
@@ -2221,6 +2472,12 @@ internal static class ClaimCommand
                     case "--team": team = NeedValue("--team"); break;
                     case "--reason": reason = NeedValue("--reason"); break;
                     case "--displaced-holder": displacedHolder = NeedValue("--displaced-holder"); break;
+                    case "--override-loop-evidence":
+                        if (overrideLoopEvidenceSeen)
+                            throw new ArgumentException("--override-loop-evidence may be specified only once");
+                        overrideLoopEvidenceSeen = true;
+                        overrideLoopEvidence = true;
+                        break;
                     case "--format": format = NeedValue("--format"); break;
                     case "--max-attempts":
                         if (!int.TryParse(NeedValue("--max-attempts"), out maxAttempts)
@@ -2262,6 +2519,30 @@ internal static class ClaimCommand
             error = "release and takeover require --reason";
             return false;
         }
+        if (overrideLoopEvidence)
+        {
+            if (operation != ClaimOperation.Release)
+            {
+                request = null;
+                error = "--override-loop-evidence is supported only by claim release";
+                return false;
+            }
+            if (scope is null || !scope.StartsWith("execution-unit:", StringComparison.Ordinal)
+                || scope.Split(':') is not ["execution-unit", var executionUnit]
+                || !KnowledgeWriteBackRecord.TryValidateExecutionUnit(executionUnit, out _))
+            {
+                request = null;
+                error = "--override-loop-evidence requires a safe exact execution-unit:<unit> scope";
+                return false;
+            }
+            if (!LogicalRoleNormalizer.TryNormalize(actor, out var normalizedRole, out _)
+                || normalizedRole != LogicalRoleNormalizer.Builder)
+            {
+                request = null;
+                error = "--override-loop-evidence requires a builder-normalized actor";
+                return false;
+            }
+        }
         if (operation == ClaimOperation.Takeover && string.IsNullOrWhiteSpace(displacedHolder))
         {
             request = null;
@@ -2270,7 +2551,10 @@ internal static class ClaimCommand
         }
 
         request = new ClaimRequest(operation, scope!, actor.Trim(), team.Trim(), reason?.Trim(),
-            displacedHolder?.Trim(), write, format, maxAttempts);
+            displacedHolder?.Trim(), write, format, maxAttempts)
+        {
+            OverrideLoopEvidence = overrideLoopEvidence,
+        };
         error = string.Empty;
         return true;
     }
@@ -2310,9 +2594,11 @@ internal static class ClaimCommand
         ClaimOperation.Acquire =>
             "Usage: intent-cli claim acquire --scope <execution-unit:EU|release-prep:owner/repo:version> --actor <actor> --team <team> [--max-attempts 2] [--write] [--format json|markdown]",
         ClaimOperation.Release =>
-            "Usage: intent-cli claim release --scope <scope> --actor <holder> --team <team> --reason <reason> [--write] [--format json|markdown]"
+            "Usage: intent-cli claim release --scope <scope> --actor <holder> --team <team> --reason <reason> [--override-loop-evidence] [--write] [--format json|markdown]"
             + Environment.NewLine
-            + "Recorded solo-conductor implementation releases require canonical completed-queue, PR-closeout, and declared knowledge/guide receipts. Missing evidence returns completion-blocked with supported repair commands; publish exact owned artifacts to the canonical target ref before retrying. --reason is never an override.",
+            + "Recorded solo-conductor implementation releases require canonical completed-queue, PR-closeout, and declared knowledge/guide receipts. Missing evidence returns completion-blocked with supported repair commands; publish exact owned artifacts to the canonical target ref before retrying. Ordinary --reason is never an override."
+            + Environment.NewLine
+            + "--override-loop-evidence is release-only and may waive only the three explicitly allowed missing attributed post-closeout receipts after completed canonical closeout; it cannot waive approval, ownership, closeout, or unknown/conflicting evidence. A successful release writes an immutable audit plus one event to the selected canonical run log in the same claim transaction. The CLI checks exact current-holder attribution, the explicit flag, and a nonblank reason; it does not verify external authorization or reason quality. canonical_snapshot_oid identifies the evaluated canonical host commit, not the child PR head. The flag is unavailable for other operations, non-execution-unit scopes, and non-solo-conductor modes.",
         _ =>
             "Usage: intent-cli claim takeover --scope <scope> --actor <actor> --team <team> --displaced-holder <actor> --reason <reason> [--max-attempts 2] [--write] [--format json|markdown]",
     };
@@ -2355,6 +2641,15 @@ internal static class ClaimCommand
             writer.WriteLine(JsonSerializer.Serialize(result.SoloConductorCompletion, JsonOptions));
             writer.WriteLine("```");
         }
+        if (result.LoopEvidenceOverride is not null)
+        {
+            writer.WriteLine();
+            writer.WriteLine("## Loop-evidence override");
+            writer.WriteLine();
+            writer.WriteLine("```json");
+            writer.WriteLine(JsonSerializer.Serialize(result.LoopEvidenceOverride, JsonOptions));
+            writer.WriteLine("```");
+        }
     }
 }
 
@@ -2375,7 +2670,10 @@ internal sealed record ClaimRequest(
     string? DisplacedHolder,
     bool Write,
     string Format,
-    int MaxAttempts);
+    int MaxAttempts)
+{
+    public bool OverrideLoopEvidence { get; init; }
+}
 
 internal sealed record ClaimRecord(
     [property: JsonPropertyName("schema_version")] string SchemaVersion,
@@ -2509,7 +2807,21 @@ internal sealed record ClaimTransactionResult(
     [JsonPropertyName("solo_conductor_completion")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SoloConductorClaimReleaseCompletion? SoloConductorCompletion { get; init; }
+
+    [JsonPropertyName("loop_evidence_override")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ClaimLoopEvidenceOverrideResult? LoopEvidenceOverride { get; init; }
 }
+
+internal sealed record ClaimLoopEvidenceOverrideResult(
+    [property: JsonPropertyName("requested")] bool Requested,
+    [property: JsonPropertyName("disposition")] string Disposition,
+    [property: JsonPropertyName("cause")] string Cause,
+    [property: JsonPropertyName("skipped_duties")] IReadOnlyList<ClaimLoopEvidenceOverrideSkippedDuty> SkippedDuties,
+    [property: JsonPropertyName("audit_path")] [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AuditPath,
+    [property: JsonPropertyName("history_path")] [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? HistoryPath,
+    [property: JsonPropertyName("run_log_path")] [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RunLogPath,
+    [property: JsonPropertyName("published")] bool Published);
 
 internal sealed record ClaimProcessResult(
     int ExitCode,

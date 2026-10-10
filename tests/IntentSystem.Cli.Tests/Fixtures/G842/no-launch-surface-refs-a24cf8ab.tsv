@@ -1,4 +1,7 @@
 path	identifier	count
+src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimCommand	2
+src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimRecord	1
+src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimRequest	1
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewPacketClaimResolver.cs	ClaimOwnershipVerification	2
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewPacketClaimResolver.cs	ClaimOwnershipVerifier	1
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVerification	3

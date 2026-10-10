@@ -711,6 +711,33 @@ read は invoking checkout の既存 legacy debt run log と claim file を使�
 後の closeout activity だけで unit を clean な historical exclusion にはしません。inactive 時は `debt_window` を省略し、active 時は
 distinct-unit count と historical exclusion evidence を JSON / Markdown の両方に表示します。
 
+### claim release の監査付き missing-receipt 例外（G860 — preview-through-1.x）
+
+`claim release --override-loop-evidence` は、architect/orchestrator の
+knowledge receipt と architect guide receipt の missing だけを対象にする、理由を記録する明示的な例外です。
+記録済み solo-conductor mode の builder claim を現在の holder が正確に解放し、canonical closeout identity、Completed queue item、merge、
+closeout-recorded evidence がすべて満たされている場合に限ります。通常の `--reason` だけでは completion gate を迂回できません。
+approval、ownership、closeout、declaration、その他の unavailable/conflicting evidence は免除できません。
+
+```bash
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason "specific missing-receipt exception" \
+  --override-loop-evidence --format json
+intent-cli claim release --scope execution-unit:<unit> --actor implementation \
+  --team <team> --reason "specific missing-receipt exception" \
+  --override-loop-evidence --write --format json
+```
+
+preview は書き込みなしで例外 eligibility を表示します。解放時は既存の `release history`、immutable な
+`.intent-cli/loop-evidence-overrides/` audit、既に選択済みの canonical run log への
+`loop-evidence-override` event 1 件を、同じ claim transaction で書き込みます。
+completion snapshot 上の対象 receipt は引き続き `missing` と表示し、audit には skipped duty と理由を記録します。
+bounded retry 中に receipt がすべて満たされた場合、通常の claim 解放は override audit/event なしで進められます。
+この flag は receipt の publish、PR closeout、approval evidence、claim/run-log schema の変更を行いません。
+CLI が確認するのは現在 holder の actor/team が完全一致すること、明示的な flag、空でない reason だけです。
+外部承認の有無や reason の妥当性は検証しません。`canonical_snapshot_oid` は評価対象の canonical host commit の OID であり、child PR head の OID ではありません。
+この flag は他の operation、`execution-unit` 以外の scope、solo-conductor 以外の mode では使用できません。
+
 ### 貼り付け evidence gate（G785）
 
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`
