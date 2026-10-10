@@ -89,25 +89,53 @@ public sealed class GuideCommandsListCommandTests
             group.GetProperty("name").GetString() == "ruling"
             && group.GetProperty("purpose").GetString()!.Contains("Local immutable operator-ruling", StringComparison.Ordinal));
 
-        using var soloWriter = new StringWriter();
-        Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", "json"], CreateContext(), soloWriter));
-        using var solo = JsonDocument.Parse(soloWriter.ToString());
-        Assert.Equal("intent-cli guide solo-conductor", solo.RootElement.GetProperty("route").GetString());
-        Assert.Contains("architect", solo.RootElement.GetProperty("model").GetProperty("summary").GetString(), StringComparison.Ordinal);
-        Assert.Contains("orchestrator", solo.RootElement.GetProperty("model").GetProperty("summary").GetString(), StringComparison.Ordinal);
-        var rulingStep = solo.RootElement.GetProperty("loop").EnumerateArray()
-            .Single(step => step.GetProperty("id").GetString() == "bug-chain-or-ruling");
-        var instruction = rulingStep.GetProperty("instruction").GetString()!;
-        Assert.Contains("local immutable record only", instruction, StringComparison.Ordinal);
-        Assert.Contains("Commit and plain-push the artifact separately", instruction, StringComparison.Ordinal);
-        Assert.Contains("verify it from a fresh clone", instruction, StringComparison.Ordinal);
-        Assert.Contains("does not satisfy packet publication, unit-status, approval, or release gates", instruction, StringComparison.Ordinal);
-        var commands = rulingStep.GetProperty("commands").EnumerateArray()
-            .Select(command => command.GetProperty("command").GetString()!).ToArray();
-        var recordIndex = Array.FindIndex(commands, command => command.StartsWith("intent-cli ruling record ", StringComparison.Ordinal));
-        var showIndex = Array.FindIndex(commands, command => command.StartsWith("intent-cli ruling show ", StringComparison.Ordinal));
-        var validateIndex = Array.FindIndex(commands, command => command.StartsWith("intent-cli ruling validate ", StringComparison.Ordinal));
-        Assert.True(recordIndex >= 0 && showIndex > recordIndex && validateIndex > recordIndex);
+        const string prerequisite = "Start from a bug chain or from an operator ruling recorded in the host; do not author a packet without one.";
+        const string previewCommand = "intent-cli ruling record --id <id> --domain <domain> --team <team> --from-file <ruling.json> --authority-role operator --format json";
+        const string writeCommand = "intent-cli ruling record --id <id> --domain <domain> --team <team> --from-file <ruling.json> --authority-role operator --write --format json";
+        const string showCommand = "intent-cli ruling show <id> --domain <domain> --team <team> --format json";
+        const string validateCommand = "intent-cli ruling validate <id> --domain <domain> --team <team> --format json";
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var soloWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", format], CreateContext(), soloWriter));
+            if (format == "json")
+            {
+                using var solo = JsonDocument.Parse(soloWriter.ToString());
+                Assert.Equal("intent-cli guide solo-conductor", solo.RootElement.GetProperty("route").GetString());
+                Assert.Contains("architect", solo.RootElement.GetProperty("model").GetProperty("summary").GetString(), StringComparison.Ordinal);
+                Assert.Contains("orchestrator", solo.RootElement.GetProperty("model").GetProperty("summary").GetString(), StringComparison.Ordinal);
+                var rulingStep = solo.RootElement.GetProperty("loop").EnumerateArray()
+                    .Single(step => step.GetProperty("id").GetString() == "bug-chain-or-ruling");
+                var instruction = rulingStep.GetProperty("instruction").GetString()!;
+                Assert.StartsWith(prerequisite, instruction, StringComparison.Ordinal);
+                Assert.Contains("local immutable record only", instruction, StringComparison.Ordinal);
+                Assert.Contains("operator authority is not authenticated", instruction, StringComparison.Ordinal);
+                Assert.Contains("does not satisfy packet publication, unit-status, approval, or release gates", instruction, StringComparison.Ordinal);
+                Assert.Contains("Commit and plain-push the artifact separately", instruction, StringComparison.Ordinal);
+                Assert.Contains("verify it from a fresh clone", instruction, StringComparison.Ordinal);
+                var commands = rulingStep.GetProperty("commands").EnumerateArray()
+                    .Select(command => command.GetProperty("command").GetString()!).ToArray();
+                Assert.True(Array.IndexOf(commands, previewCommand) >= 0);
+                Assert.True(Array.IndexOf(commands, writeCommand) > Array.IndexOf(commands, previewCommand));
+                Assert.True(Array.IndexOf(commands, showCommand) > Array.IndexOf(commands, writeCommand));
+                Assert.True(Array.IndexOf(commands, validateCommand) > Array.IndexOf(commands, showCommand));
+            }
+            else
+            {
+                var markdown = soloWriter.ToString();
+                Assert.Contains(prerequisite, markdown, StringComparison.Ordinal);
+                Assert.Contains("local immutable record only", markdown, StringComparison.Ordinal);
+                Assert.Contains("operator authority is not authenticated", markdown, StringComparison.Ordinal);
+                Assert.Contains("does not satisfy packet publication, unit-status, approval, or release gates", markdown, StringComparison.Ordinal);
+                Assert.Contains("Commit and plain-push the artifact separately", markdown, StringComparison.Ordinal);
+                Assert.Contains("verify it from a fresh clone", markdown, StringComparison.Ordinal);
+                var previewIndex = markdown.IndexOf(previewCommand, StringComparison.Ordinal);
+                var writeIndex = markdown.IndexOf(writeCommand, StringComparison.Ordinal);
+                var showIndex = markdown.IndexOf(showCommand, StringComparison.Ordinal);
+                var validateIndex = markdown.IndexOf(validateCommand, StringComparison.Ordinal);
+                Assert.True(previewIndex >= 0 && writeIndex > previewIndex && showIndex > writeIndex && validateIndex > showIndex);
+            }
+        }
     }
 
     [Fact]
