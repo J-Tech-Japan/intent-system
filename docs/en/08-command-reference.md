@@ -1021,9 +1021,10 @@ scope_source_digests:
 
 For a non-empty declaration, put the exact block printed by
 `packet validate-sources` once in `github-body.md`. It contains source identity,
-relative artifact path, digest, and the statements `supplied-not-authenticated`
-and `not-verified`; it does not publish the ruling decision or rationale. The
-validator is read-only and works without `config.toml`:
+digest, and the statements `supplied-not-authenticated` and `not-verified`; it
+does not include the artifact path, ruling decision, or rationale. The
+validator result reports the relative artifact path separately. It is
+read-only and works without `config.toml`:
 
 ```bash
 intent-cli ruling show R-EXAMPLE --domain intent-cli --team intent-cli-dev --format json

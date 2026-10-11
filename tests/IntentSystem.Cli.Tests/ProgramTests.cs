@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using System.Diagnostics;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
@@ -135,6 +136,29 @@ public sealed class ProgramTests
     }
 
     [Fact]
+    public void Main_PacketValidateSourcesHelpShowsTheRegisteredRoute()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var repoRoot = tempDirectory.CreateDirectory("repo");
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+            var nestedCwd = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "config.toml")));
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+
+            var exit = Program.Main(["packet", "validate-sources", "--help"]);
+
+            Assert.Equal(0, exit);
+            Assert.Contains("Usage: intent-cli packet validate-sources --execution-unit <unit> --format json|markdown", console.Out.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Validates declared ruling pins", console.Out.ToString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(repoRoot, ".intent-cli", "rulings")));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Fact]
     public void Main_PacketValidateSources_RequiresPlainPushAndWorksFromFreshCloneWithoutConfig()
     {
         lock (ProcessStateLock)
@@ -242,13 +266,25 @@ public sealed class ProgramTests
 
             Assert.False(Directory.Exists(Path.Combine(beforeRepo, ".intent-cli", "rulings")));
             AssertPacketValidationFromClone(afterRepo, unit, "scope-sources-satisfied", 0, rulingDigest);
+            var foreignConfig = Encoding.UTF8.GetBytes("[project]\ndomain = \"foreign-default\"\nartifact_root = \".foreign-artifacts\"\nworktree_root = \".foreign-worktrees\"\n");
+            File.WriteAllBytes(Path.Combine(afterRepo, ".intent-cli", "config.toml"), foreignConfig);
+            AssertPacketValidationFromClone(afterRepo, unit, "scope-sources-satisfied", 0, rulingDigest, foreignConfig);
         }
     }
 
-    private static void AssertPacketValidationFromClone(string repoRoot, string unit, string expectedCause, int expectedExit, string? expectedDigest = null)
+    private static void AssertPacketValidationFromClone(string repoRoot, string unit, string expectedCause, int expectedExit,
+        string? expectedDigest = null, byte[]? expectedConfigBytes = null)
     {
         var nestedCwd = Directory.CreateDirectory(Path.Combine(repoRoot, "src", "feature")).FullName;
-        Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "config.toml")));
+        var configPath = Path.Combine(repoRoot, ".intent-cli", "config.toml");
+        if (expectedConfigBytes is null)
+        {
+            Assert.False(File.Exists(configPath));
+        }
+        else
+        {
+            Assert.Equal(expectedConfigBytes, File.ReadAllBytes(configPath));
+        }
         var headBefore = RunGit(repoRoot, "rev-parse", "HEAD");
         var refsBefore = RunGit(repoRoot, "show-ref", "--head");
         var indexPath = Path.Combine(repoRoot, ".git", "index");
@@ -271,6 +307,14 @@ public sealed class ProgramTests
         Assert.Equal(headBefore, RunGit(repoRoot, "rev-parse", "HEAD"));
         Assert.Equal(refsBefore, RunGit(repoRoot, "show-ref", "--head"));
         Assert.Equal(indexBefore, File.ReadAllBytes(indexPath));
+        if (expectedConfigBytes is null)
+        {
+            Assert.False(File.Exists(configPath));
+        }
+        else
+        {
+            Assert.Equal(expectedConfigBytes, File.ReadAllBytes(configPath));
+        }
         Assert.Equal(string.Empty, console.Error.ToString());
     }
 

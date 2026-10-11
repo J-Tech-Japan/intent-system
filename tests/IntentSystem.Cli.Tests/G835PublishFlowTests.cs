@@ -658,6 +658,117 @@ public sealed class G835PublishFlowTests : IDisposable
     [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
+    public void PublishFlow_OrdinaryCreatePacketReadFailureAtFinalRecheckReturnsUnavailable(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.CaptureDurableBaseline();
+        var implementationPath = Path.Combine(workspace.PacketDirectory(Unit), "implementation.md");
+        FileStream? exclusiveReadLock = null;
+        var checker = new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
+        var creatorFactories = 0;
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8645");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () =>
+        {
+            exclusiveReadLock = new FileStream(implementationPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return checker;
+        };
+        IssuePublishFlowCommand.CreatorFactory = () => { creatorFactories++; return creator; };
+
+        try
+        {
+            var (exit, output) = Run(workspace, Unit, OtherRepo, write: true, team: UndeclaredTeam, format: format);
+
+            Assert.Equal(1, exit);
+            Assert.NotNull(exclusiveReadLock);
+            Assert.Equal(1, checker.CallCount);
+            Assert.Equal(1, creatorFactories);
+            Assert.Equal(0, creator.CallCount);
+            AssertDurableStateUntouched(workspace);
+            AssertLatePacketReadFailure(output, format);
+        }
+        finally
+        {
+            exclusiveReadLock?.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_LocalExistingPacketReadFailureAtRecheckReturnsUnavailable(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueStateWithLinkedIssue(Unit, Title(), OtherRepo, 8646,
+            $"https://github.com/{OtherRepo}/issues/8646");
+        workspace.CaptureDurableBaseline();
+        var implementationPath = Path.Combine(workspace.PacketDirectory(Unit), "implementation.md");
+        FileStream? exclusiveReadLock = null;
+        var clockCalls = 0;
+        var creatorFactories = 0;
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8646");
+        IssuePublishFlowCommand.UtcNowFactory = () =>
+        {
+            clockCalls++;
+            if (clockCalls == 2)
+            {
+                exclusiveReadLock = new FileStream(implementationPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            }
+            return new DateTimeOffset(2026, 10, 10, 12, 0, 0, TimeSpan.Zero);
+        };
+        IssuePublishFlowCommand.CreatorFactory = () => { creatorFactories++; return creator; };
+
+        try
+        {
+            var (exit, output) = Run(workspace, Unit, OtherRepo, write: true, team: UndeclaredTeam, format: format);
+
+            Assert.Equal(1, exit);
+            Assert.Equal(2, clockCalls);
+            Assert.NotNull(exclusiveReadLock);
+            Assert.Equal(0, creatorFactories);
+            Assert.Equal(0, creator.CallCount);
+            AssertDurableStateUntouched(workspace);
+            AssertLatePacketReadFailure(output, format);
+        }
+        finally
+        {
+            exclusiveReadLock?.Dispose();
+        }
+    }
+
+    private static void AssertLatePacketReadFailure(string output, string format)
+    {
+        const string relativePath = ".intent-cli/issues/G835PF/implementation.md";
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.Equal("scope-sources-packet-unavailable", result.RootElement.GetProperty("cause").GetString());
+            Assert.False(result.RootElement.GetProperty("created").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("idempotent").GetBoolean());
+            var sources = result.RootElement.GetProperty("scope_sources");
+            Assert.Equal("unavailable", sources.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-packet-unavailable", sources.GetProperty("cause").GetString());
+            var diagnostic = Assert.Single(sources.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal(relativePath, diagnostic.GetProperty("path").GetString());
+            Assert.Contains("unreadable during source recheck", diagnostic.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            AssertNullOrMissing(sources, "provenance");
+            AssertNullOrMissing(sources, "expected_provenance_block");
+        }
+        else
+        {
+            Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+            Assert.Contains(relativePath, output, StringComparison.Ordinal);
+            Assert.Contains("unreadable during source recheck", output, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"unavailable\"", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
     public void PublishFlow_PinnedSourceCreatePublishesExactAuthoredBody(string format)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: true);

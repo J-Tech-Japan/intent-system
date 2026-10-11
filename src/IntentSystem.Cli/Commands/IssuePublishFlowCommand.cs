@@ -1951,13 +1951,17 @@ internal static class IssuePublishFlowCommand
         else
         {
             var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(repoRoot, executionUnit);
-            if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out var missingPath))
+            if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out var missingPath,
+                    out var unreadableFileName, out var unreadableError))
             {
-                return new PacketScopeSources.Result(executionUnit, "unavailable", "scope-sources-packet-unavailable",
-                    $"the complete four-file packet snapshot is unavailable during source recheck: {missingPath}",
-                    RulingArtifact.FormatTimestamp(now), null, null,
-                    [new("packet-unavailable", missingPath, "the four-file packet snapshot could not be re-read")],
-                    IsDeclared: true);
+                var unavailablePath = unreadableFileName is null
+                    ? missingPath ?? packetDirectory
+                    : Path.Combine(packetDirectory, unreadableFileName);
+                var relativePath = RelativePacketPath(repoRoot, unavailablePath);
+                var detail = unreadableFileName is null
+                    ? $"the complete four-file packet snapshot is unavailable during source recheck: {relativePath}"
+                    : $"the complete four-file packet snapshot is unreadable during source recheck: {relativePath}: {unreadableError}";
+                return MarkScopeSourcesUnavailable(initiallyValid, now, relativePath, detail);
             }
         }
 

@@ -842,8 +842,9 @@ scope_source_digests:
 ```
 
 参照がある場合は `packet validate-sources` が表示する canonical block を `github-body.md` に一度だけ記載します。
-block が含むのは source identity、相対 artifact path、digest と `supplied-not-authenticated` / `not-verified` の明示だけで、
-ruling の decision や rationale は公開しません。この validator は read-only で、`config.toml` を必要としません。
+block が含むのは source identity、digest、`supplied-not-authenticated` / `not-verified` の明示だけです。
+artifact path は block に含まず、validator result が別に表示します。ruling の decision や rationale も公開しません。
+この validator は read-only で、`config.toml` を必要としません。
 
 ```bash
 intent-cli ruling show R-EXAMPLE --domain intent-cli --team intent-cli-dev --format json

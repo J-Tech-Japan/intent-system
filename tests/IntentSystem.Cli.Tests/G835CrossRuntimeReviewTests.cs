@@ -1104,6 +1104,16 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             var commandReference = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "08-command-reference.md"));
             Assert.Contains("G863", commandReference, StringComparison.Ordinal);
             Assert.Contains("packet validate-sources", commandReference, StringComparison.Ordinal);
+            if (language == "en")
+            {
+                Assert.Contains("does not include the artifact path", commandReference, StringComparison.Ordinal);
+                Assert.Contains("validator result reports the relative artifact path separately", commandReference, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains("artifact path は block に含まず", commandReference, StringComparison.Ordinal);
+                Assert.Contains("validator result が別に表示します", commandReference, StringComparison.Ordinal);
+            }
 
             var ledger = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "1.0-compatibility-ledger.md"));
             Assert.Contains("cross-runtime design review record store", ledger, StringComparison.Ordinal);

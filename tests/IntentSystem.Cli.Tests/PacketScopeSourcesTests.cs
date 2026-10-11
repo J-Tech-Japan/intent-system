@@ -170,6 +170,35 @@ public sealed class PacketScopeSourcesTests
     }
 
     [Fact]
+    public void PublicBlockMatchesIndependentCanonicalV1Literal()
+    {
+        using var fixture = new SourceFixture();
+        var expectedBlock = string.Join("\n",
+        [
+            "<!-- intent-cli:scope-sources:v1 -->",
+            "### Ruling scope provenance",
+            $"- ruling:R-G863-SOURCE | domain=intent-cli | team=intent-cli-dev | repo=J-Tech-Japan/intent-system | unit=G863 | sha256={fixture.Digest}",
+            "Authority: supplied-not-authenticated. Publication: not-verified.",
+            "<!-- /intent-cli:scope-sources:v1 -->",
+        ]);
+
+        Assert.Equal(4, expectedBlock.Count(character => character == '\n'));
+        Assert.DoesNotContain('\r', expectedBlock);
+        Assert.Equal(expectedBlock, fixture.Body);
+
+        var accepted = fixture.Evaluate(fixture.PacketYaml, expectedBlock);
+        Assert.Equal("satisfied", accepted.State);
+        Assert.Equal(expectedBlock, accepted.ExpectedProvenanceBlock);
+        Assert.Equal(fixture.Digest, Assert.Single(accepted.Provenance!).Sha256);
+
+        var mismatch = fixture.Evaluate(fixture.PacketYaml,
+            expectedBlock.Replace("team=intent-cli-dev", "team=other-team", StringComparison.Ordinal));
+        Assert.Equal("refused", mismatch.State);
+        Assert.Equal("scope-sources-provenance-mismatch", mismatch.Cause);
+        Assert.Equal(expectedBlock, mismatch.ExpectedProvenanceBlock);
+    }
+
+    [Fact]
     public void AbsentAndExplicitEmptySourcesAreNotDeclaredAndNeverReadRulings()
     {
         using var fixture = new SourceFixture();
@@ -484,6 +513,10 @@ public sealed class PacketScopeSourcesTests
             SeedActualArtifact(root, successorA);
             SeedActualArtifact(root, successorB);
             var packet = BuildPacket("G863", [predecessor], Domain, Team, Repo);
+
+            var directRead = new RulingArtifactStore(root).Evaluate(Domain, Team, predecessor.Record.Id, Now);
+            Assert.Equal("conflict", directRead.Status);
+            Assert.Equal("ruling-successor-conflict", directRead.Cause);
 
             var result = PacketScopeSources.Evaluate(root, "G863", Encoding.UTF8.GetBytes(packet.Yaml), [], Now);
 

@@ -4359,9 +4359,9 @@ packet author は、明示した local ruling を packet root の `scope_sources
 が必要です。digest は同じ scope の `ruling show` が示す lowercase SHA-256 値を使います。
 
 `packet validate-sources` は read-only で、`config.toml` を必要としません。返す block を
-`github-body.md` に一度だけ記載します。block は source identity、相対 artifact path、digest、
-および `supplied-not-authenticated` / `not-verified` の状態を示し、decision や rationale は
-公開しません。
+`github-body.md` に一度だけ記載します。block は source identity、digest、および
+`supplied-not-authenticated` / `not-verified` の状態を示します。相対 artifact path は validator result に
+別途表示され、block には入りません。decision や rationale も公開しません。
 
 source を使う場合は、既存の body、facet、`issue publish-flow` 検証より先にこの validator
 を実行します。design review request は canonical source content を含み、publish-flow は
