@@ -269,11 +269,14 @@ public sealed class ProgramTests
             var foreignConfig = Encoding.UTF8.GetBytes("[project]\ndomain = \"foreign-default\"\nartifact_root = \".foreign-artifacts\"\nworktree_root = \".foreign-worktrees\"\n");
             File.WriteAllBytes(Path.Combine(afterRepo, ".intent-cli", "config.toml"), foreignConfig);
             AssertPacketValidationFromClone(afterRepo, unit, "scope-sources-satisfied", 0, rulingDigest, foreignConfig);
+            RunGit(afterRepo, "remote", "set-url", "origin", "https://github.com/foreign-owner/foreign-repository.git");
+            Assert.Equal("https://github.com/foreign-owner/foreign-repository.git", RunGit(afterRepo, "remote", "get-url", "origin"));
+            AssertPacketValidationFromClone(afterRepo, unit, "scope-sources-satisfied", 0, rulingDigest, foreignConfig, targetRepo);
         }
     }
 
     private static void AssertPacketValidationFromClone(string repoRoot, string unit, string expectedCause, int expectedExit,
-        string? expectedDigest = null, byte[]? expectedConfigBytes = null)
+        string? expectedDigest = null, byte[]? expectedConfigBytes = null, string? expectedTargetRepo = null)
     {
         var nestedCwd = Directory.CreateDirectory(Path.Combine(repoRoot, "src", "feature")).FullName;
         var configPath = Path.Combine(repoRoot, ".intent-cli", "config.toml");
@@ -301,8 +304,13 @@ public sealed class ProgramTests
         Assert.Equal("supplied-not-authenticated", result.RootElement.GetProperty("authority_verification").GetString());
         if (expectedDigest is not null)
         {
-            Assert.Equal(expectedDigest, result.RootElement.GetProperty("provenance")[0].GetProperty("sha256").GetString());
-            Assert.StartsWith(".intent-cli/rulings/", result.RootElement.GetProperty("provenance")[0].GetProperty("path").GetString()!, StringComparison.Ordinal);
+            var provenance = result.RootElement.GetProperty("provenance")[0];
+            Assert.Equal(expectedDigest, provenance.GetProperty("sha256").GetString());
+            Assert.StartsWith(".intent-cli/rulings/", provenance.GetProperty("path").GetString()!, StringComparison.Ordinal);
+            if (expectedTargetRepo is not null)
+            {
+                Assert.Equal(expectedTargetRepo, provenance.GetProperty("target_repo").GetString());
+            }
         }
         Assert.Equal(headBefore, RunGit(repoRoot, "rev-parse", "HEAD"));
         Assert.Equal(refsBefore, RunGit(repoRoot, "show-ref", "--head"));

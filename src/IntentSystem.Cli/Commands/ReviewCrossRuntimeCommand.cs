@@ -404,32 +404,48 @@ internal static class ReviewCrossRuntimeCommand
             return packetRefusal;
         }
 
-        CrossRuntimeDesignReviewDigest.PacketBytes packet;
-        string? missingPath;
-        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+        CrossRuntimeDesignReviewDigest.PacketBytes packet = null!;
+        string? missingPath = null;
+        string? unreadableFileName = null;
+        string? unreadableError = null;
+        PacketScopeSources.Result? unavailableSources = null;
+        var packetAvailable = false;
+        try
         {
-            if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
-                    packetDirectory,
-                    out packet,
-                    out missingPath,
-                    out var unreadableFileName,
-                    out var unreadableError))
+            packetAvailable = runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode
+                ? CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+                    packetDirectory, out packet, out missingPath, out unreadableFileName, out unreadableError)
+                : CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out missingPath);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            if (TryReadDeclaredPacketSnapshot(context.RepoRoot, unit, packetDirectory, out packet, out unavailableSources))
             {
-                if (unreadableFileName is not null)
-                {
-                    return RefuseUnreadablePacketFile(writer, format, "request", unit, unreadableFileName, unreadableError!);
-                }
-
-                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
-                    $"packet file is missing: {missingPath}; a design reviewer cannot review against an incomplete packet.",
-                    $"run from the host root that holds `.intent-cli/issues/{unit}/` with packet.yaml, github-body.md, review-context.md, and implementation.md.");
+                packetAvailable = true;
+            }
+            else if (unavailableSources is not null)
+            {
+                return RefuseUnreadablePacketFile(writer, format, "request", unit,
+                    PacketSourceFailureFileName(unavailableSources), exception.Message, unavailableSources);
+            }
+            else
+            {
+                throw;
             }
         }
-        else if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out missingPath))
+
+        if (!packetAvailable
+            && !TryReadDeclaredPacketSnapshot(context.RepoRoot, unit, packetDirectory, out packet, out unavailableSources))
         {
+            if (unreadableFileName is not null)
+            {
+                return RefuseUnreadablePacketFile(writer, format, "request", unit, unreadableFileName, unreadableError!, unavailableSources);
+            }
+
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
                 $"packet file is missing: {missingPath}; a design reviewer cannot review against an incomplete packet.",
-                $"run from the host root that holds `.intent-cli/issues/{unit}/` with packet.yaml, github-body.md, review-context.md, and implementation.md.");
+                $"run from the host root that holds `.intent-cli/issues/{unit}/` with packet.yaml, github-body.md, review-context.md, and implementation.md.",
+                scopeSources: unavailableSources);
         }
 
         var digest = CrossRuntimeDesignReviewDigest.Compute(packet);
@@ -1194,11 +1210,38 @@ internal static class ReviewCrossRuntimeCommand
             return packetRefusal;
         }
 
-        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
+        CrossRuntimeDesignReviewDigest.PacketBytes packet = null!;
+        string? missingPath = null;
+        PacketScopeSources.Result? unavailableSources = null;
+        bool packetAvailable;
+        try
+        {
+            packetAvailable = CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out missingPath);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            if (TryReadDeclaredPacketSnapshot(context.RepoRoot, unit, packetDirectory, out packet, out unavailableSources))
+            {
+                packetAvailable = true;
+            }
+            else if (unavailableSources is not null)
+            {
+                return RefuseUnreadablePacketFile(writer, format, "record", unit,
+                    PacketSourceFailureFileName(unavailableSources), exception.Message, unavailableSources);
+            }
+            else
+            {
+                throw;
+            }
+        }
+
+        if (!packetAvailable
+            && !TryReadDeclaredPacketSnapshot(context.RepoRoot, unit, packetDirectory, out packet, out unavailableSources))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.PacketMissing,
                 $"packet file is missing: {missingPath}.",
-                $"complete `.intent-cli/issues/{unit}/` with all four packet files.");
+                $"complete `.intent-cli/issues/{unit}/` with all four packet files.",
+                scopeSources: unavailableSources);
         }
 
         PacketScopeSources.Result? scopeSources = PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packet.PacketYaml)
@@ -1644,7 +1687,7 @@ internal static class ReviewCrossRuntimeCommand
         var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
         string? digest = null;
         PacketScopeSources.Result? scopeSources = null;
-        if (CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out _))
+        if (TryReadDesignStatusPacketSnapshot(context.RepoRoot, unit, packetDirectory, out var packet, out var unavailableSources))
         {
             digest = CrossRuntimeDesignReviewDigest.Compute(packet);
             var evaluatedSources = PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packet.PacketYaml)
@@ -1664,6 +1707,10 @@ internal static class ReviewCrossRuntimeCommand
                     }
                     : evaluatedSources;
             }
+        }
+        else
+        {
+            scopeSources = unavailableSources;
         }
 
         var read = CrossRuntimeDesignReviewStore.Read(context.RepoRoot, unit);
@@ -1706,6 +1753,103 @@ internal static class ReviewCrossRuntimeCommand
         WriteDesignStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.PacketDigest);
         return scopeSources is { IsSuccessful: false } ? 1 : 0;
     }
+
+    private static bool TryReadDesignStatusPacketSnapshot(
+        string repoRoot,
+        string unit,
+        string packetDirectory,
+        out CrossRuntimeDesignReviewDigest.PacketBytes packet,
+        out PacketScopeSources.Result? unavailableSources)
+    {
+        unavailableSources = null;
+        try
+        {
+            if (CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out _))
+            {
+                return true;
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Preserve the legacy no-source exception surface. Opted-in packets
+            // are re-read below through the diagnostic reader so status can
+            // report an unavailable source instead of claiming no gate applies.
+            if (!TryReadDeclaredPacketSnapshot(repoRoot, unit, packetDirectory, out packet, out unavailableSources))
+            {
+                if (unavailableSources is null)
+                {
+                    throw;
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        return TryReadDeclaredPacketSnapshot(repoRoot, unit, packetDirectory, out packet, out unavailableSources);
+    }
+
+    private static bool TryReadDeclaredPacketSnapshot(
+        string repoRoot,
+        string unit,
+        string packetDirectory,
+        out CrossRuntimeDesignReviewDigest.PacketBytes packet,
+        out PacketScopeSources.Result? unavailableSources)
+    {
+        packet = null!;
+        unavailableSources = null;
+        byte[] packetYaml;
+        try
+        {
+            packetYaml = File.ReadAllBytes(Path.Combine(packetDirectory, CrossRuntimeDesignReviewDigest.PacketFileNames[0]));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The existing status behavior for a packet whose declaration file
+            // itself cannot be read is retained; without readable opt-in there
+            // is no source declaration to project.
+            return false;
+        }
+
+        if (!PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packetYaml))
+        {
+            return false;
+        }
+
+        if (CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+                packetDirectory, out packet, out var missingPath, out var unreadableFileName, out var unreadableError))
+        {
+            return true;
+        }
+
+        var unavailablePath = unreadableFileName is null
+            ? missingPath ?? packetDirectory
+            : Path.Combine(packetDirectory, unreadableFileName);
+        var relativePath = Path.GetRelativePath(repoRoot, unavailablePath)
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
+        var detail = unreadableFileName is null
+            ? $"the complete four-file packet snapshot is unavailable: {relativePath}"
+            : $"the complete four-file packet snapshot is unreadable: {relativePath}: {unreadableError}";
+        var now = (Clock ?? (() => DateTimeOffset.UtcNow))();
+        unavailableSources = new PacketScopeSources.Result(
+            unit,
+            "unavailable",
+            "scope-sources-packet-unavailable",
+            detail,
+            RulingArtifact.FormatTimestamp(now),
+            null,
+            null,
+            [new("packet-unavailable", relativePath, detail)],
+            IsDeclared: true);
+        return false;
+    }
+
+    private static string PacketSourceFailureFileName(PacketScopeSources.Result sources) =>
+        sources.Diagnostics.FirstOrDefault()?.Path is { Length: > 0 } path
+            ? Path.GetFileName(path)
+            : CrossRuntimeDesignReviewDigest.PacketFileNames[0];
 
     private static void WriteImplementationStatusResult(
         TextWriter writer,
@@ -2120,7 +2264,8 @@ internal static class ReviewCrossRuntimeCommand
         string subcommand,
         string executionUnit,
         string fileName,
-        string exceptionMessage)
+        string exceptionMessage,
+        PacketScopeSources.Result? scopeSources = null)
     {
         var relativePath = $".intent-cli/issues/{executionUnit}/{fileName}";
         return Refuse(
@@ -2129,7 +2274,8 @@ internal static class ReviewCrossRuntimeCommand
             subcommand,
             CrossRuntimeReviewCauses.PacketUnreadable,
             PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePath, exceptionMessage),
-            $"make `{relativePath}` readable, then re-run.");
+            $"make `{relativePath}` readable, then re-run.",
+            scopeSources: scopeSources);
     }
 
     private static int RefuseResolution(TextWriter writer, string format, string subcommand, CrossRuntimeReviewResolution resolution) =>

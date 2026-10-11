@@ -310,6 +310,58 @@ public sealed class PacketScopeSourcesTests
         }
     }
 
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void ValidateSourcesCommandRejectsValidJsonWithNoncanonicalWriterBytes(string format)
+    {
+        using var fixture = new SourceFixture();
+        var packetDirectory = Path.Combine(fixture.Root, ".intent-cli", "issues", "G863");
+        Directory.CreateDirectory(packetDirectory);
+        File.WriteAllText(Path.Combine(packetDirectory, "packet.yaml"), fixture.PacketYaml);
+        File.WriteAllText(Path.Combine(packetDirectory, "github-body.md"), fixture.Body);
+
+        var artifactPath = Path.Combine(fixture.Root, fixture.Record.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var noncanonicalBytes = fixture.Bytes.Concat(Encoding.UTF8.GetBytes(" \n")).ToArray();
+        using (var syntacticallyValid = JsonDocument.Parse(noncanonicalBytes))
+        {
+            Assert.Equal("1", syntacticallyValid.RootElement.GetProperty("schema_version").GetString());
+        }
+        File.WriteAllBytes(artifactPath, noncanonicalBytes);
+        var packetYamlBefore = File.ReadAllBytes(Path.Combine(packetDirectory, "packet.yaml"));
+        var bodyBefore = File.ReadAllBytes(Path.Combine(packetDirectory, "github-body.md"));
+        using var output = new StringWriter();
+
+        var exit = PacketValidateSourcesCommand.Execute(fixture.Root,
+            ["--execution-unit", "G863", "--format", format], output, Now, null);
+
+        Assert.Equal(1, exit);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("unavailable", result.RootElement.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-ruling-unavailable", result.RootElement.GetProperty("cause").GetString());
+            AssertNullOrMissing(result.RootElement, "provenance");
+            AssertNullOrMissing(result.RootElement, "expected_provenance_block");
+            var diagnostic = Assert.Single(result.RootElement.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal("ruling-noncanonical-artifact", diagnostic.GetProperty("cause").GetString());
+            Assert.Equal(fixture.Record.RelativePath, diagnostic.GetProperty("path").GetString());
+        }
+        else
+        {
+            Assert.Contains("- State: unavailable", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("- Cause: scope-sources-ruling-unavailable", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("ruling-noncanonical-artifact", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains(fixture.Record.RelativePath, output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("## Verified sources", output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("## Expected public block", output.ToString(), StringComparison.Ordinal);
+        }
+
+        Assert.Equal(noncanonicalBytes, File.ReadAllBytes(artifactPath));
+        Assert.Equal(packetYamlBefore, File.ReadAllBytes(Path.Combine(packetDirectory, "packet.yaml")));
+        Assert.Equal(bodyBefore, File.ReadAllBytes(Path.Combine(packetDirectory, "github-body.md")));
+    }
+
     [Fact]
     public void ActualRulingWriter_SixteenSourcesPassAndSeventeenthIsRejectedBeforeReads()
     {
@@ -963,6 +1015,14 @@ public sealed class PacketScopeSourcesTests
             new PacketScopeSources.ProvenanceEntry("ruling:" + source.Record.Id, source.Record.Domain, source.Record.Team,
                 source.Record.TargetRepo, unit, source.Record.RelativePath, source.Digest, Encoding.UTF8.GetString(source.Bytes))).ToArray();
         return (yaml, PacketScopeSources.FormatProvenanceBlock(provenance));
+    }
+
+    private static void AssertNullOrMissing(JsonElement element, string propertyName)
+    {
+        if (element.TryGetProperty(propertyName, out var value))
+        {
+            Assert.Equal(JsonValueKind.Null, value.ValueKind);
+        }
     }
 
     private sealed class SourceFixture : IDisposable

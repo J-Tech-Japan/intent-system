@@ -1113,6 +1113,7 @@ src/IntentSystem.Cli/Commands/ReviewCollectSignalsCommand.cs	Labels	4
 src/IntentSystem.Cli/Commands/ReviewCollectSignalsCommand.cs	WorkerSignalContract	1
 src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	INotifyProcessRunner	1
 src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	NotifyCommand	0
+src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	RulingArtifact	1
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	GhCliGitHubLabelMutator	1
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	GitHubAutomationLabel	2
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	IGitHubLabelMutator	2

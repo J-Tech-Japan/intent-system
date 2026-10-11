@@ -281,6 +281,128 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.False(status.TryGetProperty("packet_digest", out var digest) && digest.ValueKind != JsonValueKind.Null);
     }
 
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignStatus_IncompleteDeclaredPacketIsUnavailableAndBlocks(string format)
+    {
+        _ = WritePinnedSourcePacket();
+        File.Delete(Path.Combine(PacketDir(Unit), "github-body.md"));
+
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignStatusArgs(), "--format", format]);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("blocked", output, StringComparison.Ordinal);
+        using var source = ReadScopeSourcesOutput(output, format);
+        Assert.Equal("unavailable", source.RootElement.GetProperty("state").GetString());
+        Assert.Equal("scope-sources-packet-unavailable", source.RootElement.GetProperty("cause").GetString());
+        AssertNullOrMissing(source.RootElement, "provenance");
+        AssertNullOrMissing(source.RootElement, "expected_provenance_block");
+        var diagnostic = Assert.Single(source.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal(".intent-cli/issues/G835/github-body.md", diagnostic.GetProperty("path").GetString());
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequestAndRecord_IncompleteDeclaredPacketKeepOuterRefusalAndSourceFailure(string format)
+    {
+        _ = WritePinnedSourcePacket();
+        var digest = CurrentDigest();
+        File.Delete(Path.Combine(PacketDir(Unit), "github-body.md"));
+
+        var requestOut = Path.Combine(root, "design-missing-body-request");
+        var (requestExit, requestOutput) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", requestOut), "--format", format,
+        ]);
+        Assert.Equal(1, requestExit);
+        Assert.Contains(CrossRuntimeReviewCauses.PacketMissing, requestOutput, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(requestOut));
+        AssertUnavailableScopeSnapshot(requestOutput, format);
+
+        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
+        var (recordExit, recordOutput) = Route([
+            "review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format,
+        ]);
+        Assert.Equal(1, recordExit);
+        Assert.Contains(CrossRuntimeReviewCauses.PacketMissing, recordOutput, StringComparison.Ordinal);
+        AssertUnavailableScopeSnapshot(recordOutput, format);
+        Assert.Empty(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
+    }
+
+    [Theory]
+    [InlineData("request", "json")]
+    [InlineData("request", "markdown")]
+    [InlineData("record", "json")]
+    [InlineData("record", "markdown")]
+    [InlineData("status", "json")]
+    [InlineData("status", "markdown")]
+    public void DeclaredPacketPermissionFailurePreservesOuterRefusalAndUnavailableSource(string command, string format)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        _ = WritePinnedSourcePacket();
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
+        var bodyPath = Path.Combine(PacketDir(Unit), "github-body.md");
+        var bodyBytes = File.ReadAllBytes(bodyPath);
+        var originalMode = File.GetUnixFileMode(bodyPath);
+        var outDir = Path.Combine(root, "permission-failed-design-request");
+        File.SetUnixFileMode(bodyPath, UnixFileMode.None);
+        try
+        {
+            Assert.True(File.Exists(bodyPath));
+            Assert.Throws<UnauthorizedAccessException>(() => File.ReadAllBytes(bodyPath));
+
+            string[] args = command switch
+            {
+                "request" => ["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format],
+                "record" => ["review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format],
+                _ => ["review", "cross-runtime", .. DesignStatusArgs(), "--format", format],
+            };
+            var (exit, output) = Route(args);
+
+            Assert.Equal(1, exit);
+            AssertUnavailableScopeSnapshot(output, format);
+            if (command == "status")
+            {
+                Assert.Contains("blocked", output, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains(CrossRuntimeReviewCauses.PacketUnreadable, output, StringComparison.Ordinal);
+            }
+            if (command == "request")
+            {
+                Assert.False(Directory.Exists(outDir));
+            }
+            if (command == "record")
+            {
+                Assert.Empty(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
+            }
+        }
+        finally
+        {
+            File.SetUnixFileMode(bodyPath, originalMode);
+        }
+
+        Assert.Equal(bodyBytes, File.ReadAllBytes(bodyPath));
+    }
+
+    private static void AssertUnavailableScopeSnapshot(string output, string format)
+    {
+        using var source = ReadScopeSourcesOutput(output, format);
+        Assert.Equal("unavailable", source.RootElement.GetProperty("state").GetString());
+        Assert.Equal("scope-sources-packet-unavailable", source.RootElement.GetProperty("cause").GetString());
+        AssertNullOrMissing(source.RootElement, "provenance");
+        AssertNullOrMissing(source.RootElement, "expected_provenance_block");
+        var diagnostic = Assert.Single(source.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal(".intent-cli/issues/G835/github-body.md", diagnostic.GetProperty("path").GetString());
+    }
+
     // ── design request ─────────────────────────────────────────────────
 
     [Theory]
@@ -602,6 +724,40 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.Contains(status.RootElement.GetProperty("gate").GetProperty("reasons").EnumerateArray(),
             reason => reason.GetProperty("cause").GetString() == "scope-sources-ruling-inactive");
         Assert.Equal(2, CrossRuntimeDesignReviewStore.Read(root, Unit).Records.Count);
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequestAndRecord_RefuseAnExpiredPinnedSource(string format)
+    {
+        _ = WritePinnedSourcePacket(expiresAfter: TimeSpan.FromMinutes(2));
+        clock = clock.AddMinutes(5);
+
+        var requestOut = Path.Combine(root, "design-expired-source-request");
+        var (requestExit, requestOutput) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", requestOut), "--format", format,
+        ]);
+        Assert.Equal(1, requestExit);
+        Assert.False(Directory.Exists(requestOut));
+        using (var requestSources = ReadScopeSourcesOutput(requestOutput, format))
+        {
+            Assert.Equal("refused", requestSources.RootElement.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-ruling-inactive", requestSources.RootElement.GetProperty("cause").GetString());
+        }
+
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
+        var (recordExit, recordOutput) = Route([
+            "review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format,
+        ]);
+        Assert.Equal(1, recordExit);
+        using (var recordSources = ReadScopeSourcesOutput(recordOutput, format))
+        {
+            Assert.Equal("refused", recordSources.RootElement.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-ruling-inactive", recordSources.RootElement.GetProperty("cause").GetString());
+        }
+        Assert.Empty(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
     }
 
     [Fact]
