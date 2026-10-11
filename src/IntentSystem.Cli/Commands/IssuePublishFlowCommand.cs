@@ -610,6 +610,16 @@ internal static class IssuePublishFlowCommand
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     var relativePacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml";
+                    if (scopeSources is not null)
+                    {
+                        var detail = PacketYamlParseMessages.ComposePublishFlowReadDetail(
+                            packetYamlPath, exception.Message, changedAfterFirstRead: true);
+                        outputScopeSources = MarkScopeSourcesUnavailable(
+                            scopeSources,
+                            UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                            relativePacketPath,
+                            detail);
+                    }
                     var snapshotRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                         packetExists: true,
                         githubBodyPresent: true,
@@ -636,7 +646,43 @@ internal static class IssuePublishFlowCommand
                 }
 
                 lookupSnapshotPacketYaml = packetBytes;
-                lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
+                try
+                {
+                    lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
+                }
+                catch (Exception exception) when (scopeSources is not null && (exception is IOException or UnauthorizedAccessException))
+                {
+                    var relativeBodyPath = $".intent-cli/issues/{executionUnit}/github-body.md";
+                    var detail = $"github-body.md changed after its first read and could not be read: {exception.Message}";
+                    outputScopeSources = MarkScopeSourcesUnavailable(
+                        scopeSources,
+                        UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                        relativeBodyPath,
+                        detail);
+                    var snapshotRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                        packetExists: true,
+                        githubBodyPresent: true,
+                        missingSections: missing,
+                        title: title,
+                        created: false,
+                        idempotent: false,
+                        durableStateSynced: false,
+                        issueUrl: null,
+                        issueNumber: null,
+                        queueStatePatched: false,
+                        publishYamlPatched: false,
+                        runsAppended: false,
+                        error: detail,
+                        titleSource: titleSource,
+                        cause: PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable,
+                        crossRuntimeDesignReview: BuildSnapshotPacketRefusalDesignReviewField(
+                            gatedPublishResolution,
+                            preSnapshotDigest,
+                            CrossRuntimeReviewCauses.PacketUnreadable,
+                            $"packet '{relativeBodyPath}' could not be read: {exception.Message}"));
+                    EmitWithScopeSources(writer, snapshotRefusal, format);
+                    return 1;
+                }
                 lookupBody = IssueBodyTextDecoder.Decode(lookupSnapshotGithubBody);
 
                 // A source declaration added after the title/source snapshot must not
@@ -792,8 +838,60 @@ internal static class IssuePublishFlowCommand
                 && lookupSnapshotGithubBody is not null)
             {
                 var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
-                if (!File.ReadAllBytes(packetYamlPath).AsSpan().SequenceEqual(lookupSnapshotPacketYaml)
-                    || !File.ReadAllBytes(githubBodyPath).AsSpan().SequenceEqual(lookupSnapshotGithubBody))
+                bool lookupInputsChanged;
+                if (scopeSources is null)
+                {
+                    // Preserve the historical short-circuit read order and exception
+                    // surface for packets that did not opt into ruling sources.
+                    lookupInputsChanged = !File.ReadAllBytes(packetYamlPath).AsSpan().SequenceEqual(lookupSnapshotPacketYaml)
+                        || !File.ReadAllBytes(githubBodyPath).AsSpan().SequenceEqual(lookupSnapshotGithubBody);
+                }
+                else
+                {
+                    var failedPath = packetYamlPath;
+                    try
+                    {
+                        var currentPacket = File.ReadAllBytes(packetYamlPath);
+                        failedPath = githubBodyPath;
+                        var currentBody = File.ReadAllBytes(githubBodyPath);
+                        lookupInputsChanged = !currentPacket.AsSpan().SequenceEqual(lookupSnapshotPacketYaml)
+                            || !currentBody.AsSpan().SequenceEqual(lookupSnapshotGithubBody);
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        var relativePath = RelativePacketPath(context.RepoRoot, failedPath);
+                        var detail = $"'{relativePath}' could not be re-read after the GitHub lookup snapshot: {exception.Message}";
+                        outputScopeSources = MarkScopeSourcesUnavailable(
+                            scopeSources,
+                            UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                            relativePath,
+                            detail);
+                        var lookupReadFailed = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                            packetExists: true,
+                            githubBodyPresent: true,
+                            missingSections: Array.Empty<string>(),
+                            title: title,
+                            created: false,
+                            idempotent: false,
+                            durableStateSynced: false,
+                            issueUrl: null,
+                            issueNumber: null,
+                            queueStatePatched: false,
+                            publishYamlPatched: false,
+                            runsAppended: false,
+                            error: detail,
+                            titleSource: titleSource,
+                            cause: CrossRuntimeReviewCauses.LookupInputChanged,
+                            crossRuntimeDesignReview: BuildResolutionRefusalField(
+                                gatedPublishResolution,
+                                CrossRuntimeReviewCauses.LookupInputChanged,
+                                detail));
+                        EmitWithScopeSources(writer, lookupReadFailed, format);
+                        return 1;
+                    }
+                }
+
+                if (lookupInputsChanged)
                 {
                     if (scopeSources is not null)
                     {

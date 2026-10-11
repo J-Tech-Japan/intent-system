@@ -434,6 +434,138 @@ public sealed class G835PublishFlowTests : IDisposable
     }
 
     [Theory]
+    [InlineData("before-lookup", "packet", "delete", "json")]
+    [InlineData("before-lookup", "packet", "delete", "markdown")]
+    [InlineData("before-lookup", "packet", "lock", "json")]
+    [InlineData("before-lookup", "packet", "lock", "markdown")]
+    [InlineData("before-lookup", "body", "delete", "json")]
+    [InlineData("before-lookup", "body", "delete", "markdown")]
+    [InlineData("before-lookup", "body", "lock", "json")]
+    [InlineData("before-lookup", "body", "lock", "markdown")]
+    [InlineData("unique-lookup", "packet", "delete", "json")]
+    [InlineData("unique-lookup", "packet", "delete", "markdown")]
+    [InlineData("unique-lookup", "packet", "lock", "json")]
+    [InlineData("unique-lookup", "packet", "lock", "markdown")]
+    [InlineData("unique-lookup", "body", "delete", "json")]
+    [InlineData("unique-lookup", "body", "delete", "markdown")]
+    [InlineData("unique-lookup", "body", "lock", "json")]
+    [InlineData("unique-lookup", "body", "lock", "markdown")]
+    public void PublishFlow_DeclaredLookupSnapshotReadFailureRetainsUnavailableSourceTruth(
+        string boundary, string target, string failure, string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        var source = workspace.WritePinnedSourcePacket(Unit, Repo, Team);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
+
+        var targetPath = target == "packet"
+            ? Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml")
+            : workspace.GithubBodyPath(Unit);
+        var targetBytes = File.ReadAllBytes(targetPath);
+        var expectedRelativePath = $".intent-cli/issues/{Unit}/{(target == "packet" ? "packet.yaml" : "github-body.md")}";
+        var mutationReached = false;
+        bool? expectedTargetExistsAfterMutation = null;
+        FileStream? exclusiveReadLock = null;
+        void BreakTargetRead()
+        {
+            mutationReached = true;
+            if (failure == "delete")
+            {
+                File.Delete(targetPath);
+            }
+            else
+            {
+                exclusiveReadLock = new FileStream(targetPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            }
+            expectedTargetExistsAfterMutation = File.Exists(targetPath);
+        }
+
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8690");
+        var uniqueResult = new GitHubExistingIssueLookupResult
+        {
+            Classification = GitHubExistingIssueClassification.Unique,
+            IssueNumber = 8690,
+            IssueUrl = $"https://github.com/{Repo}/issues/8690",
+        };
+        var checker = new CallbackExistingIssueChecker(uniqueResult, BreakTargetRead);
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        if (boundary == "before-lookup")
+        {
+            IssuePublishFlowCommand.BeforeLookupSnapshotHook = BreakTargetRead;
+        }
+
+        try
+        {
+            var (exit, output) = Run(workspace, Unit, Repo, write: true, team: Team, format: format);
+
+            Assert.Equal(1, exit);
+            Assert.True(mutationReached);
+            Assert.Equal(boundary == "unique-lookup" ? 1 : 0, checker.CallCount);
+            Assert.Equal(0, creator.CallCount);
+            Assert.True(File.Exists(source.ArtifactPath));
+            AssertDurableStateUntouched(workspace);
+
+            Assert.Equal(failure == "lock", expectedTargetExistsAfterMutation);
+            exclusiveReadLock?.Dispose();
+            exclusiveReadLock = null;
+            if (failure == "delete")
+            {
+                Assert.False(File.Exists(targetPath));
+            }
+            else
+            {
+                Assert.Equal(targetBytes, File.ReadAllBytes(targetPath));
+            }
+
+            var expectedTopCause = boundary == "unique-lookup"
+                ? CrossRuntimeReviewCauses.LookupInputChanged
+                : PreparedPacketCommitReadyAnalyzer.ReasonPacketYamlUnreadable;
+            if (format == "json")
+            {
+                using var result = JsonDocument.Parse(output);
+                var root = result.RootElement;
+                Assert.Equal(expectedTopCause, root.GetProperty("cause").GetString());
+                Assert.False(root.GetProperty("created").GetBoolean());
+                Assert.False(root.GetProperty("idempotent").GetBoolean());
+                Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
+                Assert.False(root.GetProperty("queue_state_patched").GetBoolean());
+                Assert.False(root.GetProperty("publish_yaml_patched").GetBoolean());
+                Assert.False(root.GetProperty("runs_appended").GetBoolean());
+                var sources = root.GetProperty("scope_sources");
+                Assert.Equal("unavailable", sources.GetProperty("state").GetString());
+                Assert.Equal("scope-sources-packet-unavailable", sources.GetProperty("cause").GetString());
+                var diagnostic = Assert.Single(sources.GetProperty("diagnostics").EnumerateArray());
+                Assert.Equal(expectedRelativePath, diagnostic.GetProperty("path").GetString());
+                Assert.False(string.IsNullOrWhiteSpace(diagnostic.GetProperty("detail").GetString()));
+                AssertNullOrMissing(sources, "provenance");
+                AssertNullOrMissing(sources, "expected_provenance_block");
+            }
+            else
+            {
+                Assert.Contains(expectedTopCause, output, StringComparison.Ordinal);
+                Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+                Assert.Contains(expectedRelativePath, output, StringComparison.Ordinal);
+                Assert.Contains("- created: no", output, StringComparison.Ordinal);
+                Assert.Contains("- idempotent: no", output, StringComparison.Ordinal);
+                Assert.Contains("- durable_state_synced: no", output, StringComparison.Ordinal);
+                Assert.Contains("- queue_state_patched: no", output, StringComparison.Ordinal);
+                Assert.Contains("- publish_yaml_patched: no", output, StringComparison.Ordinal);
+                Assert.Contains("- runs_appended: no", output, StringComparison.Ordinal);
+                Assert.Contains("\"state\": \"unavailable\"", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Expected provenance block", output, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            exclusiveReadLock?.Dispose();
+            IssuePublishFlowCommand.BeforeLookupSnapshotHook = null;
+        }
+    }
+
+    [Theory]
     [InlineData("lookup-none", "json")]
     [InlineData("lookup-none", "markdown")]
     [InlineData("lookup-unique", "json")]
