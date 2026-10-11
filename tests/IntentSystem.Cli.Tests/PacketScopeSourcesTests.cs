@@ -16,6 +16,31 @@ public sealed class PacketScopeSourcesTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-10-10T12:00:00Z");
 
     [Fact]
+    public void LegacyDeclarationProbeUsesOnlyTheFirstYamlDocument()
+    {
+        var legacyWithSecondDocument = Encoding.UTF8.GetBytes("""
+            implementation_issue_packet:
+              source_execution_unit: G863
+              domain: intent-cli
+              team: intent-cli-dev
+              target_repo: J-Tech-Japan/intent-system
+            ---
+            unrelated: metadata
+            """);
+        Assert.False(PacketScopeSources.HasDeclarationOrMisplacedDeclaration(legacyWithSecondDocument));
+
+        using var fixture = new SourceFixture();
+        var optedInWithSecondDocument = Encoding.UTF8.GetBytes(fixture.PacketYaml + "\n---\nunrelated: metadata\n");
+        Assert.True(PacketScopeSources.HasDeclarationOrMisplacedDeclaration(optedInWithSecondDocument));
+        var evaluated = PacketScopeSources.Evaluate(fixture.Root, "G863", optedInWithSecondDocument,
+            Encoding.UTF8.GetBytes(fixture.Body), Now);
+        Assert.Equal("unavailable", evaluated.State);
+        Assert.Equal("scope-sources-packet-unavailable", evaluated.Cause);
+
+        Assert.True(PacketScopeSources.HasDeclarationOrMisplacedDeclaration(Encoding.UTF8.GetBytes("broken: [\n")));
+    }
+
+    [Fact]
     public void DeclarationShapeAliasesAndIdentityAreClosedBeforeRulingReads()
     {
         using var fixture = new SourceFixture();

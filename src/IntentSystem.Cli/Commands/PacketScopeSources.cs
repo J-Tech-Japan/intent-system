@@ -202,7 +202,7 @@ internal static class PacketScopeSources
 
     internal static bool HasDeclarationOrMisplacedDeclaration(byte[] packetYaml, bool malformedMeansDeclaration = true)
     {
-        if (!TryParsePacket(packetYaml, out var root, out _))
+        if (!TryParseFirstPacketDocument(packetYaml, out var root, out _))
         {
             // A malformed packet cannot establish that the optional declaration
             // is absent. Route it through the evaluator so callers fail closed
@@ -294,6 +294,35 @@ internal static class PacketScopeSources
             if (stream.Documents.Count != 1 || stream.Documents[0].RootNode is not YamlMappingNode mapping)
             {
                 error = "packet.yaml must contain exactly one root mapping";
+                return false;
+            }
+            root = mapping;
+            return true;
+        }
+        catch (Exception exception) when (exception is DecoderFallbackException or YamlDotNet.Core.YamlException or InvalidOperationException)
+        {
+            error = exception.Message;
+            return false;
+        }
+    }
+
+    // Legacy packet consumers project the first root mapping from a valid YAML
+    // stream. Use that same boundary only to decide whether source evaluation is
+    // needed. Once a non-empty source declaration opts in, Evaluate still uses
+    // TryParsePacket and enforces the stricter single-document source contract.
+    private static bool TryParseFirstPacketDocument(byte[] bytes, out YamlMappingNode? root, out string error)
+    {
+        root = null;
+        error = string.Empty;
+        try
+        {
+            var text = StrictUtf8.GetString(bytes);
+            var stream = new YamlStream();
+            using var reader = new StringReader(text);
+            stream.Load(reader);
+            if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode mapping)
+            {
+                error = "packet.yaml must contain a root mapping";
                 return false;
             }
             root = mapping;

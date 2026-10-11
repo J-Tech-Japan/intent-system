@@ -2033,7 +2033,10 @@ internal static class IssuePublishFlowCommand
             var claimPath = ClaimCommand.ClaimPath($"execution-unit:{executionUnit}");
             var currentClaim = ClaimOwnershipVerifier.Verify(
                 repoRoot, $"execution-unit:{executionUnit}", initialClaimVerification.HolderTeam);
-            if (!currentClaim.Passed)
+            if (!currentClaim.Passed
+                || !currentClaim.StoreConfigured
+                || !string.Equals(currentClaim.Status, ClaimOwnershipVerification.StatusOwned, StringComparison.Ordinal)
+                || !string.Equals(currentClaim.HolderTeam, initialClaimVerification.HolderTeam, StringComparison.Ordinal))
             {
                 var detail = $"the held execution-unit claim could not be revalidated against its initial team identity: {currentClaim.Detail}";
                 return initiallyValid with

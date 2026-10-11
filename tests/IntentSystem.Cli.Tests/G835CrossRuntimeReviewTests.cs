@@ -341,7 +341,12 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
         {
-            return;
+            throw Xunit.Sdk.SkipException.ForSkip("Unix permission-denied fixture requires Unix file modes.");
+        }
+
+        if (!G841TestHelpers.IsNonRootUnixUser())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("Unix permission-denied fixture cannot prove denial while running as root.");
         }
 
         _ = WritePinnedSourcePacket();
@@ -590,6 +595,66 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.Equal(0, statusExit);
         AssertNoScopeSources(statusOutput, format);
         Assert.Equal(1, clockCalls);
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignConsumers_LegacyFirstDocumentIgnoresHarmlessLaterDocument(string format)
+    {
+        File.AppendAllText(Path.Combine(PacketDir(Unit), "packet.yaml"), "\n---\nunrelated: metadata\n");
+        var clockCalls = 0;
+        ReviewCrossRuntimeCommand.Clock = () =>
+        {
+            clockCalls++;
+            return clock;
+        };
+
+        var outDir = Path.Combine(root, "legacy-multidocument-request");
+        var (requestExit, requestOutput) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+        Assert.Equal(0, requestExit);
+        AssertNoScopeSources(requestOutput, format);
+        Assert.Equal(0, clockCalls);
+
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
+        var (recordExit, recordOutput) = Route([
+            "review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format,
+        ]);
+        Assert.Equal(0, recordExit);
+        AssertNoScopeSources(recordOutput, format);
+        Assert.Equal(1, clockCalls);
+
+        var (statusExit, statusOutput) = Route([
+            "review", "cross-runtime", .. DesignStatusArgs(), "--format", format,
+        ]);
+        Assert.Equal(0, statusExit);
+        AssertNoScopeSources(statusOutput, format);
+        Assert.Equal(1, clockCalls);
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_OptedInFirstDocumentWithLaterDocumentIsUnavailable(string format)
+    {
+        _ = WritePinnedSourcePacket();
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        File.AppendAllText(packetPath, "\n---\nunrelated: metadata\n");
+        var outDir = Path.Combine(root, "opted-multidocument-request");
+
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+
+        Assert.Equal(1, exit);
+        Assert.False(Directory.Exists(outDir));
+        using var source = ReadScopeSourcesOutput(output, format);
+        Assert.Equal("unavailable", source.RootElement.GetProperty("state").GetString());
+        Assert.Equal("scope-sources-packet-unavailable", source.RootElement.GetProperty("cause").GetString());
+        AssertNullOrMissing(source.RootElement, "provenance");
     }
 
     [Theory]
