@@ -1427,6 +1427,7 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             }
 
             var ledger = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "1.0-compatibility-ledger.md"));
+            var normalizedLedger = string.Join(' ', ledger.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             Assert.Contains("cross-runtime design review record store", ledger, StringComparison.Ordinal);
             Assert.Contains("issue publish-flow design gate", ledger, StringComparison.Ordinal);
             Assert.Contains("G863", ledger, StringComparison.Ordinal);
@@ -1434,6 +1435,18 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             Assert.Contains("packet validate-sources", ledger, StringComparison.Ordinal);
             Assert.Contains(language == "en" ? "The legacy scalar `ruling_artifact` remains unsupported" : "旧 scalar `ruling_artifact` は未対応", ledger, StringComparison.Ordinal);
             Assert.Contains(language == "en" ? "a ruling ID or path" : "ID や path として推測しない", ledger, StringComparison.Ordinal);
+            if (language == "en")
+            {
+                Assert.DoesNotContain("Only packet validation, cross-runtime design review, and `issue publish-flow` consume the declaration.", normalizedLedger, StringComparison.Ordinal);
+                Assert.Contains("`unit status` also reads it as a read-only observation", normalizedLedger, StringComparison.Ordinal);
+                Assert.Contains("it does not authenticate authority, verify publication, or add a gate", normalizedLedger, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.DoesNotContain("packet validation、cross-runtime design review、`issue publish-flow` のみがこの opt-in source を読みます。", normalizedLedger, StringComparison.Ordinal);
+                Assert.Contains("`unit status` も read-only observation として読みます", normalizedLedger, StringComparison.Ordinal);
+                Assert.Contains("authority の認証、publication の検証、gate への適用はしません", normalizedLedger, StringComparison.Ordinal);
+            }
             var sourceRow = Assert.Single(ledger.Split('\n'), line => line.StartsWith("| `packet validate-sources` |", StringComparison.Ordinal));
             Assert.Contains("G863", sourceRow, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", sourceRow, StringComparison.Ordinal);

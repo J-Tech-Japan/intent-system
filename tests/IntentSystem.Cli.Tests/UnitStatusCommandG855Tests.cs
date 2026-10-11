@@ -132,6 +132,9 @@ public sealed class UnitStatusCommandG855Tests
         return stdout.Result;
     }
 
+    private static string SnapshotGitRefs(string root) =>
+        RunStatusGit(root, "for-each-ref", "--format=%(refname) %(objectname)");
+
     private static Dictionary<string, string> SnapshotRenderedFacts(JsonElement report, string? excludedFactId = null) =>
         report.GetProperty("steps").EnumerateArray()
             .SelectMany(step => step.GetProperty("subchecks").EnumerateArray()
@@ -622,6 +625,8 @@ public sealed class UnitStatusCommandG855Tests
         Assert.Equal("scope-sources-satisfied", firstSource.GetProperty("cause").GetString());
         Assert.Equal("supplied-not-authenticated", firstSource.GetProperty("authority_verification").GetString());
         Assert.Equal("not-verified", firstSource.GetProperty("publication").GetString());
+        Assert.Equal(1, reader.ClaimReads);
+        Assert.Equal(1, reader.GitHubReads);
         var observedAt = firstRoot.GetProperty("observation").GetProperty("observed_at").GetDateTimeOffset();
         Assert.Equal(RulingArtifact.FormatTimestamp(observedAt), firstSource.GetProperty("evaluated_at").GetString());
         var provenance = Assert.Single(firstSource.GetProperty("provenance").EnumerateArray());
@@ -631,14 +636,20 @@ public sealed class UnitStatusCommandG855Tests
         Assert.False(provenance.TryGetProperty("canonical_record_json", out _));
         AssertKnownSixProvenanceLimits(firstRoot);
 
-        var repeatedOutput = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), "json", out var repeatedExit);
+        var repeatedReader = CreateKnownSixProvenanceLimitsReader();
+        var repeatedOutput = RunStatusOutput(host, repeatedReader, "json", out var repeatedExit);
         Assert.Equal(0, repeatedExit);
+        Assert.Equal(1, repeatedReader.ClaimReads);
+        Assert.Equal(1, repeatedReader.GitHubReads);
         using (var repeated = JsonDocument.Parse(repeatedOutput))
             Assert.Equal(SnapshotRenderedFacts(firstRoot, "bug-chain-or-ruling"),
                 SnapshotRenderedFacts(repeated.RootElement, "bug-chain-or-ruling"));
 
-        var markdown = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), "markdown", out var markdownExit);
+        var markdownReader = CreateKnownSixProvenanceLimitsReader();
+        var markdown = RunStatusOutput(host, markdownReader, "markdown", out var markdownExit);
         Assert.Equal(0, markdownExit);
+        Assert.Equal(1, markdownReader.ClaimReads);
+        Assert.Equal(1, markdownReader.GitHubReads);
         Assert.Contains("scope_sources:", markdown, StringComparison.Ordinal);
         Assert.Contains("state: `satisfied`", markdown, StringComparison.Ordinal);
         AssertMarkdownFactUnavailableClass(markdown, "bug-chain-or-ruling", null);
@@ -652,8 +663,11 @@ public sealed class UnitStatusCommandG855Tests
         var rulingPath = Path.Combine(host.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", "R-G864-STATUS.json");
         File.Delete(rulingPath);
         var afterRemoval = SnapshotFiles(host.Root);
-        var missingOutput = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), "json", out var missingExit);
+        var missingReader = CreateKnownSixProvenanceLimitsReader();
+        var missingOutput = RunStatusOutput(host, missingReader, "json", out var missingExit);
         Assert.Equal(0, missingExit);
+        Assert.Equal(1, missingReader.ClaimReads);
+        Assert.Equal(1, missingReader.GitHubReads);
         Assert.Equal(afterRemoval, SnapshotFiles(host.Root));
         using var missing = JsonDocument.Parse(missingOutput);
         var missingRoot = missing.RootElement;
@@ -671,8 +685,11 @@ public sealed class UnitStatusCommandG855Tests
         Assert.Equal(SnapshotRenderedFacts(firstRoot, "bug-chain-or-ruling"),
             SnapshotRenderedFacts(missingRoot, "bug-chain-or-ruling"));
 
-        var missingMarkdown = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), "markdown", out var missingMarkdownExit);
+        var missingMarkdownReader = CreateKnownSixProvenanceLimitsReader();
+        var missingMarkdown = RunStatusOutput(host, missingMarkdownReader, "markdown", out var missingMarkdownExit);
         Assert.Equal(0, missingMarkdownExit);
+        Assert.Equal(1, missingMarkdownReader.ClaimReads);
+        Assert.Equal(1, missingMarkdownReader.GitHubReads);
         Assert.Contains("state: `refused`", missingMarkdown, StringComparison.Ordinal);
         Assert.Contains("cause: `scope-sources-ruling-missing`", missingMarkdown, StringComparison.Ordinal);
         AssertMarkdownFactUnavailableClass(missingMarkdown, "bug-chain-or-ruling", null);
@@ -1508,13 +1525,43 @@ public sealed class UnitStatusCommandG855Tests
         host.WriteMode(TeamMode.SoloConductor);
         host.WritePacketAndPublishArtifact(sourceArtifact: SourceIssueUrl);
         host.WriteActualBugSourceChain("BUG-G864-VALID", SourceIssueUrl);
+        var legacyBefore = SnapshotFiles(host.Root);
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            var legacyReader = CreateKnownSixProvenanceLimitsReader();
+            var legacyOutput = RunStatusOutput(host, legacyReader, format, out var legacyExit);
+            Assert.Equal(0, legacyExit);
+            Assert.Equal(legacyBefore, SnapshotFiles(host.Root));
+            Assert.Equal(1, legacyReader.ClaimReads);
+            Assert.Equal(1, legacyReader.GitHubReads);
+            if (format == "json")
+            {
+                using var report = JsonDocument.Parse(legacyOutput);
+                var fact = FindBugSource(report.RootElement);
+                Assert.Equal("done", fact.GetProperty("state").GetString());
+                Assert.Equal("canonical-source-chain-recorded", fact.GetProperty("cause").GetString());
+                Assert.False(fact.TryGetProperty("scope_sources", out _));
+                AssertKnownSixProvenanceLimits(report.RootElement);
+            }
+            else
+            {
+                Assert.Contains("subcheck `bug-chain-or-ruling`: **done**", legacyOutput, StringComparison.Ordinal);
+                Assert.Contains("canonical-source-chain-recorded", legacyOutput, StringComparison.Ordinal);
+                Assert.DoesNotContain("scope_sources:", legacyOutput, StringComparison.Ordinal);
+                AssertKnownSixProvenanceLimitsInMarkdown(legacyOutput);
+            }
+        }
+
         var sha256 = WriteActualG864Ruling(host);
         WriteG864SourcePacket(host, new string('0', 64), sourceArtifact: SourceIssueUrl);
 
         foreach (var format in new[] { "json", "markdown" })
         {
-            var output = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), format, out var exit);
+            var reader = CreateKnownSixProvenanceLimitsReader();
+            var output = RunStatusOutput(host, reader, format, out var exit);
             Assert.Equal(1, exit);
+            Assert.Equal(1, reader.ClaimReads);
+            Assert.Equal(1, reader.GitHubReads);
             if (format == "json")
             {
                 using var report = JsonDocument.Parse(output);
@@ -1543,8 +1590,11 @@ public sealed class UnitStatusCommandG855Tests
         var before = SnapshotFiles(host.Root);
         foreach (var format in new[] { "json", "markdown" })
         {
-            var output = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), format, out var exit);
+            var reader = CreateKnownSixProvenanceLimitsReader();
+            var output = RunStatusOutput(host, reader, format, out var exit);
             Assert.Equal(0, exit);
+            Assert.Equal(1, reader.ClaimReads);
+            Assert.Equal(1, reader.GitHubReads);
             Assert.Equal(before, SnapshotFiles(host.Root));
             if (format == "json")
             {
@@ -1744,8 +1794,11 @@ public sealed class UnitStatusCommandG855Tests
             var before = SnapshotFiles(nonSolo.Root);
             foreach (var format in new[] { "json", "markdown" })
             {
-                var output = RunStatusOutput(nonSolo, new FixedReader(), format, out var exit);
+                var reader = new FixedReader();
+                var output = RunStatusOutput(nonSolo, reader, format, out var exit);
                 Assert.Equal(0, exit);
+                Assert.Equal(1, reader.ClaimReads);
+                Assert.Equal(0, reader.GitHubReads);
                 Assert.Equal(before, SnapshotFiles(nonSolo.Root));
                 if (format == "json")
                 {
@@ -1916,9 +1969,11 @@ public sealed class UnitStatusCommandG855Tests
         var bodyBefore = File.ReadAllBytes(Path.Combine(beforeRoot, bodyRelative));
         var missingReader = CreateKnownSixProvenanceLimitsReader();
         var beforeGitState = SnapshotFiles(beforeRoot);
+        var beforeGitRefs = SnapshotGitRefs(beforeRoot);
         var missing = RunStatusOutputForRoot(beforeRoot, missingReader, "json", out var missingExit);
         Assert.Equal(0, missingExit);
         Assert.Equal(beforeGitState, SnapshotFiles(beforeRoot));
+        Assert.Equal(beforeGitRefs, SnapshotGitRefs(beforeRoot));
         using (var report = JsonDocument.Parse(missing))
         {
             var fact = FindBugSource(report.RootElement);
@@ -1928,9 +1983,11 @@ public sealed class UnitStatusCommandG855Tests
             Assert.Equal(JsonValueKind.Null, fact.GetProperty("scope_sources").GetProperty("provenance").ValueKind);
         }
         var missingPublicState = SnapshotFiles(beforeRoot);
+        var missingPublicRefs = SnapshotGitRefs(beforeRoot);
         var missingPublic = RunStatusPublicOutputForRoot(beforeRoot, "json", out var missingPublicExit);
         Assert.Equal(0, missingPublicExit);
         Assert.Equal(missingPublicState, SnapshotFiles(beforeRoot));
+        Assert.Equal(missingPublicRefs, SnapshotGitRefs(beforeRoot));
         using (var report = JsonDocument.Parse(missingPublic))
         {
             var fact = FindBugSource(report.RootElement);
@@ -1950,9 +2007,11 @@ public sealed class UnitStatusCommandG855Tests
 
         var completedReader = CreateKnownSixProvenanceLimitsReader();
         var afterGitState = SnapshotFiles(afterRoot);
+        var afterGitRefs = SnapshotGitRefs(afterRoot);
         var done = RunStatusOutputForRoot(afterRoot, completedReader, "json", out var doneExit);
         Assert.Equal(0, doneExit);
         Assert.Equal(afterGitState, SnapshotFiles(afterRoot));
+        Assert.Equal(afterGitRefs, SnapshotGitRefs(afterRoot));
         using (var report = JsonDocument.Parse(done))
         {
             var root = report.RootElement;
@@ -1962,18 +2021,25 @@ public sealed class UnitStatusCommandG855Tests
             AssertFactUnavailableClass(fact, null);
             Assert.Equal("scope-sources-satisfied", source.GetProperty("cause").GetString());
             Assert.Equal("not-verified", source.GetProperty("publication").GetString());
-            Assert.Equal(digest, Assert.Single(source.GetProperty("provenance").EnumerateArray()).GetProperty("sha256").GetString());
+            var provenance = Assert.Single(source.GetProperty("provenance").EnumerateArray());
+            Assert.Equal(digest, provenance.GetProperty("sha256").GetString());
+            Assert.Equal(rulingRelative, provenance.GetProperty("path").GetString());
         }
         var donePublicState = SnapshotFiles(afterRoot);
+        var donePublicRefs = SnapshotGitRefs(afterRoot);
         var donePublic = RunStatusPublicOutputForRoot(afterRoot, "json", out var donePublicExit);
         Assert.Equal(0, donePublicExit);
         Assert.Equal(donePublicState, SnapshotFiles(afterRoot));
+        Assert.Equal(donePublicRefs, SnapshotGitRefs(afterRoot));
         using (var report = JsonDocument.Parse(donePublic))
         {
             var fact = FindBugSource(report.RootElement);
             Assert.Equal("done", fact.GetProperty("state").GetString());
             AssertFactUnavailableClass(fact, null);
-            Assert.Equal("scope-sources-satisfied", fact.GetProperty("scope_sources").GetProperty("cause").GetString());
+            var source = fact.GetProperty("scope_sources");
+            Assert.Equal("scope-sources-satisfied", source.GetProperty("cause").GetString());
+            Assert.Equal(rulingRelative, Assert.Single(source.GetProperty("provenance").EnumerateArray())
+                .GetProperty("path").GetString());
         }
         Assert.Equal(1, missingReader.ClaimReads);
         Assert.Equal(0, missingReader.GitHubReads);
@@ -2158,9 +2224,12 @@ public sealed class UnitStatusCommandG855Tests
         WriteG864SourcePacket(host, pinnedSha, id, sourceDomain, sourceTeam, sourceRepo, body: body);
 
         var before = SnapshotFiles(host.Root);
-        var output = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), format, out var exit);
+        var reader = CreateKnownSixProvenanceLimitsReader();
+        var output = RunStatusOutput(host, reader, format, out var exit);
         Assert.Equal(expectedState is "missing" ? 0 : 1, exit);
         Assert.Equal(before, SnapshotFiles(host.Root));
+        Assert.Equal(1, reader.ClaimReads);
+        Assert.Equal(1, reader.GitHubReads);
         if (format == "json")
         {
             using var document = JsonDocument.Parse(output);
