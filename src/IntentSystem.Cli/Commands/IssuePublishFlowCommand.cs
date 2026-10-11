@@ -385,6 +385,7 @@ internal static class IssuePublishFlowCommand
         // For a declared source list, bind the complete four-file snapshot
         // before any GitHub lookup, including local-existing issue paths.
         PacketScopeSources.Result? scopeSources = null;
+        CrossRuntimeDesignReviewDigest.PacketBytes? scopePacketSnapshot = null;
         string? scopePacketDigest = null;
         var sourcePacketYamlPath = Path.Combine(packetDirectory, "packet.yaml");
         if (packetYamlForSourceHint is not null
@@ -415,6 +416,7 @@ internal static class IssuePublishFlowCommand
                         scopePacketDigest = checkedSources.PacketDigest;
                         if (checkedSources.Packet is { } checkedPacket)
                         {
+                            scopePacketSnapshot = checkedPacket;
                             githubBodyBytes = checkedPacket.GithubBody;
                             githubBody = IssueBodyTextDecoder.Decode(githubBodyBytes);
                             title = ResolveLookupTitle(executionUnit!, sourcePacketYamlPath, checkedPacket.PacketYaml, checkedPacket.GithubBody);
@@ -495,7 +497,7 @@ internal static class IssuePublishFlowCommand
         if (!write && isGatedRepo)
         {
             dryRunDesignReview = BuildDryRunDesignReview(
-                context, executionUnit!, repo!, packetDirectory, analysis.HasExistingIssue);
+                context, executionUnit!, repo!, packetDirectory, analysis.HasExistingIssue, scopePacketSnapshot);
         }
 
         if (!write)
@@ -600,7 +602,9 @@ internal static class IssuePublishFlowCommand
             if (gatedPublishResolution.Resolved && gatedPublishResolution.Declared)
             {
                 var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
-                var preSnapshotDigest = TryComputePacketDigest(packetDirectory);
+                var preSnapshotDigest = scopeSources is null
+                    ? TryComputePacketDigest(packetDirectory)
+                    : scopePacketDigest;
                 BeforeLookupSnapshotHook?.Invoke();
                 byte[] packetBytes;
                 try
@@ -1976,13 +1980,17 @@ internal static class IssuePublishFlowCommand
         if (!initial.IsSuccessful) return new(initial, null, null);
 
         var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(repoRoot, executionUnit);
-        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
+        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+                packetDirectory, out var packet, out var missingPath, out var unreadableFileName, out var unreadableError))
         {
-            var unavailable = new PacketScopeSources.Result(executionUnit, "unavailable", "scope-sources-packet-unavailable",
-                $"the complete four-file packet snapshot is unavailable: {missingPath}",
-                RulingArtifact.FormatTimestamp(now), null, null,
-                [new("packet-unavailable", missingPath, "the complete four-file packet snapshot is required before GitHub lookup")],
-                IsDeclared: true);
+            var unavailablePath = unreadableFileName is null
+                ? missingPath ?? packetDirectory
+                : Path.Combine(packetDirectory, unreadableFileName);
+            var relativePath = RelativePacketPath(repoRoot, unavailablePath);
+            var detail = unreadableFileName is null
+                ? $"the complete four-file packet snapshot is unavailable before GitHub lookup: {relativePath}"
+                : $"the complete four-file packet snapshot is unreadable before GitHub lookup: {relativePath}: {unreadableError}";
+            var unavailable = MarkScopeSourcesUnavailable(initial, now, relativePath, detail);
             return new(unavailable, null, null);
         }
 
@@ -2131,7 +2139,8 @@ internal static class IssuePublishFlowCommand
         string executionUnit,
         string repo,
         string packetDirectory,
-        bool hasExistingIssue)
+        bool hasExistingIssue,
+        CrossRuntimeDesignReviewDigest.PacketBytes? boundPacket)
     {
         var resolution = CrossRuntimeReviewPublishResolver.Resolve(
             context.RepoRoot, executionUnit, repo, context.Config.CrossRuntimeReview);
@@ -2142,7 +2151,9 @@ internal static class IssuePublishFlowCommand
                 {
                     Decision = CrossRuntimeReviewGate.DecisionIdempotentNotGated,
                     Reasons = [],
-                    Digest = TryComputePacketDigest(packetDirectory),
+                    Digest = boundPacket is null
+                        ? TryComputePacketDigest(packetDirectory)
+                        : CrossRuntimeDesignReviewDigest.Compute(boundPacket),
                     Domain = resolution.Domain,
                     Team = resolution.Team,
                 }
@@ -2187,7 +2198,9 @@ internal static class IssuePublishFlowCommand
             return null;
         }
 
-        return EvaluateDeclaredDesignGate(context, resolution, packetDirectory);
+        return boundPacket is null
+            ? EvaluateDeclaredDesignGate(context, resolution, packetDirectory)
+            : EvaluateDeclaredDesignGate(context, resolution, boundPacket);
     }
 
     private static IssuePublishFlowResult? TryBuildResolutionRefusal(
@@ -2528,7 +2541,8 @@ internal static class IssuePublishFlowCommand
             readingPacketPath = implementationPath;
             implementation = File.ReadAllBytes(implementationPath);
         }
-        catch (IOException exception)
+        catch (Exception exception) when (exception is IOException
+            || (scopeSources is not null && exception is UnauthorizedAccessException))
         {
             if (scopeSources is not null)
             {

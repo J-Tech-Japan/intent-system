@@ -566,6 +566,209 @@ public sealed class G835PublishFlowTests : IDisposable
     }
 
     [Theory]
+    [InlineData("review-context", "json")]
+    [InlineData("review-context", "markdown")]
+    [InlineData("implementation", "json")]
+    [InlineData("implementation", "markdown")]
+    public void PublishFlow_DeclaredPacketReadPermissionFailureAfterLookupReturnsUnavailable(
+        string target, string format)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("Unix permission-denied fixture requires Unix file modes.");
+        }
+
+        if (!G841TestHelpers.IsNonRootUnixUser())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("Unix permission-denied fixture requires a non-root test user.");
+        }
+
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        var source = workspace.WritePinnedSourcePacket(Unit, Repo, Team);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
+
+        var targetPath = Path.Combine(workspace.PacketDirectory(Unit), target + ".md");
+        var originalMode = File.GetUnixFileMode(targetPath);
+        var packetDirectorySnapshot = Directory.EnumerateFiles(workspace.PacketDirectory(Unit))
+            .ToDictionary(path => Path.GetFileName(path)!, File.ReadAllBytes, StringComparer.Ordinal);
+        var deniedReadReached = false;
+        var checker = new CallbackExistingIssueChecker(
+            new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.None },
+            () =>
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    throw new PlatformNotSupportedException("Unix permission-denied fixture requires Unix file modes.");
+                }
+                File.SetUnixFileMode(targetPath, UnixFileMode.None);
+                Assert.True(File.Exists(targetPath));
+                Assert.Throws<UnauthorizedAccessException>(() => File.ReadAllBytes(targetPath));
+                deniedReadReached = true;
+            });
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8691");
+        var creatorFactoryCalls = 0;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () =>
+        {
+            creatorFactoryCalls++;
+            return creator;
+        };
+
+        try
+        {
+            var (exit, output) = Run(workspace, Unit, Repo, write: true, team: Team, format: format);
+
+            Assert.Equal(1, exit);
+            Assert.True(deniedReadReached);
+            Assert.Equal(1, checker.CallCount);
+            Assert.Equal(0, creatorFactoryCalls);
+            Assert.Equal(0, creator.CallCount);
+            Assert.True(File.Exists(source.ArtifactPath));
+            AssertDurableStateUntouched(workspace);
+
+            var relativePath = $".intent-cli/issues/{Unit}/{target}.md";
+            if (format == "json")
+            {
+                using var result = JsonDocument.Parse(output);
+                var root = result.RootElement;
+                Assert.Equal(CrossRuntimeReviewCauses.PacketMissing, root.GetProperty("cause").GetString());
+                Assert.StartsWith("packet file is missing:", root.GetProperty("error").GetString(), StringComparison.Ordinal);
+                Assert.False(root.GetProperty("created").GetBoolean());
+                Assert.False(root.GetProperty("idempotent").GetBoolean());
+                Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
+                var sources = root.GetProperty("scope_sources");
+                Assert.Equal("unavailable", sources.GetProperty("state").GetString());
+                Assert.Equal("scope-sources-packet-unavailable", sources.GetProperty("cause").GetString());
+                var diagnostic = Assert.Single(sources.GetProperty("diagnostics").EnumerateArray());
+                Assert.Equal(relativePath, diagnostic.GetProperty("path").GetString());
+                Assert.Contains("became unavailable before create", diagnostic.GetProperty("detail").GetString(), StringComparison.Ordinal);
+                AssertNullOrMissing(sources, "provenance");
+                AssertNullOrMissing(sources, "expected_provenance_block");
+            }
+            else
+            {
+                Assert.Contains(CrossRuntimeReviewCauses.PacketMissing, output, StringComparison.Ordinal);
+                Assert.Contains("packet file is missing:", output, StringComparison.Ordinal);
+                Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+                Assert.Contains(relativePath, output, StringComparison.Ordinal);
+                Assert.Contains("became unavailable before create", output, StringComparison.Ordinal);
+                Assert.Contains("\"state\": \"unavailable\"", output, StringComparison.Ordinal);
+                Assert.Contains("- created: no", output, StringComparison.Ordinal);
+                Assert.Contains("- idempotent: no", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Expected provenance block", output, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            File.SetUnixFileMode(targetPath, originalMode);
+        }
+
+        Assert.Equal(packetDirectorySnapshot.Keys.Order(StringComparer.Ordinal),
+            Directory.EnumerateFiles(workspace.PacketDirectory(Unit)).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        foreach (var (name, bytes) in packetDirectorySnapshot)
+        {
+            Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(workspace.PacketDirectory(Unit), name)));
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_DeclaredInitialSnapshotPermissionFailureReturnsUnavailablePath(string format)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("Unix permission-denied fixture requires Unix file modes.");
+        }
+
+        if (!G841TestHelpers.IsNonRootUnixUser())
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("Unix permission-denied fixture requires a non-root test user.");
+        }
+
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        var source = workspace.WritePinnedSourcePacket(Unit, Repo, Team);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.CaptureDurableBaseline();
+
+        var targetPath = Path.Combine(workspace.PacketDirectory(Unit), "review-context.md");
+        var originalMode = File.GetUnixFileMode(targetPath);
+        var packetDirectorySnapshot = Directory.EnumerateFiles(workspace.PacketDirectory(Unit))
+            .ToDictionary(path => Path.GetFileName(path)!, File.ReadAllBytes, StringComparer.Ordinal);
+        File.SetUnixFileMode(targetPath, UnixFileMode.None);
+        var deniedReadReached = false;
+
+        var checker = new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8692");
+        var checkerFactoryCalls = 0;
+        var creatorFactoryCalls = 0;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () =>
+        {
+            checkerFactoryCalls++;
+            return checker;
+        };
+        IssuePublishFlowCommand.CreatorFactory = () =>
+        {
+            creatorFactoryCalls++;
+            return creator;
+        };
+
+        try
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => File.ReadAllBytes(targetPath));
+            deniedReadReached = true;
+            var (exit, output) = Run(workspace, Unit, Repo, write: true, team: Team, format: format);
+
+            Assert.Equal(1, exit);
+            Assert.True(deniedReadReached);
+            Assert.Equal(0, checkerFactoryCalls);
+            Assert.Equal(0, checker.CallCount);
+            Assert.Equal(0, creatorFactoryCalls);
+            Assert.Equal(0, creator.CallCount);
+            Assert.True(File.Exists(source.ArtifactPath));
+            AssertDurableStateUntouched(workspace);
+
+            const string relativePath = $".intent-cli/issues/{Unit}/review-context.md";
+            if (format == "json")
+            {
+                using var result = JsonDocument.Parse(output);
+                var root = result.RootElement;
+                Assert.Equal("scope-sources-packet-unavailable", root.GetProperty("cause").GetString());
+                var sources = root.GetProperty("scope_sources");
+                Assert.Equal("unavailable", sources.GetProperty("state").GetString());
+                Assert.Equal("scope-sources-packet-unavailable", sources.GetProperty("cause").GetString());
+                var diagnostic = Assert.Single(sources.GetProperty("diagnostics").EnumerateArray());
+                Assert.Equal(relativePath, diagnostic.GetProperty("path").GetString());
+                Assert.Contains("unreadable before GitHub lookup", diagnostic.GetProperty("detail").GetString(), StringComparison.Ordinal);
+                AssertNullOrMissing(sources, "provenance");
+                AssertNullOrMissing(sources, "expected_provenance_block");
+            }
+            else
+            {
+                Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+                Assert.Contains(relativePath, output, StringComparison.Ordinal);
+                Assert.Contains("unreadable before GitHub lookup", output, StringComparison.Ordinal);
+                Assert.Contains("\"state\": \"unavailable\"", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            File.SetUnixFileMode(targetPath, originalMode);
+        }
+
+        Assert.Equal(packetDirectorySnapshot.Keys.Order(StringComparer.Ordinal),
+            Directory.EnumerateFiles(workspace.PacketDirectory(Unit)).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        foreach (var (name, bytes) in packetDirectorySnapshot)
+        {
+            Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(workspace.PacketDirectory(Unit), name)));
+        }
+    }
+
+    [Theory]
     [InlineData("lookup-none", "json")]
     [InlineData("lookup-none", "markdown")]
     [InlineData("lookup-unique", "json")]
