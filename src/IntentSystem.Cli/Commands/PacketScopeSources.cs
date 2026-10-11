@@ -233,13 +233,26 @@ internal static class PacketScopeSources
     }
 
     internal static bool HasDeclarationOrMisplacedDeclaration(string packetYaml)
+        => HasDeclarationOrMisplacedDeclaration(packetYaml, out _);
+
+    /// <summary>
+    /// Determines whether callers must inspect the original packet bytes, while separately
+    /// reporting whether this text positively contains a source declaration. A replacement
+    /// character may be valid UTF-8 or the result of a lossy text read, so it cannot prove
+    /// either presence or absence on its own.
+    /// </summary>
+    internal static bool HasDeclarationOrMisplacedDeclaration(string packetYaml, out bool observedDeclaration)
     {
+        observedDeclaration = false;
         try
         {
+            var bytes = StrictUtf8.GetBytes(packetYaml);
+            observedDeclaration = HasDeclarationOrMisplacedDeclaration(bytes, malformedMeansDeclaration: false);
+
             // Text obtained through the legacy title reader may have been decoded with
-            // replacement fallback. Do not use it to prove absence after lossy decoding.
-            if (packetYaml.Contains('\uFFFD')) return true;
-            return HasDeclarationOrMisplacedDeclaration(StrictUtf8.GetBytes(packetYaml));
+            // replacement fallback. Route it to a raw-byte probe, but do not mistake a
+            // valid literal U+FFFD in a legacy packet for an observed opt-in declaration.
+            return packetYaml.Contains('\uFFFD') || HasDeclarationOrMisplacedDeclaration(bytes);
         }
         catch (EncoderFallbackException)
         {

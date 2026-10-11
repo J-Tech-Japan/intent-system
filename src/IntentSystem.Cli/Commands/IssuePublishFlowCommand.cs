@@ -389,8 +389,10 @@ internal static class IssuePublishFlowCommand
         string? scopePacketDigest = null;
         var recheckLocalClaim = false;
         var sourcePacketYamlPath = Path.Combine(packetDirectory, "packet.yaml");
-        if (packetYamlForSourceHint is not null
-            && PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packetYamlForSourceHint))
+        var initialSourceDeclarationObserved = false;
+        var requiresSourceByteProbe = packetYamlForSourceHint is not null
+            && PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packetYamlForSourceHint, out initialSourceDeclarationObserved);
+        if (requiresSourceByteProbe)
         {
             try
             {
@@ -454,7 +456,7 @@ internal static class IssuePublishFlowCommand
                         }
                     }
                 }
-                else
+                else if (initialSourceDeclarationObserved)
                 {
                     // The title snapshot already established opt-in. A later absent
                     // or explicit-empty declaration cannot downgrade this invocation

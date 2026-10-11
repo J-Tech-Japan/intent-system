@@ -112,23 +112,34 @@ public sealed class G841PublishFlowTests : IDisposable
     }
 
     [Theory]
-    [InlineData("absent", "json")]
-    [InlineData("absent", "markdown")]
-    [InlineData("empty", "json")]
-    [InlineData("empty", "markdown")]
-    public void PublishFlow_InitialOptInCannotBeDowngradedByLaterAbsentOrEmptySnapshot_G863(string mutation, string format)
+    [InlineData("absent", "json", false)]
+    [InlineData("absent", "markdown", false)]
+    [InlineData("empty", "json", false)]
+    [InlineData("empty", "markdown", false)]
+    [InlineData("absent", "json", true)]
+    [InlineData("absent", "markdown", true)]
+    [InlineData("empty", "json", true)]
+    [InlineData("empty", "markdown", true)]
+    public void PublishFlow_InitialOptInCannotBeDowngradedByLaterAbsentOrEmptySnapshot_G863(
+        string mutation, string format, bool includeReplacementCharacter = false)
     {
         const string sourceUnit = "G835PF";
         const string sourceTeam = G841TestHelpers.Team;
         const string sourceRepo = G841TestHelpers.Repo;
         using var workspace = new G835PublishFlowTests.G835PublishFlowWorkspace(declare: true);
         workspace.WritePinnedSourcePacket(sourceUnit, sourceRepo, sourceTeam);
+        var packetPath = Path.Combine(workspace.PacketDirectory(sourceUnit), "packet.yaml");
+        if (includeReplacementCharacter)
+        {
+            var initialPacket = File.ReadAllText(packetPath).Replace(
+                "scope_sources:", "legacy_note: \"literal � in legacy text\"\nscope_sources:", StringComparison.Ordinal);
+            File.WriteAllText(packetPath, initialPacket);
+        }
         workspace.SeedQueueState(sourceUnit, "G835PF publish title");
         workspace.RecordSatisfiedDesignReviewsViaCommand(sourceUnit);
         workspace.CaptureDurableBaseline();
         var gitBefore = workspace.InitializeGitAndCapture();
 
-        var packetPath = Path.Combine(workspace.PacketDirectory(sourceUnit), "packet.yaml");
         var originalPacket = File.ReadAllText(packetPath);
         var sourceStart = originalPacket.LastIndexOf("\nscope_sources:", StringComparison.Ordinal);
         Assert.True(sourceStart >= 0, "the prepared packet must begin opted in");
@@ -239,6 +250,178 @@ public sealed class G841PublishFlowTests : IDisposable
             Assert.Equal("packet-changed", diagnostic.GetProperty("cause").GetString());
             Assert.Equal($".intent-cli/issues/{sourceUnit}/packet.yaml", diagnostic.GetProperty("path").GetString());
         }
+    }
+
+    [Theory]
+    [InlineData("absent", "json", false)]
+    [InlineData("absent", "json", true)]
+    [InlineData("absent", "markdown", false)]
+    [InlineData("absent", "markdown", true)]
+    [InlineData("empty", "json", false)]
+    [InlineData("empty", "json", true)]
+    [InlineData("empty", "markdown", false)]
+    [InlineData("empty", "markdown", true)]
+    public void PublishFlow_ValidReplacementCharacterInLegacyPacketPreservesLegacyBehavior_G863(
+        string sourceShape, string format, bool write)
+    {
+        const string unit = "G835PF";
+        const string repo = "J-Tech-Japan/intent-system";
+        const string title = "G835PF Publish-flow design gate";
+        using var baseline = new G835PublishFlowTests.G835PublishFlowWorkspace(declare: true);
+        using var replacement = new G835PublishFlowTests.G835PublishFlowWorkspace(declare: true);
+        Prepare(baseline, includeReplacementCharacter: false);
+        Prepare(replacement, includeReplacementCharacter: true);
+
+        var baselineDigest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(baseline.PacketDirectory(unit));
+        var replacementDigest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(replacement.PacketDirectory(unit));
+        var expected = RunLegacy(baseline);
+        var actual = RunLegacy(replacement);
+
+        Assert.Equal(expected.ExitCode, actual.ExitCode);
+        Assert.Equal(expected.ClockCalls, actual.ClockCalls);
+        Assert.Equal(write ? 1 : 0, expected.CheckerCalls);
+        Assert.Equal(expected.CheckerCalls, actual.CheckerCalls);
+        Assert.Equal(write ? 1 : 0, expected.CreatorCalls);
+        Assert.Equal(expected.CreatorCalls, actual.CreatorCalls);
+        if (write)
+        {
+            Assert.Equal(1, actual.CreatorCalls);
+        }
+        Assert.True(File.ReadAllBytes(Path.Combine(replacement.PacketDirectory(unit), "packet.yaml"))
+            .AsSpan().IndexOf(Encoding.UTF8.GetBytes("�")) >= 0);
+
+        if (format == "json")
+        {
+            var expectedNode = System.Text.Json.Nodes.JsonNode.Parse(
+                NormalizePublishOutput((expected.ExitCode, expected.Output)).Json)!.AsObject();
+            var actualNode = System.Text.Json.Nodes.JsonNode.Parse(
+                NormalizePublishOutput((actual.ExitCode, actual.Output)).Json)!.AsObject();
+            expectedNode["cross_runtime_design_review"]!["digest"] = "<packet-digest>";
+            actualNode["cross_runtime_design_review"]!["digest"] = "<packet-digest>";
+            Assert.Equal(expectedNode.ToJsonString(), actualNode.ToJsonString());
+            using var output = JsonDocument.Parse(actual.Output);
+            Assert.False(output.RootElement.TryGetProperty("scope_sources", out _));
+            Assert.Equal(write, output.RootElement.GetProperty("created").GetBoolean());
+        }
+        else
+        {
+            Assert.Equal(
+                NormalizeLegacyMarkdown(expected.Output, baseline.RootPath, baselineDigest),
+                NormalizeLegacyMarkdown(actual.Output, replacement.RootPath, replacementDigest));
+            Assert.DoesNotContain("## scope_sources", actual.Output, StringComparison.Ordinal);
+            Assert.Contains(write ? "- created: yes" : "- created: no", actual.Output, StringComparison.Ordinal);
+        }
+
+        void Prepare(G835PublishFlowTests.G835PublishFlowWorkspace workspace, bool includeReplacementCharacter)
+        {
+            workspace.WriteFullPacket(unit, repo);
+            if (sourceShape == "empty")
+            {
+                File.AppendAllText(Path.Combine(workspace.PacketDirectory(unit), "packet.yaml"),
+                    "\nscope_sources: []\nscope_source_digests: {}\n");
+            }
+            if (includeReplacementCharacter)
+            {
+                File.AppendAllText(Path.Combine(workspace.PacketDirectory(unit), "packet.yaml"),
+                    "\nlegacy_note: \"literal � in legacy text\"\n");
+            }
+            workspace.SeedQueueState(unit, title);
+            workspace.RecordSatisfiedDesignReviews(unit);
+        }
+
+        (int ExitCode, string Output, int ClockCalls, int CheckerCalls, int CreatorCalls) RunLegacy(
+            G835PublishFlowTests.G835PublishFlowWorkspace workspace)
+        {
+            var checker = new RecordingExistingIssueChecker(new StubExistingIssueChecker(GitHubExistingIssueClassification.None));
+            var creator = new RecordingLegacyIssueCreator($"https://github.com/{repo}/issues/8638");
+            var clockCalls = 0;
+            IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+            IssuePublishFlowCommand.CreatorFactory = () => creator;
+            IssuePublishFlowCommand.UtcNowFactory = () =>
+            {
+                clockCalls++;
+                return new DateTimeOffset(2026, 10, 10, 12, 0, 1, TimeSpan.Zero);
+            };
+            var args = new List<string>
+            {
+                unit, "--repo", repo, "--domain", G841TestHelpers.Domain,
+                "--team", G841TestHelpers.Team, "--format", format,
+            };
+            if (write) args.Add("--write");
+            using var writer = new StringWriter();
+            var exit = IssuePublishFlowCommand.Execute(workspace.Context, args.ToArray(), writer);
+            return (exit, writer.ToString(), clockCalls, checker.CallCount, creator.CallCount);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_InvalidUtf8ReplacementReadFailsClosedAfterRawByteProbe_G863(string format)
+    {
+        const string unit = "G835PF";
+        const string repo = "J-Tech-Japan/intent-system";
+        using var workspace = new G835PublishFlowTests.G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(unit, repo);
+        var packetPath = Path.Combine(workspace.PacketDirectory(unit), "packet.yaml");
+        File.AppendAllText(packetPath, "\nlegacy_note: \"literal � in legacy text\"\n");
+        workspace.SeedQueueState(unit, "G835PF Publish-flow design gate");
+        workspace.RecordSatisfiedDesignReviews(unit);
+        workspace.CaptureDurableBaseline();
+
+        var originalReader = PacketFileReader.ReadAllText;
+        var originalBytes = File.ReadAllBytes(packetPath);
+        var replacementBytes = Encoding.UTF8.GetBytes("�");
+        var marker = FindBytes(originalBytes, replacementBytes);
+        Assert.True(marker >= 0);
+        var malformedBytes = originalBytes[..marker].Concat(new byte[] { 0xff })
+            .Concat(originalBytes[(marker + replacementBytes.Length)..]).ToArray();
+        var reachedTitleRead = false;
+        var checker = new RecordingExistingIssueChecker(new StubExistingIssueChecker(GitHubExistingIssueClassification.None));
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () => throwingCreator;
+        PacketFileReader.ReadAllText = path =>
+        {
+            var text = originalReader(path);
+            if (!reachedTitleRead && StringComparer.Ordinal.Equals(Path.GetFullPath(path), Path.GetFullPath(packetPath)))
+            {
+                reachedTitleRead = true;
+                File.WriteAllBytes(packetPath, malformedBytes);
+            }
+            return text;
+        };
+
+        (int ExitCode, string Output) result;
+        try
+        {
+            var args = new[]
+            {
+                unit, "--repo", repo, "--domain", G841TestHelpers.Domain,
+                "--team", G841TestHelpers.Team, "--format", format, "--write",
+            };
+            using var writer = new StringWriter();
+            result = (IssuePublishFlowCommand.Execute(workspace.Context, args, writer), writer.ToString());
+        }
+        finally
+        {
+            PacketFileReader.ReadAllText = originalReader;
+        }
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(reachedTitleRead);
+        Assert.Equal(malformedBytes, File.ReadAllBytes(packetPath));
+        Assert.Equal(0, checker.CallCount);
+        Assert.Equal(0, throwingCreator.CallCount);
+        workspace.AssertDurableBaselineUntouched(unit);
+
+        using var json = ParsePublishJson(result.Output, format);
+        var root = json.RootElement;
+        var sources = format == "json" ? root.GetProperty("scope_sources") : root;
+        Assert.Equal("unavailable", sources.GetProperty("state").GetString());
+        Assert.Equal("scope-sources-packet-unavailable", sources.GetProperty("cause").GetString());
+        AssertJsonAbsentOrNull(sources, "provenance");
+        AssertJsonAbsentOrNull(sources, "expected_provenance_block");
+        Assert.Equal("packet-unparseable", sources.GetProperty("diagnostics")[0].GetProperty("cause").GetString());
     }
 
     [Fact]
@@ -916,6 +1099,24 @@ public sealed class G841PublishFlowTests : IDisposable
         return (result.ExitCode, node.ToJsonString());
     }
 
+    private static string NormalizeLegacyMarkdown(string output, string rootPath, string packetDigest) =>
+        output.Replace(rootPath, "<workspace>", StringComparison.Ordinal)
+            .Replace(packetDigest, "<packet-digest>", StringComparison.Ordinal);
+
+    private static JsonDocument ParsePublishJson(string output, string format)
+    {
+        if (format == "json") return JsonDocument.Parse(output);
+        const string marker = "```json\n";
+        var start = output.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, output);
+        start += marker.Length;
+        var end = output.IndexOf("\n```", start, StringComparison.Ordinal);
+        Assert.True(end > start, output);
+        return JsonDocument.Parse(output[start..end]);
+    }
+
+    private static int FindBytes(byte[] source, byte[] value) => source.AsSpan().IndexOf(value);
+
     private void AssertZeroCreates() => Assert.Equal(0, throwingCreator.CallCount);
 
     private GatedPacketRefusalResult AssertGatedPacketRefusal(
@@ -1234,6 +1435,17 @@ public sealed class G841PublishFlowTests : IDisposable
         {
             CallCount++;
             throw new InvalidOperationException("must not create");
+        }
+    }
+
+    private sealed class RecordingLegacyIssueCreator(string issueUrl) : IIssueCreator
+    {
+        public int CallCount { get; private set; }
+
+        public IssueCreateOutcome CreateIssue(string repo, string title, string bodyFilePath)
+        {
+            CallCount++;
+            return new IssueCreateOutcome(issueUrl);
         }
     }
 
