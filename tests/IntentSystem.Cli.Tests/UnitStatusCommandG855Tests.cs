@@ -2492,6 +2492,70 @@ public sealed class UnitStatusCommandG855Tests
     }
 
     [Theory]
+    [InlineData("implementation.md", "json")]
+    [InlineData("implementation.md", "markdown")]
+    [InlineData("review-context.md", "json")]
+    [InlineData("review-context.md", "markdown")]
+    [InlineData("github-body.md", "json")]
+    [InlineData("github-body.md", "markdown")]
+    public void MissingPacketWithUnreadableSupportMemberKeepsLegacyPacketUnparseableResult(string supportMember, string format)
+    {
+        using var host = new TempHost();
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact();
+
+        var issueDirectory = Path.Combine(host.Root, ".intent-cli", "issues", "G855");
+        var packetPath = Path.Combine(issueDirectory, "packet.yaml");
+        var supportPath = Path.Combine(issueDirectory, supportMember);
+        File.Delete(packetPath);
+        File.Delete(supportPath);
+        Directory.CreateDirectory(supportPath);
+        var before = SnapshotFiles(host.Root);
+        var reader = CreateKnownSixProvenanceLimitsReader();
+
+        var output = RunStatusOutput(host, reader, format, out var exit);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(before, SnapshotFiles(host.Root));
+        Assert.Equal(1, reader.ClaimReads);
+        Assert.Equal(1, reader.GitHubReads);
+        if (format == "json")
+        {
+            using var report = JsonDocument.Parse(output);
+            var fact = FindBugSource(report.RootElement);
+            Assert.Equal("unavailable", fact.GetProperty("state").GetString());
+            Assert.Equal("packet-unparseable", fact.GetProperty("cause").GetString());
+            Assert.Equal("The packet source declaration could not be read from an unparseable packet.",
+                fact.GetProperty("detail").GetString());
+            Assert.Equal("read-failure", fact.GetProperty("unavailable_class").GetString());
+            Assert.False(fact.TryGetProperty("scope_sources", out _));
+
+            var allFacts = report.RootElement.GetProperty("steps").EnumerateArray()
+                .SelectMany(step => step.GetProperty("subchecks").EnumerateArray()).ToArray();
+            var summary = report.RootElement.GetProperty("summary");
+            Assert.Equal(allFacts.Count(item => item.GetProperty("state").GetString() == "unavailable"),
+                summary.GetProperty("state_counts").GetProperty("unavailable").GetInt32());
+            Assert.Equal(allFacts.Count(item => item.TryGetProperty("unavailable_class", out var value)
+                    && value.ValueKind == JsonValueKind.String
+                    && value.GetString() == "read-failure"),
+                summary.GetProperty("unavailable_class_counts").GetProperty("read-failure").GetInt32());
+            AssertKnownSixProvenanceLimits(report.RootElement, expectedObservationExitCode: 1);
+        }
+        else
+        {
+            Assert.Contains("subcheck `bug-chain-or-ruling`: **unavailable**", output, StringComparison.Ordinal);
+            Assert.Contains("cause: `packet-unparseable`", output, StringComparison.Ordinal);
+            Assert.Contains("detail: `The packet source declaration could not be read from an unparseable packet.`", output, StringComparison.Ordinal);
+            AssertMarkdownFactUnavailableClass(output, "bug-chain-or-ruling", "read-failure");
+            Assert.DoesNotContain("scope_sources:", output, StringComparison.Ordinal);
+            Assert.Contains("- state_counts: ", output, StringComparison.Ordinal);
+            Assert.Contains("- unavailable_class_counts: ", output, StringComparison.Ordinal);
+            Assert.Contains("read-failure=", output, StringComparison.Ordinal);
+            AssertKnownSixProvenanceLimitsInMarkdown(output);
+        }
+    }
+
+    [Theory]
     [InlineData("architect", "design-claim-release")]
     [InlineData("builder", "implementation-claim-release")]
     public void EarlierReleaseCannotSatisfyAReacquiredActiveClaimEpoch(string actor, string releaseFactId)

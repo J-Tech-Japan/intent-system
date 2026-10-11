@@ -514,7 +514,7 @@ internal static class UnitStatusCommand
                 with { Evidence = packetEvidence });
             facts.Add(Unavailable("guide-declaration", "guide-declaration-unreadable", "Current packet declaration cannot be read.", UnitStatusStates.ReadFailure)
                 with { Evidence = [EvidenceFile("packet", packetPath, unit, "current-packet-file")] });
-            AddSourceArtifactFact(facts, root, unit, packetPath, packet, yaml, packetFileMissing, observedAt, domain, team, repo);
+            AddSourceArtifactFact(facts, root, unit, packetPath, packet, yaml, false, observedAt, domain, team, repo);
             return;
         }
         if (yaml is null)
