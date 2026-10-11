@@ -272,7 +272,7 @@ internal static class UnitStatusCommand
                 UnitStatusStates.NotApplicable, "recorded-non-solo-mode", "All solo-conductor phases are not applicable.", null, mode);
         }
 
-        AddPacketFacts(facts, unit, root, packetDir, packetYaml, packetError, packetFileMissing, packet);
+        AddPacketFacts(facts, unit, root, packetDir, packetYaml, packetError, packetFileMissing, packet, observedAt, domain, team, repo);
         AddQueueAndPublishFacts(facts, root, unit, domain, repo, issue, pr, publish, publishError,
             out var queueItem, out var queuePath, out var runEvents, out var runsPath, out var queueReadError, out var runsReadError);
         if (queueScanError is not null)
@@ -469,7 +469,8 @@ internal static class UnitStatusCommand
         IReadOnlyList<int> PullRequests,
         bool InvalidIdentity);
 
-    private static void AddPacketFacts(ICollection<UnitStatusFact> facts, string unit, string root, string directory, string? yaml, string? readError, bool packetFileMissing, PacketYamlDocument? packet)
+    private static void AddPacketFacts(ICollection<UnitStatusFact> facts, string unit, string root, string directory, string? yaml, string? readError, bool packetFileMissing, PacketYamlDocument? packet,
+        DateTimeOffset observedAt, string domain, string team, string? repo)
     {
         var packetPath = Path.Combine(".intent-cli", "issues", unit, "packet.yaml").Replace('\\', '/');
         var implementationPath = Path.Combine(directory, "implementation.md");
@@ -513,7 +514,7 @@ internal static class UnitStatusCommand
                 with { Evidence = packetEvidence });
             facts.Add(Unavailable("guide-declaration", "guide-declaration-unreadable", "Current packet declaration cannot be read.", UnitStatusStates.ReadFailure)
                 with { Evidence = [EvidenceFile("packet", packetPath, unit, "current-packet-file")] });
-            AddSourceArtifactFact(facts, root, unit, packetPath, packet);
+            AddSourceArtifactFact(facts, root, unit, packetPath, packet, yaml, false, observedAt, domain, team, repo);
             return;
         }
         if (yaml is null)
@@ -523,7 +524,7 @@ internal static class UnitStatusCommand
             facts.Add(packetFileMissing
                 ? Missing("guide-declaration", "packet-declaration-absent", "No packet was present to declare guide reachability.")
                 : Unavailable("guide-declaration", "guide-declaration-unreadable", "Current packet declaration cannot be read.", UnitStatusStates.ReadFailure));
-            AddSourceArtifactFact(facts, root, unit, packetPath, packet, packetFileMissing);
+            AddSourceArtifactFact(facts, root, unit, packetPath, packet, yaml, packetFileMissing, observedAt, domain, team, repo);
             return;
         }
         var validation = PreparedPacketCommitReadyAnalyzer.Analyze(new PreparedPacketCommitReadyInput
@@ -552,11 +553,153 @@ internal static class UnitStatusCommand
         }
         catch (Exception exception) when (IsReadException(exception))
         { facts.Add(Unavailable("guide-declaration", "guide-declaration-unreadable", exception.Message, UnitStatusStates.ReadFailure)); }
-        AddSourceArtifactFact(facts, root, unit, packetPath, packet, packetFileMissing);
+        AddSourceArtifactFact(facts, root, unit, packetPath, packet, yaml, packetFileMissing, observedAt, domain, team, repo);
     }
 
     private static void AddSourceArtifactFact(ICollection<UnitStatusFact> facts, string root, string unit,
-        string packetPath, PacketYamlDocument? packet, bool packetFileMissing = false)
+        string packetPath, PacketYamlDocument? packet, string? capturedPacketYaml, bool packetFileMissing,
+        DateTimeOffset observedAt, string domain, string team, string? repo)
+    {
+        if (packet is not null && capturedPacketYaml is not null
+            && PacketScopeSources.HasDeclarationOrMisplacedDeclaration(capturedPacketYaml, out _))
+        {
+            var absolutePacketPath = Path.Combine(root, packetPath.Replace('/', Path.DirectorySeparatorChar));
+            var bodyRelativePath = PacketRelativePath(unit, "github-body.md");
+            var absoluteBodyPath = Path.Combine(root, bodyRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(absolutePacketPath, out var packetBytes, out var packetFailure, out var packetReadError))
+            {
+                AddPacketScopeReadFailure(facts, unit, observedAt, packetPath, packetFailure, packetReadError);
+                return;
+            }
+
+            if (!PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packetBytes))
+            {
+                AddLegacySourceArtifactFact(facts, root, unit, packetPath, packet, packetFileMissing);
+                return;
+            }
+
+            if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(absoluteBodyPath, out var bodyBytes, out var bodyFailure, out var bodyReadError))
+            {
+                AddPacketScopeReadFailure(facts, unit, observedAt, bodyRelativePath, bodyFailure, bodyReadError);
+                return;
+            }
+
+            var source = PacketScopeSources.Evaluate(root, unit, packetBytes, bodyBytes, observedAt);
+            if (source.SourceDomain is { } sourceDomain
+                && source.SourceTeam is { } sourceTeam
+                && source.SourceTargetRepo is { } sourceRepo)
+            {
+                if (repo is null)
+                {
+                    const string detail = "Resolved status repository identity is unavailable; pinned source identity cannot be established.";
+                    var unresolved = source with
+                    {
+                        State = "unavailable",
+                        Cause = "scope-sources-status-identity-unresolved",
+                        Detail = detail,
+                        Provenance = null,
+                        ExpectedProvenanceBlock = null,
+                        Diagnostics = [new("scope-sources-status-identity-unresolved", null, detail)],
+                    };
+                    facts.Add(SourceFact(unresolved, unit, packetPath, identityConflict: false, applicabilityUnresolved: true));
+                    return;
+                }
+
+                if (!string.Equals(sourceDomain, domain, StringComparison.Ordinal)
+                    || !string.Equals(sourceTeam, team, StringComparison.Ordinal)
+                    || !string.Equals(sourceRepo, repo, StringComparison.Ordinal))
+                {
+                    const string detail = "Pinned source identity does not exactly match the resolved status domain, team and repository.";
+                    var conflict = source with
+                    {
+                        State = "unavailable",
+                        Cause = "scope-sources-identity-mismatch",
+                        Detail = detail,
+                        Provenance = null,
+                        ExpectedProvenanceBlock = null,
+                        Diagnostics = [new("scope-sources-identity-mismatch", null, detail)],
+                    };
+                    facts.Add(SourceFact(conflict, unit, packetPath, identityConflict: true, applicabilityUnresolved: false));
+                    return;
+                }
+            }
+
+            if (source.State == "not-declared")
+            {
+                AddLegacySourceArtifactFact(facts, root, unit, packetPath, packet, packetFileMissing);
+                return;
+            }
+
+            facts.Add(SourceFact(source, unit, packetPath,
+                identityConflict: source.Cause is "scope-sources-digest-mismatch" or "scope-sources-applicability-mismatch"
+                    or "scope-sources-identity-mismatch" or "scope-sources-ruling-conflict",
+                applicabilityUnresolved: false));
+            return;
+        }
+
+        AddLegacySourceArtifactFact(facts, root, unit, packetPath, packet, packetFileMissing);
+    }
+
+    private static void AddPacketScopeReadFailure(ICollection<UnitStatusFact> facts, string unit, DateTimeOffset observedAt,
+        string relativePath, CrossRuntimeReviewFileReadFailure failure, string error)
+    {
+        var detail = $"{failure}: {error}";
+        var normalizedRelativePath = relativePath.Replace('\\', '/');
+        var normalizedPacketPath = Path.Combine(".intent-cli", "issues", unit, "packet.yaml").Replace('\\', '/');
+        var source = new PacketScopeSources.Result(unit, "unavailable", "scope-sources-packet-unavailable", detail,
+            RulingArtifact.FormatTimestamp(observedAt), null, null,
+            [new("packet-read-failed", normalizedRelativePath, detail)], IsDeclared: true);
+        facts.Add(SourceFact(source, unit, normalizedPacketPath,
+            identityConflict: false, applicabilityUnresolved: false));
+    }
+
+    private static UnitStatusFact SourceFact(PacketScopeSources.Result source, string unit, string packetPath,
+        bool identityConflict, bool applicabilityUnresolved)
+    {
+        var state = source.Cause switch
+        {
+            "scope-sources-ruling-missing" or "scope-sources-ruling-inactive" or "scope-sources-provenance-mismatch" => UnitStatusStates.Missing,
+            "scope-sources-satisfied" when source.State == "satisfied" => UnitStatusStates.Done,
+            _ => UnitStatusStates.Unavailable,
+        };
+        var unavailableClass = state != UnitStatusStates.Unavailable
+            ? null
+            : applicabilityUnresolved ? UnitStatusStates.ApplicabilityUnresolved
+            : identityConflict ? UnitStatusStates.IdentityConflict
+            : UnitStatusStates.ReadFailure;
+        var evidence = new List<UnitStatusEvidencePointer>
+        {
+            EvidenceFile("packet", packetPath, unit, "current-packet-file"),
+        };
+        if (!identityConflict && source.Provenance is not null)
+        {
+            evidence.AddRange(source.Provenance.Select(item => new UnitStatusEvidencePointer
+            {
+                Kind = "ruling-artifact",
+                Path = item.Path,
+                RecordId = item.Reference.StartsWith("ruling:", StringComparison.Ordinal) ? item.Reference[7..] : null,
+                ExecutionUnit = item.ExecutionUnit,
+                Repo = item.TargetRepo,
+                Provenance = "current-local-pinned-ruling-observation",
+            }));
+        }
+        return new UnitStatusFact
+        {
+            Id = "bug-chain-or-ruling",
+            State = state,
+            Cause = source.Cause,
+            Detail = source.Detail,
+            UnavailableClass = unavailableClass,
+            Evidence = evidence,
+            RepairCommands = state == UnitStatusStates.Missing || state == UnitStatusStates.Unavailable
+                ? ["intent-cli packet validate-sources --execution-unit " + source.ExecutionUnit + " --format json"]
+                : [],
+            ScopeSources = source,
+        };
+    }
+
+    private static void AddLegacySourceArtifactFact(ICollection<UnitStatusFact> facts, string root, string unit,
+        string packetPath, PacketYamlDocument? packet, bool packetFileMissing)
     {
         if (packet is null)
         {

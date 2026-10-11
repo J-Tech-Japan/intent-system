@@ -1251,6 +1251,7 @@ src/IntentSystem.Cli/Commands/TaskingTaskPacketPreviewAnalyzer.cs	TaskingTaskPac
 src/IntentSystem.Cli/Commands/TaskingTaskPacketPreviewCommand.cs	TaskingTaskPacketPreviewCommand	1
 src/IntentSystem.Cli/Commands/TeamMode.cs	Options	3
 src/IntentSystem.Cli/Commands/TeamModeCapabilityMatrix.cs	AutomationStalledWorkCommand	33
+src/IntentSystem.Cli/Commands/UnitStatusCommand.cs	RulingArtifact	1
 src/IntentSystem.Cli/Commands/UnitStatusCommand.cs	UnitStatusReadAdapter	1
 src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	ClaimCommand	1
 src/IntentSystem.Cli/Commands/UnitStatusReadAdapter.cs	ClaimHistoryRecord	1

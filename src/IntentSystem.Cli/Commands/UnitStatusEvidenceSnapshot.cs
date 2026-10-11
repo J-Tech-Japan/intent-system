@@ -53,6 +53,8 @@ internal sealed record UnitStatusFact
     public IReadOnlyList<UnitStatusEvidencePointer> Evidence { get; init; } = [];
     public IReadOnlyList<string> RepairCommands { get; init; } = [];
     public string? RepairUnavailableReason { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }
 
 internal sealed record UnitStatusEvidencePointer

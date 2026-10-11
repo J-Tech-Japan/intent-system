@@ -829,6 +829,10 @@ packet author は local ruling を明示的に参照できます。2 つの sour
 参照が空でない場合、implementation identity に正確な execution unit、domain、team、target repository も必要です。
 scope を指定した `ruling show` の結果から、実際の lowercase digest をコピーしてください。
 
+旧 scalar field `ruling_artifact` は引き続き未対応です。ruling ID や filesystem path として推測・解釈しません。
+opt-in になるのは packet root の構造化された `scope_sources` と `scope_source_digests` だけです。これらが absent または empty なら
+従来の legacy source 動作を保ち、空でない構造化 declaration は legacy source alias より優先されます。
+
 ```yaml
 implementation_issue_packet:
   source_execution_unit: G100
@@ -857,9 +861,10 @@ intent-cli issue publish-flow G100 --domain intent-cli --team intent-cli-dev --r
 source の検証後、通常の body、facet、publish-flow check を実行します。design review は確認済み canonical ruling content を含みます。
 publish-flow は GitHub lookup の前と、create または idempotent repair の前に source を再確認します。参照、pin、provenance block を
 変更すると通常の4-file packet digest が変わるため、design review を新しく行ってください。local artifact だけでは remote 公開の証明に
-なりません。commit と plain-push の後、fresh clone で検証します。source を利用するのは packet validation、design review、
-`issue publish-flow` だけです。`unit-status`、queue/worker decision、`issue create`、`issue publish-reviewed`、他の publish や sync-body route
-はこの統合の対象外です。source #1867 と parent #1857 は open のままです。
+なりません。commit と plain-push の後、fresh clone で検証します。packet validation、design review、`issue publish-flow` は
+source を検証に利用します。`unit status` も pinned local ruling source を read-only observation として表示しますが、operator を認証せず、
+publication を確認せず、gate にも使いません。queue/worker decision、`issue create`、`issue publish-reviewed`、他の publish や sync-body route
+はこの integration の対象外です。source #1867 と parent #1857 は open のままです。
 
 ### 貼り付け evidence gate（G785）
 
