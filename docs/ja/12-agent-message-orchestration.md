@@ -4350,3 +4350,26 @@ local file を remote proof として扱ってはいけません。
 local write 成功後、operator が正確な artifact の Git commit を作成し、GitHub へ公開した後、fresh clone の
 `ruling show` / `ruling validate` で visibility を確認します。command 自身は常に publication を
 `not-verified` と報告します。詳細は [ruling command reference](08-command-reference.md) を参照してください。
+
+## packet pinned ruling source（G863）
+
+packet author は、明示した local ruling を packet root の `scope_sources` と
+`scope_source_digests` で参照できます。空でない参照一覧では、packet の
+`implementation_issue_packet` に正確な execution unit、domain、team、target repository
+が必要です。digest は同じ scope の `ruling show` が示す lowercase SHA-256 値を使います。
+
+`packet validate-sources` は read-only で、`config.toml` を必要としません。返す block を
+`github-body.md` に一度だけ記載します。block は source identity、digest、および
+`supplied-not-authenticated` / `not-verified` の状態を示します。相対 artifact path は validator result に
+別途表示され、block には入りません。decision や rationale も公開しません。
+
+source を使う場合は、既存の body、facet、`issue publish-flow` 検証より先にこの validator
+を実行します。design review request は canonical source content を含み、publish-flow は
+GitHub lookup 前と、issue 作成または idempotent repair の直前に source を再確認します。
+pin や block の変更は通常の packet digest を変えるため、新しい design review が必要です。
+local artifact を remote 公開の証明として扱わず、commit と plain-push 後に fresh clone で確認します。
+
+この source gate を読むのは packet validation、cross-runtime design review、
+`issue publish-flow` のみです。`unit-status`、worker decision、queue、`issue create`、
+`issue publish-reviewed`、sync-body などは対象外です。source #1867 と parent #1857 は
+引き続き open です。詳細は [packet command reference](08-command-reference.md) を参照してください。

@@ -5054,3 +5054,28 @@ After a successful local write, the operator separately commits and plain-pushes
 the exact artifact. Verify visibility from a fresh clone with `ruling show` or
 `ruling validate`; the command itself always reports publication as
 `not-verified`. See the [ruling command reference](08-command-reference.md).
+
+## Packet-pinned ruling sources (G863)
+
+G863 adds an opt-in source list at the packet root. Each `ruling:<id>` has an
+exact lowercase digest copied from `ruling show`, and the non-empty declaration
+also names `source_execution_unit`, `domain`, `team`, and `target_repo` inside
+`implementation_issue_packet`. Put the one exact public provenance block
+printed by `packet validate-sources` in `github-body.md`. The check is
+read-only, needs no `config.toml`, and reports supplied local evidence as
+`supplied-not-authenticated` and `not-verified`.
+
+Run `packet validate-sources` before the existing body, facet, and
+`issue publish-flow` checks. Design-review requests include the verified
+canonical source content. Publish-flow rechecks the active source before
+external lookup and at the final create or idempotent repair boundary. A
+deliberate pin or block change alters the ordinary four-file packet digest and
+requires fresh design reviews. To rely on an artifact, commit and plain-push it
+and validate from a fresh clone; the local command does not establish remote
+publication.
+
+This integration is limited to the read-only validator, cross-runtime design
+review, and `issue publish-flow`. `unit-status`, worker decisions, queue
+operations, `issue create`, `issue publish-reviewed`, sync-body, and other
+consumers remain outside the source gate. Source #1867 and parent #1857 remain
+open for broader follow-up work.
