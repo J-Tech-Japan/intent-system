@@ -981,6 +981,196 @@ public sealed class G835PublishFlowTests : IDisposable
     }
 
     [Theory]
+    [InlineData("same-local-claim", "json")]
+    [InlineData("same-local-claim", "markdown")]
+    [InlineData("changed-local-claim", "json")]
+    [InlineData("changed-local-claim", "markdown")]
+    public void PublishFlow_LateClaimRecheckUsesLocalEvidenceWithoutFetchingAdvancedOfflineOrigin(
+        string scenario, string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        var source = workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.InitializeGitAndCapture();
+        var initialClaim = ClaimOwnershipVerifier.Verify(
+            workspace.RootPath, $"execution-unit:{Unit}", UndeclaredTeam);
+        Assert.True(initialClaim.Passed, initialClaim.Detail);
+        Assert.True(initialClaim.StoreConfigured, initialClaim.Detail);
+        Assert.Equal(ClaimOwnershipVerification.StatusOwned, initialClaim.Status);
+
+        G835PublishFlowWorkspace.GitSnapshot? refsBeforeLateCheck = null;
+        var lateBoundaryReached = false;
+        var checker = new CallbackExistingIssueChecker(
+            new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.None },
+            () =>
+            {
+                lateBoundaryReached = true;
+                refsBeforeLateCheck = workspace.CaptureGitState();
+                workspace.AdvanceOriginClaimTeam(Unit, "remote-advanced-team");
+                if (scenario == "changed-local-claim")
+                {
+                    workspace.WriteClaim(Unit, "late-local-team");
+                    workspace.CaptureDurableBaseline();
+                }
+                workspace.MakeOriginUnavailable();
+            });
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8682");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        var (exit, output) = Run(workspace, Unit, OtherRepo, write: true,
+            team: UndeclaredTeam, format: format);
+
+        Assert.True(lateBoundaryReached);
+        Assert.NotNull(refsBeforeLateCheck);
+        workspace.AssertGitStateUnchanged(refsBeforeLateCheck!);
+        Assert.Equal(1, checker.CallCount);
+        if (scenario == "same-local-claim")
+        {
+            Assert.Equal(0, exit);
+            Assert.Equal(1, creator.CallCount);
+            Assert.True(File.Exists(workspace.PublishYamlPath(Unit)));
+            Assert.Equal(File.ReadAllBytes(workspace.GithubBodyPath(Unit)), creator.LastBodyBytes);
+            if (format == "json")
+            {
+                using var result = JsonDocument.Parse(output);
+                Assert.True(result.RootElement.GetProperty("created").GetBoolean());
+                Assert.Equal("satisfied", result.RootElement.GetProperty("scope_sources").GetProperty("state").GetString());
+                Assert.Equal(source.Digest,
+                    result.RootElement.GetProperty("scope_sources").GetProperty("provenance")[0].GetProperty("sha256").GetString());
+            }
+            else
+            {
+                Assert.Contains("- created: yes", output, StringComparison.Ordinal);
+                Assert.Contains("\"state\": \"satisfied\"", output, StringComparison.Ordinal);
+                Assert.Contains(source.Digest, output, StringComparison.Ordinal);
+            }
+        }
+        else
+        {
+            Assert.Equal(1, exit);
+            Assert.Equal(0, creator.CallCount);
+            AssertDurableStateUntouched(workspace);
+            if (format == "json")
+            {
+                using var result = JsonDocument.Parse(output);
+                Assert.Equal("scope-sources-identity-mismatch", result.RootElement.GetProperty("cause").GetString());
+                var sources = result.RootElement.GetProperty("scope_sources");
+                Assert.Equal("scope-sources-identity-mismatch", sources.GetProperty("cause").GetString());
+                Assert.Contains("held-by-other-team", sources.GetProperty("diagnostics")[0].GetProperty("cause").GetString(), StringComparison.Ordinal);
+                AssertNullOrMissing(sources, "provenance");
+                AssertNullOrMissing(sources, "expected_provenance_block");
+            }
+            else
+            {
+                Assert.Contains("scope-sources-identity-mismatch", output, StringComparison.Ordinal);
+                Assert.Contains("held-by-other-team", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+                Assert.Contains("- created: no", output, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_MalformedLocalClaimAfterLookupIsStructuredRefusal(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueState(Unit, Title());
+        var claimPath = Path.Combine(workspace.ClaimsDirectory,
+            ClaimCommand.ClaimPath($"execution-unit:{Unit}").Split('/').Last());
+        var checker = new CallbackExistingIssueChecker(
+            new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.None },
+            () =>
+            {
+                File.WriteAllText(claimPath, "{ malformed");
+                workspace.CaptureDurableBaseline();
+            });
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8683");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        var (exit, output) = Run(workspace, Unit, OtherRepo, write: true,
+            team: UndeclaredTeam, format: format);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(1, checker.CallCount);
+        Assert.Equal(0, creator.CallCount);
+        AssertDurableStateUntouched(workspace);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            var sources = result.RootElement.GetProperty("scope_sources");
+            Assert.Equal("scope-sources-identity-mismatch", sources.GetProperty("cause").GetString());
+            Assert.Contains("claim-verification-invalid", sources.GetProperty("diagnostics")[0].GetProperty("cause").GetString(), StringComparison.Ordinal);
+            AssertNullOrMissing(sources, "provenance");
+            AssertNullOrMissing(sources, "expected_provenance_block");
+        }
+        else
+        {
+            Assert.Contains("scope-sources-identity-mismatch", output, StringComparison.Ordinal);
+            Assert.Contains("claim-verification-invalid", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+            Assert.Contains("- created: no", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_NonregularLocalClaimAfterLookupIsStructuredRefusal(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueState(Unit, Title());
+        var claimPath = Path.Combine(workspace.ClaimsDirectory,
+            ClaimCommand.ClaimPath($"execution-unit:{Unit}").Split('/').Last());
+        workspace.CaptureDurableBaseline();
+        var checker = new CallbackExistingIssueChecker(
+            new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.None },
+            () =>
+            {
+                File.Delete(claimPath);
+                Directory.CreateDirectory(claimPath);
+                workspace.CaptureDurableBaseline();
+            });
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8684");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        var (exit, output) = Run(workspace, Unit, OtherRepo, write: true,
+            team: UndeclaredTeam, format: format);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(1, checker.CallCount);
+        Assert.Equal(0, creator.CallCount);
+        Assert.True(Directory.Exists(claimPath));
+        AssertDurableStateUntouched(workspace);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            var sources = result.RootElement.GetProperty("scope_sources");
+            Assert.Equal("scope-sources-identity-mismatch", sources.GetProperty("cause").GetString());
+            Assert.Contains("claim-verification-invalid",
+                sources.GetProperty("diagnostics")[0].GetProperty("cause").GetString(), StringComparison.Ordinal);
+            Assert.Contains("not a regular file",
+                sources.GetProperty("diagnostics")[0].GetProperty("detail").GetString(), StringComparison.Ordinal);
+            AssertNullOrMissing(sources, "provenance");
+            AssertNullOrMissing(sources, "expected_provenance_block");
+        }
+        else
+        {
+            Assert.Contains("scope-sources-identity-mismatch", output, StringComparison.Ordinal);
+            Assert.Contains("claim-verification-invalid", output, StringComparison.Ordinal);
+            Assert.Contains("not a regular file", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+            Assert.Contains("- created: no", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
     public void PublishFlow_DeclaredPacketRemovedAfterGateRetainsUnavailableDiagnostic(string format)
@@ -1417,7 +1607,13 @@ public sealed class G835PublishFlowTests : IDisposable
         var changedPacketBytes = File.ReadAllBytes(packetPath);
         var changedBodyBytes = File.ReadAllBytes(bodyPath);
         workspace.CaptureDurableBaseline();
-        var gitBefore = workspace.InitializeGitAndCapture();
+        workspace.InitializeGitAndCapture();
+        var initialClaim = ClaimOwnershipVerifier.Verify(
+            workspace.RootPath, $"execution-unit:{Unit}", sourceTeam);
+        Assert.True(initialClaim.Passed, initialClaim.Detail);
+        Assert.True(initialClaim.StoreConfigured, initialClaim.Detail);
+        Assert.Equal(ClaimOwnershipVerification.StatusOwned, initialClaim.Status);
+        var gitBefore = workspace.CaptureGitState();
 
         var checkerFactoryCalls = 0;
         var creatorFactoryCalls = 0;
@@ -1488,7 +1684,13 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.SeedQueueState(Unit, Title());
         if (declared && gated) workspace.RecordSatisfiedDesignReviewsViaCommand(Unit);
         workspace.CaptureDurableBaseline();
-        var gitBefore = workspace.InitializeGitAndCapture();
+        workspace.InitializeGitAndCapture();
+        var initialClaim = ClaimOwnershipVerifier.Verify(
+            workspace.RootPath, $"execution-unit:{Unit}", sourceTeam);
+        Assert.True(initialClaim.Passed, initialClaim.Detail);
+        Assert.True(initialClaim.StoreConfigured, initialClaim.Detail);
+        Assert.Equal(ClaimOwnershipVerification.StatusOwned, initialClaim.Status);
+        var gitBefore = workspace.CaptureGitState();
         var checker = new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
         var creator = new RecordingIssueCreator($"https://github.com/{targetRepo}/issues/8680");
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
@@ -3273,6 +3475,7 @@ public sealed class G835PublishFlowTests : IDisposable
 
             gitOriginPath = rootPath + "-origin.git";
             Git("init", "--bare", "--quiet", gitOriginPath);
+            _ = Git("--git-dir", gitOriginPath, "symbolic-ref", "HEAD", "refs/heads/main");
             Git("remote", "add", "origin", gitOriginPath);
             Git("push", "--quiet", "--set-upstream", "origin", "main");
             Git("remote", "set-head", "origin", "main");
@@ -3295,6 +3498,36 @@ public sealed class G835PublishFlowTests : IDisposable
             var after = CaptureGitState();
             Assert.Equal(before.IndexBytes, after.IndexBytes);
             Assert.Equal(before.Refs, after.Refs);
+        }
+
+        public void AdvanceOriginClaimTeam(string unit, string team)
+        {
+            if (gitOriginPath is null) throw new InvalidOperationException("Git fixture origin has not been initialized.");
+            var clonePath = rootPath + "-origin-advance";
+            try
+            {
+                _ = RunGit(rootPath, ["clone", "--quiet", gitOriginPath, clonePath]);
+                _ = RunGit(clonePath, ["config", "user.name", "G863 remote fixture"]);
+                _ = RunGit(clonePath, ["config", "user.email", "g863-remote-fixture@example.invalid"]);
+                var scope = $"execution-unit:{unit}";
+                var relativeClaimPath = ClaimCommand.ClaimPath(scope);
+                var claimPath = Path.Combine(clonePath, relativeClaimPath.Replace('/', Path.DirectorySeparatorChar));
+                File.WriteAllText(claimPath, JsonSerializer.Serialize(new ClaimRecord(
+                    "1", scope, "remote-advancer", team, DateTimeOffset.UtcNow,
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) + Environment.NewLine);
+                _ = RunGit(clonePath, ["add", "--", relativeClaimPath]);
+                _ = RunGit(clonePath, ["commit", "--quiet", "-m", "advance remote claim fixture"]);
+                _ = RunGit(clonePath, ["push", "--quiet", "origin", "main"]);
+            }
+            finally
+            {
+                if (Directory.Exists(clonePath)) Directory.Delete(clonePath, recursive: true);
+            }
+        }
+
+        public void MakeOriginUnavailable()
+        {
+            _ = Git("remote", "set-url", "origin", rootPath + "-offline-origin.git");
         }
 
         private string Git(params string[] args) => RunGit(rootPath, args);

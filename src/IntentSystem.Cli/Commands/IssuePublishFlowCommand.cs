@@ -2030,9 +2030,10 @@ internal static class IssuePublishFlowCommand
         if (initiallyValid is null) return null;
         if (initialClaimVerification.StoreConfigured)
         {
-            var claimPath = ClaimCommand.ClaimPath($"execution-unit:{executionUnit}");
-            var currentClaim = ClaimOwnershipVerifier.Verify(
-                repoRoot, $"execution-unit:{executionUnit}", initialClaimVerification.HolderTeam);
+            var claimScope = $"execution-unit:{executionUnit}";
+            var claimPath = ClaimCommand.ClaimPath(claimScope);
+            var currentClaim = ReadLocalClaimForPublishRecheck(
+                repoRoot, claimScope, initialClaimVerification.HolderTeam);
             if (!currentClaim.Passed
                 || !currentClaim.StoreConfigured
                 || !string.Equals(currentClaim.Status, ClaimOwnershipVerification.StatusOwned, StringComparison.Ordinal)
@@ -2091,6 +2092,132 @@ internal static class IssuePublishFlowCommand
         }
         return current;
     }
+
+    private static ClaimOwnershipVerification ReadLocalClaimForPublishRecheck(
+        string repoRoot,
+        string scope,
+        string? invokingTeam)
+    {
+        var storePath = Path.Combine(
+            repoRoot, ClaimCommand.ClaimsDirectory.Replace('/', Path.DirectorySeparatorChar));
+        var claimPath = Path.Combine(
+            repoRoot, ClaimCommand.ClaimPath(scope).Replace('/', Path.DirectorySeparatorChar));
+
+        try
+        {
+            var storeAttributes = File.GetAttributes(storePath);
+            if ((storeAttributes & FileAttributes.Directory) == 0
+                || (storeAttributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return LocalClaimRecheckRefused(
+                    ClaimOwnershipVerification.StatusCanonicalUnavailable, scope, invokingTeam,
+                    "the configured local claims directory is not a regular directory");
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusCanonicalUnavailable, scope, invokingTeam,
+                $"the configured local claims directory is unavailable: {exception.Message}");
+        }
+
+        FileAttributes claimAttributes;
+        try
+        {
+            claimAttributes = File.GetAttributes(claimPath);
+        }
+        catch (FileNotFoundException)
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusUnheld, scope, invokingTeam,
+                "the initially configured local claim is no longer present");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusCanonicalUnavailable, scope, invokingTeam,
+                "the configured local claims directory disappeared during revalidation");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusCanonicalUnavailable, scope, invokingTeam,
+                $"the configured local claim cannot be inspected: {exception.Message}");
+        }
+
+        if ((claimAttributes & FileAttributes.Directory) != 0
+            || (claimAttributes & FileAttributes.ReparsePoint) != 0)
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusInvalid, scope, invokingTeam,
+                "the configured local claim path is not a regular file");
+        }
+
+        if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(
+                claimPath, out var claimBytes, out var readFailure, out var readError))
+        {
+            var detail = $"the configured local claim record cannot be safely read ({readFailure}): {readError}";
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusCanonicalUnavailable, scope, invokingTeam, detail);
+        }
+
+        ClaimRecord? record;
+        try
+        {
+            record = JsonSerializer.Deserialize<ClaimRecord>(claimBytes);
+        }
+        catch (JsonException exception)
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusInvalid, scope, invokingTeam,
+                $"the configured local claim record is invalid: {exception.Message}");
+        }
+
+        if (record is null || !string.Equals(record.Scope, scope, StringComparison.Ordinal))
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusInvalid, scope, invokingTeam,
+                "the configured local claim record is empty or names a different scope");
+        }
+
+        if (string.IsNullOrWhiteSpace(invokingTeam))
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusTeamRequired, scope, invokingTeam,
+                $"the local claim is held by actor '{record.Actor}' on team '{record.Team}', but no invoking team is available");
+        }
+
+        if (!string.Equals(record.Team, invokingTeam, StringComparison.Ordinal))
+        {
+            return LocalClaimRecheckRefused(
+                ClaimOwnershipVerification.StatusHeldByOtherTeam, scope, invokingTeam,
+                $"the local claim is held by actor '{record.Actor}' on team '{record.Team}', not the initial team '{invokingTeam}'");
+        }
+
+        return new ClaimOwnershipVerification(
+            Passed: true,
+            Status: ClaimOwnershipVerification.StatusOwned,
+            Scope: scope,
+            StoreConfigured: true,
+            InvokingTeam: invokingTeam,
+            Holder: record.Actor,
+            HolderTeam: record.Team,
+            Detail: $"The local claim remains held by actor '{record.Actor}' on the initial team '{record.Team}'.");
+    }
+
+    private static ClaimOwnershipVerification LocalClaimRecheckRefused(
+        string status,
+        string scope,
+        string? invokingTeam,
+        string detail) => new(
+            Passed: false,
+            Status: status,
+            Scope: scope,
+            StoreConfigured: true,
+            InvokingTeam: invokingTeam,
+            Holder: null,
+            HolderTeam: null,
+            Detail: detail);
 
     private static PacketScopeSources.Result RefuseStaleScopeSources(
         PacketScopeSources.Result source,

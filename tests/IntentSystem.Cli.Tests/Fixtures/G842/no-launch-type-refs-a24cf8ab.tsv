@@ -759,9 +759,10 @@ src/IntentSystem.Cli/Commands/IssuePublishCommand.cs	GitRemoteCommandRunner	1
 src/IntentSystem.Cli/Commands/IssuePublishCommand.cs	IGitRemoteCommandRunner	1
 src/IntentSystem.Cli/Commands/IssuePublishCommand.cs	IssuePublishCommand	1
 src/IntentSystem.Cli/Commands/IssuePublishCommand.cs	IssuePublishCommandResult	3
-src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimCommand	1
-src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimOwnershipVerification	4
-src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimOwnershipVerifier	2
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimCommand	3
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimOwnershipVerification	19
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimOwnershipVerifier	1
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimRecord	2
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ClaimVerificationCommand	1
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	CrossRuntimeDesignReviewField	19
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GhCliExistingIssueChecker	2
