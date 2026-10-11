@@ -335,6 +335,327 @@ public sealed class G835PublishFlowTests : IDisposable
     }
 
     [Theory]
+    [InlineData("pin", "json")]
+    [InlineData("pin", "markdown")]
+    [InlineData("body", "json")]
+    [InlineData("body", "markdown")]
+    public void PublishFlow_DeclaredGitHubUniqueRestoreRefusesChangedPinnedSource(string mutation, string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        var source = workspace.WritePinnedSourcePacket(Unit, Repo, Team);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
+        var packetPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
+        var checker = new CallbackExistingIssueChecker(new GitHubExistingIssueLookupResult
+        {
+            Classification = GitHubExistingIssueClassification.Unique,
+            IssueNumber = 8640,
+            IssueUrl = $"https://github.com/{Repo}/issues/8640",
+        }, () =>
+        {
+            if (mutation == "pin")
+            {
+                File.WriteAllText(packetPath, File.ReadAllText(packetPath)
+                    .Replace(source.Digest, new string('0', 64), StringComparison.Ordinal));
+            }
+            else
+            {
+                File.AppendAllText(workspace.GithubBodyPath(Unit), "\nchanged during unique lookup\n");
+            }
+        });
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8640");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true, team: Team, format: format);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(1, checker.CallCount);
+        Assert.Equal(0, creator.CallCount);
+        AssertDurableStateUntouched(workspace);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.Equal(CrossRuntimeReviewCauses.LookupInputChanged, result.RootElement.GetProperty("cause").GetString());
+            var sources = result.RootElement.GetProperty("scope_sources");
+            Assert.Equal("refused", sources.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-changed", sources.GetProperty("cause").GetString());
+            AssertNullOrMissing(sources, "provenance");
+            AssertNullOrMissing(sources, "expected_provenance_block");
+        }
+        else
+        {
+            Assert.Contains(CrossRuntimeReviewCauses.LookupInputChanged, output, StringComparison.Ordinal);
+            Assert.Contains("scope-sources-changed", output, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"refused\"", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_DeclaredMalformedLookupSnapshotDoesNotRetainSatisfiedSourceProof(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WritePinnedSourcePacket(Unit, Repo, Team);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8641");
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+        IssuePublishFlowCommand.BeforeLookupSnapshotHook = () =>
+            File.WriteAllText(Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml"), "[\n");
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true, team: Team, format: format);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, creator.CallCount);
+        AssertDurableStateUntouched(workspace);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            var root = result.RootElement;
+            Assert.Equal("packet-yaml-unparseable", root.GetProperty("cause").GetString());
+            var sources = root.GetProperty("scope_sources");
+            Assert.Equal("refused", sources.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-changed", sources.GetProperty("cause").GetString());
+            AssertNullOrMissing(sources, "provenance");
+            AssertNullOrMissing(sources, "expected_provenance_block");
+        }
+        else
+        {
+            Assert.Contains("packet-yaml-unparseable", output, StringComparison.Ordinal);
+            Assert.Contains("scope-sources-changed", output, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"refused\"", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("lookup-none", "json")]
+    [InlineData("lookup-none", "markdown")]
+    [InlineData("lookup-unique", "json")]
+    [InlineData("lookup-unique", "markdown")]
+    [InlineData("lookup-unheld", "json")]
+    [InlineData("lookup-unheld", "markdown")]
+    [InlineData("clock", "json")]
+    [InlineData("clock", "markdown")]
+    [InlineData("after-gate", "json")]
+    [InlineData("after-gate", "markdown")]
+    public void PublishFlow_DeclaredPinnedSourceRefusesWhenHeldClaimTeamChangesAtLateBoundary(
+        string timing, string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WritePinnedSourcePacket(Unit, Repo, Team);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        var claimChanged = false;
+        var lookupReturned = false;
+        var checkerClassification = timing == "lookup-unique"
+            ? GitHubExistingIssueClassification.Unique
+            : GitHubExistingIssueClassification.None;
+        var checker = new CallbackExistingIssueChecker(new GitHubExistingIssueLookupResult
+        {
+            Classification = checkerClassification,
+            IssueNumber = checkerClassification == GitHubExistingIssueClassification.Unique ? 8641 : null,
+            IssueUrl = checkerClassification == GitHubExistingIssueClassification.Unique
+                ? $"https://github.com/{Repo}/issues/8641"
+                : null,
+        }, () =>
+        {
+            lookupReturned = true;
+            if (timing is "lookup-none" or "lookup-unique" or "lookup-unheld")
+            {
+                if (timing == "lookup-unheld")
+                {
+                    File.Delete(Path.Combine(workspace.ClaimsDirectory,
+                        ClaimCommand.ClaimPath($"execution-unit:{Unit}").Split('/').Last()));
+                }
+                else
+                {
+                    workspace.WriteClaim(Unit, UndeclaredTeam);
+                }
+                claimChanged = true;
+                workspace.CaptureDurableBaseline();
+            }
+        });
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8642");
+        var creatorFactoryCalls = 0;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () =>
+        {
+            creatorFactoryCalls++;
+            return creator;
+        };
+        IssuePublishFlowCommand.UtcNowFactory = () =>
+        {
+            if (timing == "clock" && lookupReturned && !claimChanged)
+            {
+                workspace.WriteClaim(Unit, UndeclaredTeam);
+                claimChanged = true;
+                workspace.CaptureDurableBaseline();
+            }
+            return new DateTimeOffset(2026, 10, 10, 12, 0, 0, TimeSpan.Zero);
+        };
+        if (timing == "after-gate")
+        {
+            IssuePublishFlowCommand.AfterGateHook = () =>
+            {
+                workspace.WriteClaim(Unit, UndeclaredTeam);
+                claimChanged = true;
+                workspace.CaptureDurableBaseline();
+            };
+        }
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true, team: Team, format: format);
+
+        Assert.Equal(1, exit);
+        Assert.True(claimChanged);
+        Assert.Equal(1, checker.CallCount);
+        Assert.Equal(0, creator.CallCount);
+        Assert.Equal(timing == "after-gate" ? 1 : 0, creatorFactoryCalls);
+        AssertDurableStateUntouched(workspace);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.Equal("scope-sources-identity-mismatch", result.RootElement.GetProperty("cause").GetString());
+            var sources = result.RootElement.GetProperty("scope_sources");
+            Assert.Equal("refused", sources.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-identity-mismatch", sources.GetProperty("cause").GetString());
+            var expectedVerifierStatus = timing == "lookup-unheld" ? "unheld" : "held-by-other-team";
+            Assert.Contains(expectedVerifierStatus, sources.GetProperty("diagnostics")[0].GetProperty("cause").GetString(), StringComparison.Ordinal);
+            AssertNullOrMissing(sources, "provenance");
+            AssertNullOrMissing(sources, "expected_provenance_block");
+        }
+        else
+        {
+            Assert.Contains("scope-sources-identity-mismatch", output, StringComparison.Ordinal);
+            Assert.Contains(timing == "lookup-unheld" ? "unheld" : "held-by-other-team", output, StringComparison.Ordinal);
+            Assert.Contains("- created: no", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_DeclaredPacketRemovedAfterGateRetainsUnavailableDiagnostic(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        var source = workspace.WritePinnedSourcePacket(Unit, Repo, Team);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
+        var removedPath = Path.Combine(workspace.PacketDirectory(Unit), "implementation.md");
+        var hookReached = false;
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8643");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+        IssuePublishFlowCommand.AfterGateHook = () =>
+        {
+            hookReached = true;
+            File.Delete(removedPath);
+        };
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true, team: Team, format: format);
+
+        Assert.Equal(1, exit);
+        Assert.True(hookReached);
+        Assert.False(File.Exists(removedPath));
+        Assert.Equal(0, creator.CallCount);
+        Assert.True(File.Exists(source.ArtifactPath));
+        AssertDurableStateUntouched(workspace);
+        var relativePath = $".intent-cli/issues/{Unit}/implementation.md";
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.Equal(CrossRuntimeReviewCauses.PacketMissing, result.RootElement.GetProperty("cause").GetString());
+            var sources = result.RootElement.GetProperty("scope_sources");
+            Assert.Equal("unavailable", sources.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-packet-unavailable", sources.GetProperty("cause").GetString());
+            var diagnostic = Assert.Single(sources.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal(relativePath, diagnostic.GetProperty("path").GetString());
+            Assert.Contains("after the review gate", diagnostic.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            AssertNullOrMissing(sources, "provenance");
+            AssertNullOrMissing(sources, "expected_provenance_block");
+        }
+        else
+        {
+            Assert.Contains(CrossRuntimeReviewCauses.PacketMissing, output, StringComparison.Ordinal);
+            Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+            Assert.Contains(relativePath, output, StringComparison.Ordinal);
+            Assert.Contains("after the review gate", output, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"unavailable\"", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_DeclaredPacketReadFailureAfterGateRetainsUnavailableDiagnostic(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        var source = workspace.WritePinnedSourcePacket(Unit, Repo, Team);
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+        workspace.CaptureDurableBaseline();
+        var implementationPath = Path.Combine(workspace.PacketDirectory(Unit), "implementation.md");
+        FileStream? exclusiveReadLock = null;
+        var hookReached = false;
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8644");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+        IssuePublishFlowCommand.AfterGateHook = () =>
+        {
+            hookReached = true;
+            exclusiveReadLock = new FileStream(implementationPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        };
+
+        try
+        {
+            var (exit, output) = Run(workspace, Unit, Repo, write: true, team: Team, format: format);
+
+            Assert.Equal(1, exit);
+            Assert.True(hookReached);
+            Assert.NotNull(exclusiveReadLock);
+            Assert.Equal(0, creator.CallCount);
+            Assert.True(File.Exists(source.ArtifactPath));
+            AssertDurableStateUntouched(workspace);
+            var relativePath = $".intent-cli/issues/{Unit}/implementation.md";
+            if (format == "json")
+            {
+                using var result = JsonDocument.Parse(output);
+                Assert.Equal(CrossRuntimeReviewCauses.PacketMissing, result.RootElement.GetProperty("cause").GetString());
+                Assert.StartsWith("packet file is missing before create:", result.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+                var sources = result.RootElement.GetProperty("scope_sources");
+                Assert.Equal("unavailable", sources.GetProperty("state").GetString());
+                Assert.Equal("scope-sources-packet-unavailable", sources.GetProperty("cause").GetString());
+                var diagnostic = Assert.Single(sources.GetProperty("diagnostics").EnumerateArray());
+                Assert.Equal(relativePath, diagnostic.GetProperty("path").GetString());
+                Assert.Contains("after the review gate", diagnostic.GetProperty("detail").GetString(), StringComparison.Ordinal);
+                AssertNullOrMissing(sources, "provenance");
+                AssertNullOrMissing(sources, "expected_provenance_block");
+            }
+            else
+            {
+                Assert.Contains(CrossRuntimeReviewCauses.PacketMissing, output, StringComparison.Ordinal);
+                Assert.Contains("packet file is missing before create:", output, StringComparison.Ordinal);
+                Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+                Assert.Contains(relativePath, output, StringComparison.Ordinal);
+                Assert.Contains("after the review gate", output, StringComparison.Ordinal);
+                Assert.Contains("\"state\": \"unavailable\"", output, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            exclusiveReadLock?.Dispose();
+            IssuePublishFlowCommand.AfterGateHook = null;
+        }
+    }
+
+    [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
     public void PublishFlow_PinnedSourceCreatePublishesExactAuthoredBody(string format)
@@ -640,10 +961,10 @@ public sealed class G835PublishFlowTests : IDisposable
     [InlineData("missing", "markdown")]
     [InlineData("successor", "json")]
     [InlineData("successor", "markdown")]
-    [InlineData("pin", "json")]
-    [InlineData("pin", "markdown")]
     [InlineData("tampered", "json")]
     [InlineData("tampered", "markdown")]
+    [InlineData("pin", "json")]
+    [InlineData("pin", "markdown")]
     public void PublishFlow_NoneFoundLookupRechecksMissingSuccessorPinAndTamperedSources(string mutation, string format)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
@@ -662,13 +983,13 @@ public sealed class G835PublishFlowTests : IDisposable
                     case "successor":
                         workspace.WriteSuccessorRuling(Unit, OtherRepo, UndeclaredTeam, "R-G863-PUBLISH");
                         break;
+                    case "tampered":
+                        RewriteRulingDecision(source.ArtifactPath);
+                        break;
                     case "pin":
                         var packetPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
                         File.WriteAllText(packetPath, File.ReadAllText(packetPath)
                             .Replace(source.Digest, new string('0', 64), StringComparison.Ordinal));
-                        break;
-                    case "tampered":
-                        RewriteRulingDecision(source.ArtifactPath);
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(mutation));
@@ -692,8 +1013,8 @@ public sealed class G835PublishFlowTests : IDisposable
         {
             "missing" => "scope-sources-ruling-missing",
             "successor" => "scope-sources-ruling-inactive",
-            "pin" => "scope-sources-changed",
             "tampered" => "scope-sources-digest-mismatch",
+            "pin" => "scope-sources-changed",
             _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
         };
         if (format == "json")
@@ -773,10 +1094,10 @@ public sealed class G835PublishFlowTests : IDisposable
     [InlineData("missing", "markdown")]
     [InlineData("successor", "json")]
     [InlineData("successor", "markdown")]
-    [InlineData("pin", "json")]
-    [InlineData("pin", "markdown")]
     [InlineData("tampered", "json")]
     [InlineData("tampered", "markdown")]
+    [InlineData("pin", "json")]
+    [InlineData("pin", "markdown")]
     public void PublishFlow_GitHubUniqueRestoreRechecksMissingSuccessorPinAndTamperedSources(string mutation, string format)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: false);
@@ -850,12 +1171,15 @@ public sealed class G835PublishFlowTests : IDisposable
     [InlineData("missing", "markdown")]
     [InlineData("successor", "json")]
     [InlineData("successor", "markdown")]
+    [InlineData("tampered", "json")]
+    [InlineData("tampered", "markdown")]
     [InlineData("pin", "json")]
     [InlineData("pin", "markdown")]
-    public void PublishFlow_LocalExistingIssueRechecksMissingSuccessorAndPinAtSnapshot(string mutation, string format)
+    public void PublishFlow_LocalExistingIssueRechecksMissingSuccessorPinAndTamperedRulingAtSnapshot(string mutation, string format)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
         var source = workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        var initialRulingBytes = File.ReadAllBytes(source.ArtifactPath);
         workspace.SeedQueueStateWithLinkedIssue(Unit, Title(), OtherRepo, 8634,
             $"https://github.com/{OtherRepo}/issues/8634");
         workspace.CaptureDurableBaseline();
@@ -877,6 +1201,9 @@ public sealed class G835PublishFlowTests : IDisposable
                     case "successor":
                         workspace.WriteSuccessorRuling(Unit, OtherRepo, UndeclaredTeam, "R-G863-PUBLISH");
                         break;
+                    case "tampered":
+                        RewriteRulingDecision(source.ArtifactPath);
+                        break;
                     case "pin":
                         var packetPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
                         File.WriteAllText(packetPath, File.ReadAllText(packetPath)
@@ -895,10 +1222,12 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.Equal(2, sourceRecheckCalls);
         Assert.Equal(0, checker.CallCount);
         Assert.Equal(0, creator.CallCount);
+        if (mutation == "tampered") Assert.NotEqual(initialRulingBytes, File.ReadAllBytes(source.ArtifactPath));
         var expectedCause = mutation switch
         {
             "missing" => "scope-sources-ruling-missing",
             "successor" => "scope-sources-ruling-inactive",
+            "tampered" => "scope-sources-digest-mismatch",
             "pin" => "scope-sources-changed",
             _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
         };
@@ -977,6 +1306,8 @@ public sealed class G835PublishFlowTests : IDisposable
     [InlineData("missing", false, "markdown")]
     [InlineData("successor", true, "markdown")]
     [InlineData("successor", false, "json")]
+    [InlineData("ref", true, "json")]
+    [InlineData("ref", false, "markdown")]
     [InlineData("tampered", true, "json")]
     [InlineData("tampered", false, "markdown")]
     [InlineData("pin", true, "markdown")]
@@ -1022,6 +1353,11 @@ public sealed class G835PublishFlowTests : IDisposable
                     File.WriteAllText(packetPath, File.ReadAllText(packetPath)
                         .Replace(source.Digest, new string('0', 64), StringComparison.Ordinal));
                     break;
+                case "ref":
+                    var refPacketPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
+                    File.WriteAllText(refPacketPath, File.ReadAllText(refPacketPath)
+                        .Replace("R-G863-PUBLISH", "R-G863-OTHER", StringComparison.Ordinal));
+                    break;
                 case "body":
                     File.AppendAllText(workspace.GithubBodyPath(Unit), "\nchanged at the final create boundary\n");
                     break;
@@ -1063,8 +1399,8 @@ public sealed class G835PublishFlowTests : IDisposable
             "missing" => "scope-sources-ruling-missing",
             "successor" => "scope-sources-ruling-inactive",
             "tampered" => "scope-sources-digest-mismatch",
-            "pin" or "body" when declared => CrossRuntimeReviewCauses.DigestStale,
-            "pin" or "body" => "scope-sources-changed",
+            "pin" or "body" or "ref" when declared => CrossRuntimeReviewCauses.DigestStale,
+            "pin" or "body" or "ref" => "scope-sources-changed",
             _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
         };
         if (format == "json")

@@ -129,7 +129,8 @@ public sealed class GuideCommandsListCommandTests
                     .Single(step => step.GetProperty("id").GetString() == "packet-draft-and-validate");
                 var packetInstruction = packetStep.GetProperty("instruction").GetString()!;
                 Assert.Contains("packet validate-sources", packetInstruction, StringComparison.Ordinal);
-                Assert.Contains("only `issue publish-flow` consumes the source gate", packetInstruction, StringComparison.Ordinal);
+                Assert.Contains("`review cross-runtime request`, `record`, and `status` commands also revalidate and report the declared local source proof", packetInstruction, StringComparison.Ordinal);
+                Assert.Contains("`issue publish-flow` is the external issue create/publish boundary and rechecks these pins before mutation", packetInstruction, StringComparison.Ordinal);
                 Assert.Contains("repeat design review after the packet digest changes", packetInstruction, StringComparison.Ordinal);
                 Assert.Contains(packetStep.GetProperty("commands").EnumerateArray(), command =>
                     command.GetProperty("command").GetString() == "intent-cli packet validate-sources --execution-unit <unit> --format json");
@@ -150,7 +151,8 @@ public sealed class GuideCommandsListCommandTests
                 Assert.True(previewIndex >= 0 && writeIndex > previewIndex && showIndex > writeIndex && validateIndex > showIndex);
                 Assert.Contains("packet-draft-and-validate", markdown, StringComparison.Ordinal);
                 Assert.Contains("packet validate-sources", markdown, StringComparison.Ordinal);
-                Assert.Contains("only `issue publish-flow` consumes the source gate", markdown, StringComparison.Ordinal);
+                Assert.Contains("`review cross-runtime request`, `record`, and `status` commands also revalidate and report the declared local source proof", markdown, StringComparison.Ordinal);
+                Assert.Contains("`issue publish-flow` is the external issue create/publish boundary and rechecks these pins before mutation", markdown, StringComparison.Ordinal);
                 Assert.Contains("repeat design review after the packet digest changes", markdown, StringComparison.Ordinal);
             }
         }

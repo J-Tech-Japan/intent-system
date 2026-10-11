@@ -577,6 +577,7 @@ internal static class IssuePublishFlowCommand
                 analysis,
                 context,
                 authorization,
+                claimVerification,
                 scopeSources,
                 scopePacketDigest);
         }
@@ -671,6 +672,13 @@ internal static class IssuePublishFlowCommand
                     var relativePacketPath = $".intent-cli/issues/{executionUnit}/packet.yaml";
                     var packetText = DecodePacketText(lookupSnapshotPacketYaml);
                     PacketYamlDocument.TryParseWithLocation(packetText, out _, out var parseError);
+                    if (scopeSources is not null)
+                    {
+                        outputScopeSources = RefuseStaleScopeSources(scopeSources,
+                            UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                            "scope-sources-changed",
+                            $"packet.yaml changed after its pinned source proof was evaluated: {relativePacketPath}");
+                    }
                     var snapshotRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                         packetExists: true,
                         githubBodyPresent: true,
@@ -787,6 +795,13 @@ internal static class IssuePublishFlowCommand
                 if (!File.ReadAllBytes(packetYamlPath).AsSpan().SequenceEqual(lookupSnapshotPacketYaml)
                     || !File.ReadAllBytes(githubBodyPath).AsSpan().SequenceEqual(lookupSnapshotGithubBody))
                 {
+                    if (scopeSources is not null)
+                    {
+                        outputScopeSources = RefuseStaleScopeSources(scopeSources,
+                            UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                            "scope-sources-changed",
+                            "packet.yaml or github-body.md changed after the GitHub lookup snapshot; the previously verified source proof is stale");
+                    }
                     var lookupChangedResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                         packetExists: true,
                         githubBodyPresent: true,
@@ -843,6 +858,7 @@ internal static class IssuePublishFlowCommand
                 githubSourcedAnalysis,
                 context,
                 authorization,
+                claimVerification,
                 scopeSources,
                 scopePacketDigest);
         }
@@ -902,6 +918,7 @@ internal static class IssuePublishFlowCommand
                     titleSource,
                     analysis,
                     authorization,
+                    claimVerification,
                     gatedPublishResolution,
                     lookupSnapshotPacketYaml,
                     lookupSnapshotGithubBody,
@@ -1004,7 +1021,7 @@ internal static class IssuePublishFlowCommand
         if (scopeSources is not null)
         {
             outputScopeSources = RecheckPublishScopeSources(context.RepoRoot, executionUnit!, domain, effectiveTeam,
-                repo!, scopeSources, scopePacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow);
+                repo!, scopeSources, scopePacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow, claimVerification);
             if (outputScopeSources is { IsSuccessful: false })
             {
                 var sourceRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write: true,
@@ -1276,6 +1293,7 @@ internal static class IssuePublishFlowCommand
         PublishDurableArtifactAnalysis analysis,
         CliContext context,
         IssuePublishAuthorization authorization,
+        ClaimOwnershipVerification initialClaimVerification,
         PacketScopeSources.Result? initialScopeSources,
         string? expectedPacketDigest)
     {
@@ -1283,7 +1301,7 @@ internal static class IssuePublishFlowCommand
         var canonicalIssueUrl = analysis.CanonicalIssueUrl!;
         var restoredAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var scopeSources = RecheckPublishScopeSources(context.RepoRoot, executionUnit, domain, authorization.Team,
-            repo, initialScopeSources, expectedPacketDigest, restoredAt);
+            repo, initialScopeSources, expectedPacketDigest, restoredAt, initialClaimVerification);
         if (scopeSources is { IsSuccessful: false })
         {
             var refusal = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
@@ -1900,9 +1918,31 @@ internal static class IssuePublishFlowCommand
         PacketScopeSources.Result? initiallyValid,
         string? expectedPacketDigest,
         DateTimeOffset now,
+        ClaimOwnershipVerification initialClaimVerification,
         CrossRuntimeDesignReviewDigest.PacketBytes? suppliedPacket = null)
     {
         if (initiallyValid is null) return null;
+        if (initialClaimVerification.StoreConfigured)
+        {
+            var claimPath = ClaimCommand.ClaimPath($"execution-unit:{executionUnit}");
+            var currentClaim = ClaimOwnershipVerifier.Verify(
+                repoRoot, $"execution-unit:{executionUnit}", initialClaimVerification.HolderTeam);
+            if (!currentClaim.Passed)
+            {
+                var detail = $"the held execution-unit claim could not be revalidated against its initial team identity: {currentClaim.Detail}";
+                return initiallyValid with
+                {
+                    State = "refused",
+                    Cause = "scope-sources-identity-mismatch",
+                    Detail = detail,
+                    EvaluatedAt = RulingArtifact.FormatTimestamp(now),
+                    Provenance = null,
+                    ExpectedProvenanceBlock = null,
+                    Diagnostics = [new($"claim-verification-{currentClaim.Status}", claimPath, currentClaim.Detail)],
+                };
+            }
+        }
+
         CrossRuntimeDesignReviewDigest.PacketBytes packet;
         if (suppliedPacket is { } given)
         {
@@ -1954,6 +1994,28 @@ internal static class IssuePublishFlowCommand
             ExpectedProvenanceBlock = null,
             Diagnostics = [],
         };
+
+    private static PacketScopeSources.Result MarkScopeSourcesUnavailable(
+        PacketScopeSources.Result source,
+        DateTimeOffset now,
+        string relativePath,
+        string detail) =>
+        source with
+        {
+            State = "unavailable",
+            Cause = "scope-sources-packet-unavailable",
+            Detail = detail,
+            EvaluatedAt = RulingArtifact.FormatTimestamp(now),
+            Provenance = null,
+            ExpectedProvenanceBlock = null,
+            Diagnostics = [new("packet-unavailable", relativePath, detail)],
+        };
+
+    private static string RelativePacketPath(string repoRoot, string path)
+    {
+        var relative = Path.IsPathRooted(path) ? Path.GetRelativePath(repoRoot, path) : path;
+        return relative.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+    }
 
     private static void EmitResultWithScopeSources(TextWriter writer, IssuePublishFlowResult result, string format,
         PacketScopeSources.Result? scopeSources)
@@ -2297,6 +2359,7 @@ internal static class IssuePublishFlowCommand
         string? titleSource,
         PublishDurableArtifactAnalysis analysis,
         IssuePublishAuthorization authorization,
+        ClaimOwnershipVerification initialClaimVerification,
         CrossRuntimeReviewPublishResolver.PublishResolution resolution,
         byte[]? snapshotPacketYaml,
         byte[]? snapshotGithubBody,
@@ -2314,10 +2377,12 @@ internal static class IssuePublishFlowCommand
                 var missingPath = !File.Exists(packetYamlPath) ? packetYamlPath : githubBodyPath;
                 if (scopeSources is not null)
                 {
-                    scopeSources = RefuseStaleScopeSources(scopeSources,
+                    var relativePath = RelativePacketPath(context.RepoRoot, missingPath);
+                    var detail = $"the complete packet snapshot became unavailable before create: {relativePath}";
+                    scopeSources = MarkScopeSourcesUnavailable(scopeSources,
                         UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
-                        "scope-sources-packet-unavailable",
-                        $"the complete packet snapshot became unavailable before create: {missingPath}");
+                        relativePath,
+                        detail);
                 }
                 return EmitPacketMissingRefusal(
                     writer, format, executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath,
@@ -2340,10 +2405,12 @@ internal static class IssuePublishFlowCommand
             var missingPath = !File.Exists(reviewContextPath) ? reviewContextPath : implementationPath;
             if (scopeSources is not null)
             {
-                scopeSources = RefuseStaleScopeSources(scopeSources,
+                var relativePath = RelativePacketPath(context.RepoRoot, missingPath);
+                var detail = $"the complete packet snapshot became unavailable before create: {relativePath}";
+                scopeSources = MarkScopeSourcesUnavailable(scopeSources,
                     UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
-                    "scope-sources-packet-unavailable",
-                    $"the complete packet snapshot became unavailable before create: {missingPath}");
+                    relativePath,
+                    detail);
             }
             return EmitPacketMissingRefusal(
                 writer, format, executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath,
@@ -2352,19 +2419,23 @@ internal static class IssuePublishFlowCommand
 
         byte[] reviewContext;
         byte[] implementation;
+        var readingPacketPath = reviewContextPath;
         try
         {
             reviewContext = File.ReadAllBytes(reviewContextPath);
+            readingPacketPath = implementationPath;
             implementation = File.ReadAllBytes(implementationPath);
         }
         catch (IOException exception)
         {
             if (scopeSources is not null)
             {
-                scopeSources = RefuseStaleScopeSources(scopeSources,
+                var relativePath = RelativePacketPath(context.RepoRoot, readingPacketPath);
+                var detail = $"the complete packet snapshot became unavailable before create: {relativePath}: {exception.Message}";
+                scopeSources = MarkScopeSourcesUnavailable(scopeSources,
                     UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
-                    "scope-sources-packet-unavailable",
-                    $"the complete packet snapshot became unavailable before create: {exception.Message}");
+                    relativePath,
+                    detail);
             }
             return EmitPacketMissingRefusal(
                 writer, format, executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath,
@@ -2375,7 +2446,8 @@ internal static class IssuePublishFlowCommand
         if (scopeSources is not null)
         {
             scopeSources = RecheckPublishScopeSources(context.RepoRoot, executionUnit, domain, authorization.Team,
-                repo, initialScopeSources, expectedPacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow, packet);
+                repo, initialScopeSources, expectedPacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                initialClaimVerification, packet);
         }
         if (scopeSources is { IsSuccessful: false })
         {
@@ -2475,14 +2547,37 @@ internal static class IssuePublishFlowCommand
 
         AfterGateHook?.Invoke();
 
-        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var currentPacket, out var currentMissing))
+        CrossRuntimeDesignReviewDigest.PacketBytes currentPacket;
+        string? currentMissing;
+        string? unreadableFileName = null;
+        string? unreadableError = null;
+        bool currentPacketRead;
+        if (scopeSources is null)
         {
+            currentPacketRead = CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+                packetDirectory, out currentPacket, out currentMissing);
+        }
+        else
+        {
+            currentPacketRead = CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+                packetDirectory, out currentPacket, out currentMissing, out unreadableFileName, out unreadableError);
+        }
+
+        if (!currentPacketRead)
+        {
+            var missingPath = unreadableFileName is not null
+                ? Path.Combine(packetDirectory, unreadableFileName)
+                : currentMissing ?? packetDirectory;
+            var relativePath = RelativePacketPath(context.RepoRoot, missingPath);
+            var sourceDetail = unreadableFileName is not null
+                ? $"the complete packet snapshot became unreadable after the review gate: {relativePath}: {unreadableError}"
+                : $"the complete packet snapshot became unavailable after the review gate: {relativePath}";
             if (scopeSources is not null)
             {
-                scopeSources = RefuseStaleScopeSources(scopeSources,
+                scopeSources = MarkScopeSourcesUnavailable(scopeSources,
                     UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
-                    "scope-sources-packet-unavailable",
-                    $"the complete packet snapshot became unavailable after the review gate: {currentMissing}");
+                    relativePath,
+                    sourceDetail);
             }
             var staleResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
                 packetExists: true,
@@ -2497,7 +2592,7 @@ internal static class IssuePublishFlowCommand
                 queueStatePatched: false,
                 publishYamlPatched: false,
                 runsAppended: false,
-                error: $"packet file is missing before create: {currentMissing}.",
+                error: $"packet file is missing before create: {(unreadableFileName is not null ? unreadableError : currentMissing)}.",
                 titleSource: titleSource,
                 authorization: authorization,
                 cause: CrossRuntimeReviewCauses.PacketMissing,
@@ -2575,7 +2670,8 @@ internal static class IssuePublishFlowCommand
         if (scopeSources is not null)
         {
             scopeSources = RecheckPublishScopeSources(context.RepoRoot, executionUnit, domain, authorization.Team,
-                repo, initialScopeSources, expectedPacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow, currentPacket);
+                repo, initialScopeSources, expectedPacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                initialClaimVerification, currentPacket);
         }
         if (scopeSources is { IsSuccessful: false })
         {
