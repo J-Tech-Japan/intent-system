@@ -454,6 +454,25 @@ internal static class IssuePublishFlowCommand
                         }
                     }
                 }
+                else
+                {
+                    // The title snapshot already established opt-in. A later absent
+                    // or explicit-empty declaration cannot downgrade this invocation
+                    // to the legacy publication path.
+                    var changedSources = new PacketScopeSources.Result(executionUnit!, "refused", "scope-sources-changed",
+                        "packet.yaml no longer contains the ruling source declaration observed by the initial publish-flow snapshot",
+                        RulingArtifact.FormatTimestamp(UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow), null, null,
+                        [new("packet-changed", $".intent-cli/issues/{executionUnit}/packet.yaml", "the source declaration was removed or emptied before source validation")],
+                        IsDeclared: true);
+                    outputScopeSources = changedSources;
+                    var changedRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                        packetExists: true, githubBodyPresent: true, missingSections: missing, title: title,
+                        created: false, idempotent: false, durableStateSynced: false, issueUrl: null, issueNumber: null,
+                        queueStatePatched: false, publishYamlPatched: false, runsAppended: false,
+                        error: changedSources.Detail, titleSource: titleSource, cause: changedSources.Cause);
+                    EmitWithScopeSources(writer, changedRefusal, format);
+                    return 1;
+                }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {

@@ -111,6 +111,136 @@ public sealed class G841PublishFlowTests : IDisposable
         workspace.AssertDurableBaselineUntouched(Unit);
     }
 
+    [Theory]
+    [InlineData("absent", "json")]
+    [InlineData("absent", "markdown")]
+    [InlineData("empty", "json")]
+    [InlineData("empty", "markdown")]
+    public void PublishFlow_InitialOptInCannotBeDowngradedByLaterAbsentOrEmptySnapshot_G863(string mutation, string format)
+    {
+        const string sourceUnit = "G835PF";
+        const string sourceTeam = G841TestHelpers.Team;
+        const string sourceRepo = G841TestHelpers.Repo;
+        using var workspace = new G835PublishFlowTests.G835PublishFlowWorkspace(declare: true);
+        workspace.WritePinnedSourcePacket(sourceUnit, sourceRepo, sourceTeam);
+        workspace.SeedQueueState(sourceUnit, "G835PF publish title");
+        workspace.RecordSatisfiedDesignReviewsViaCommand(sourceUnit);
+        workspace.CaptureDurableBaseline();
+        var gitBefore = workspace.InitializeGitAndCapture();
+
+        var packetPath = Path.Combine(workspace.PacketDirectory(sourceUnit), "packet.yaml");
+        var originalPacket = File.ReadAllText(packetPath);
+        var sourceStart = originalPacket.LastIndexOf("\nscope_sources:", StringComparison.Ordinal);
+        Assert.True(sourceStart >= 0, "the prepared packet must begin opted in");
+        var legacyPacket = originalPacket[..sourceStart] + "\n";
+        var changedPacket = mutation == "absent"
+            ? legacyPacket
+            : legacyPacket + "scope_sources: []\nscope_source_digests: {}\n";
+        var changedPacketBytes = Encoding.UTF8.GetBytes(changedPacket);
+        var titleReadReached = false;
+        var checkerFactoryCalls = 0;
+        var creatorFactoryCalls = 0;
+        var checker = new RecordingExistingIssueChecker(new StubExistingIssueChecker(GitHubExistingIssueClassification.None));
+        var creator = new ThrowingIssueCreator();
+        var priorReadAllText = PacketFileReader.ReadAllText;
+        var priorReadAllBytes = PacketFileReader.ReadAllBytes;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () =>
+        {
+            checkerFactoryCalls++;
+            return checker;
+        };
+        IssuePublishFlowCommand.CreatorFactory = () =>
+        {
+            creatorFactoryCalls++;
+            return creator;
+        };
+        PacketFileReader.ReadAllBytes = File.ReadAllBytes;
+        PacketFileReader.ReadAllText = path =>
+        {
+            var text = priorReadAllText(path);
+            if (!titleReadReached && StringComparer.Ordinal.Equals(Path.GetFullPath(path), Path.GetFullPath(packetPath)))
+            {
+                titleReadReached = true;
+                File.WriteAllBytes(packetPath, changedPacketBytes);
+            }
+            return text;
+        };
+
+        (int ExitCode, string Output) result;
+        try
+        {
+            var args = new[]
+            {
+                sourceUnit, "--repo", sourceRepo, "--team", sourceTeam, "--format", format, "--write",
+            };
+            using var writer = new StringWriter();
+            result = (IssuePublishFlowCommand.Execute(workspace.Context, args, writer), writer.ToString());
+        }
+        finally
+        {
+            PacketFileReader.ReadAllText = priorReadAllText;
+            PacketFileReader.ReadAllBytes = priorReadAllBytes;
+        }
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(titleReadReached);
+        Assert.Equal(0, checkerFactoryCalls);
+        Assert.Equal(0, checker.CallCount);
+        Assert.Equal(0, creatorFactoryCalls);
+        Assert.Equal(0, creator.CallCount);
+        Assert.Equal(changedPacketBytes, File.ReadAllBytes(packetPath));
+        Assert.False(File.Exists(workspace.PublishYamlPath(sourceUnit)));
+        workspace.AssertDurableBaselineUntouched(sourceUnit);
+        workspace.AssertGitStateUnchanged(gitBefore);
+
+        JsonDocument scopeResult;
+        if (format == "json")
+        {
+            scopeResult = JsonDocument.Parse(result.Output);
+        }
+        else
+        {
+            Assert.Contains("## scope_sources", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Verified sources", result.Output, StringComparison.Ordinal);
+            const string marker = "```json\n";
+            var jsonStart = result.Output.IndexOf(marker, StringComparison.Ordinal);
+            Assert.True(jsonStart >= 0, result.Output);
+            jsonStart += marker.Length;
+            var jsonEnd = result.Output.IndexOf("\n```", jsonStart, StringComparison.Ordinal);
+            Assert.True(jsonEnd > jsonStart, result.Output);
+            scopeResult = JsonDocument.Parse(result.Output[jsonStart..jsonEnd]);
+        }
+
+        using (scopeResult)
+        {
+            var root = scopeResult.RootElement;
+            Assert.Equal("scope-sources-changed", root.GetProperty("cause").GetString());
+            JsonElement sources;
+            if (format == "json")
+            {
+                Assert.False(root.GetProperty("created").GetBoolean());
+                Assert.False(root.GetProperty("idempotent").GetBoolean());
+                Assert.False(root.GetProperty("durable_state_synced").GetBoolean());
+                sources = root.GetProperty("scope_sources");
+            }
+            else
+            {
+                Assert.Contains("- created: no", result.Output, StringComparison.Ordinal);
+                Assert.Contains("- idempotent: no", result.Output, StringComparison.Ordinal);
+                Assert.Contains("- durable_state_synced: no", result.Output, StringComparison.Ordinal);
+                sources = root;
+            }
+            Assert.Equal("refused", sources.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-changed", sources.GetProperty("cause").GetString());
+            Assert.Equal("not-verified", sources.GetProperty("publication").GetString());
+            AssertJsonAbsentOrNull(sources, "provenance");
+            AssertJsonAbsentOrNull(sources, "expected_provenance_block");
+            var diagnostic = Assert.Single(sources.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal("packet-changed", diagnostic.GetProperty("cause").GetString());
+            Assert.Equal($".intent-cli/issues/{sourceUnit}/packet.yaml", diagnostic.GetProperty("path").GetString());
+        }
+    }
+
     [Fact]
     public void PublishFlow_Ungated_UnreadablePacket_RefusesWithPacketYamlUnreadable_G841Ac14a()
     {

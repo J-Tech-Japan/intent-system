@@ -783,7 +783,7 @@ src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	IssuePublishFlowCommand
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	IssuePublishFlowResult	9
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ProcessOutputEncoding	4
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	PublishScopeSourceSnapshot	2
-src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	RulingArtifact	5
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	RulingArtifact	6
 src/IntentSystem.Cli/Commands/IssuePublishReviewedCommand.cs	GhIssueCreator	1
 src/IntentSystem.Cli/Commands/IssueStatusCommand.cs	GhQueueDispatchPublisher	1
 src/IntentSystem.Cli/Commands/IssueStatusCommand.cs	GitHubRepositoryTargetResolver	1

@@ -3479,7 +3479,7 @@ public sealed class G835PublishFlowTests : IDisposable
     private static void AssertDurableStateUntouched(G835PublishFlowWorkspace workspace) =>
         workspace.AssertDurableBaselineUntouched(Unit);
 
-    private sealed class G835PublishFlowWorkspace : IDisposable
+    internal sealed class G835PublishFlowWorkspace : IDisposable
     {
         private readonly string rootPath = CreateRoot();
         private string? gitOriginPath;
