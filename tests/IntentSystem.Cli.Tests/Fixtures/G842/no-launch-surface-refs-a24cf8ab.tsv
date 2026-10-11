@@ -41,8 +41,13 @@ src/IntentSystem.Cli/Commands/CrossRuntimeReviewPacketClaimResolver.cs	ClaimOwne
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewPacketClaimResolver.cs	ClaimOwnershipVerifier	1
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVerification	3
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVerifier	2
+src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingArtifact	8
+src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingArtifactStore	1
+src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingDiagnostic	4
+src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingEvaluation	1
+src/IntentSystem.Cli/Commands/PacketValidateSourcesCommand.cs	RulingArtifact	4
 src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	INotifyProcessRunner	1
-src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	NotifyCommand	1
+src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	NotifyCommand	0
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingArtifact	30
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingArtifactStore	1
 src/IntentSystem.Cli/Commands/RulingArtifact.cs	RulingAtomicLinkResult	2

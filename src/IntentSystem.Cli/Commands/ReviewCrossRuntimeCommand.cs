@@ -433,6 +433,35 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         var digest = CrossRuntimeDesignReviewDigest.Compute(packet);
+        PacketScopeSources.Result? scopeSources = PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packet.PacketYaml)
+            ? PacketScopeSources.Evaluate(context.RepoRoot, unit, packet.PacketYaml, packet.GithubBody, (Clock ?? (() => DateTimeOffset.UtcNow))())
+            : null;
+        if (scopeSources is { IsDeclared: true })
+        {
+            if (!scopeSources.IsSuccessful)
+            {
+                return Refuse(writer, format, "request", scopeSources.Cause, scopeSources.Detail,
+                    "repair the declared ruling source pins and public provenance before requesting design review.",
+                    scopeSources: scopeSources);
+            }
+
+            var sourceResolution = CrossRuntimeReviewDesignTeamResolver.Resolve(context.RepoRoot, unit);
+            if (sourceResolution.Resolved && !ScopeSourcesMatch(scopeSources, sourceResolution.Domain, sourceResolution.Team, sourceResolution.TargetRepo))
+            {
+                var mismatch = scopeSources with
+                {
+                    State = "refused",
+                    Cause = "scope-sources-identity-mismatch",
+                    Detail = "pinned ruling identity does not match the resolved design-review domain, team, and target repository",
+                    Provenance = null,
+                    ExpectedProvenanceBlock = null,
+                };
+                return Refuse(writer, format, "request", mismatch.Cause, mismatch.Detail,
+                    "align the packet's source identity with the resolved design-review team and repository.",
+                    scopeSources: mismatch);
+            }
+        }
+        else scopeSources = null;
         if (File.Exists(outDir))
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
@@ -477,7 +506,7 @@ internal static class ReviewCrossRuntimeCommand
         string prompt;
         try
         {
-            prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument));
+            prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument), scopeSources);
         }
         catch (DecoderFallbackException exception)
         {
@@ -541,6 +570,7 @@ internal static class ReviewCrossRuntimeCommand
             ReadOnlyEnforcement = CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime],
             NoExecutionBoundary = NoExecutionBoundary,
             Terms = TermsNotice,
+            ScopeSources = scopeSources,
         };
 
         WriteDesignRequestResult(writer, format, result);
@@ -607,6 +637,7 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine($"Read-only enforcement: {result.ReadOnlyEnforcement}");
             writer.WriteLine(result.NoExecutionBoundary);
             writer.WriteLine(result.Terms);
+            WriteScopeSourcesMarkdown(writer, result.ScopeSources);
         }
     }
 
@@ -709,7 +740,8 @@ internal static class ReviewCrossRuntimeCommand
         string unit,
         string packetDigest,
         CrossRuntimeDesignReviewDigest.PacketBytes packet,
-        bool cloneGiven)
+        bool cloneGiven,
+        PacketScopeSources.Result? scopeSources = null)
     {
         var builder = new StringBuilder();
         builder.Append($"# Design review: {unit}\n\n");
@@ -728,6 +760,23 @@ internal static class ReviewCrossRuntimeCommand
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[1], packet.GithubBody);
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[2], packet.ReviewContext);
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[3], packet.Implementation);
+        if (scopeSources is { State: "satisfied", Provenance: { Count: > 0 } sources })
+        {
+            builder.Append("## Bound ruling sources\n\n");
+            builder.Append("These local G862 records are pinned by the packet. Their supplied authority is not authenticated operator approval, and local existence does not verify publication.\n\n");
+            foreach (var source in sources)
+            {
+                builder.Append($"### {source.Reference}\n\n");
+                builder.Append($"- domain/team: {source.Domain}/{source.Team}\n");
+                builder.Append($"- target repository: {source.TargetRepo}\n");
+                builder.Append($"- execution unit: {source.ExecutionUnit}\n");
+                builder.Append($"- SHA-256: {source.Sha256}\n");
+                builder.Append($"- artifact: `{source.Path}`\n\n");
+                builder.Append("Canonical ruling record observed by the validator:\n\n```json\n");
+                builder.Append(source.CanonicalRecordJson);
+                builder.Append("\n```\n\n");
+            }
+        }
         builder.Append("## Output\n\n");
         builder.Append("Return only one JSON object that matches the schema below, with no text before or after it.\n\n");
         builder.Append($"- \"packet_digest\": echo the packet digest you reviewed ({packetDigest}).\n");
@@ -1097,6 +1146,34 @@ internal static class ReviewCrossRuntimeCommand
                 $"complete `.intent-cli/issues/{unit}/` with all four packet files.");
         }
 
+        PacketScopeSources.Result? scopeSources = PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packet.PacketYaml)
+            ? PacketScopeSources.Evaluate(context.RepoRoot, unit, packet.PacketYaml, packet.GithubBody, (Clock ?? (() => DateTimeOffset.UtcNow))())
+            : null;
+        if (scopeSources is { IsDeclared: true })
+        {
+            if (!scopeSources.IsSuccessful)
+            {
+                return Refuse(writer, format, "record", scopeSources.Cause, scopeSources.Detail,
+                    "repair the declared ruling source pins and public provenance before recording a design review.",
+                    scopeSources: scopeSources);
+            }
+            if (!ScopeSourcesMatch(scopeSources, designResolution.Domain, designResolution.Team, designResolution.TargetRepo))
+            {
+                scopeSources = scopeSources with
+                {
+                    State = "refused",
+                    Cause = "scope-sources-identity-mismatch",
+                    Detail = "pinned ruling identity does not match the resolved design-review domain, team, and target repository",
+                    Provenance = null,
+                    ExpectedProvenanceBlock = null,
+                };
+                return Refuse(writer, format, "record", scopeSources.Cause, scopeSources.Detail,
+                    "align the packet's source identity with the resolved design-review team and repository.",
+                    scopeSources: scopeSources);
+            }
+        }
+        else scopeSources = null;
+
         var currentDigest = CrossRuntimeDesignReviewDigest.Compute(packet);
         if (!string.Equals(packetDigestArgument, currentDigest, StringComparison.OrdinalIgnoreCase))
         {
@@ -1261,6 +1338,7 @@ internal static class ReviewCrossRuntimeCommand
             Durability = write
                 ? $"The record exists only in this checkout until it is committed and pushed: commit `{recordRelative}` and `{record.RawVerdictFile}` in the host and push."
                 : "Dry run: nothing was written. Re-run with --write to store the record.",
+            ScopeSources = scopeSources,
         };
 
         if (format == FormatJson)
@@ -1278,6 +1356,7 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine($"- relation: {record.Relation} (conductor runtime {record.ConductorRuntime})");
             writer.WriteLine($"- verdict: {record.Verdict}");
             writer.WriteLine($"- durability: {result.Durability}");
+            WriteScopeSourcesMarkdown(writer, result.ScopeSources);
             writer.WriteLine();
             writer.WriteLine(commentBody);
         }
@@ -1499,9 +1578,27 @@ internal static class ReviewCrossRuntimeCommand
         var declared = context.Config.CrossRuntimeReview.TryGetDeclared(resolution.Domain, resolution.Team, out var declaration);
         var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
         string? digest = null;
+        PacketScopeSources.Result? scopeSources = null;
         if (CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out _))
         {
             digest = CrossRuntimeDesignReviewDigest.Compute(packet);
+            var evaluatedSources = PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packet.PacketYaml)
+                ? PacketScopeSources.Evaluate(context.RepoRoot, unit, packet.PacketYaml, packet.GithubBody, (Clock ?? (() => DateTimeOffset.UtcNow))())
+                : null;
+            if (evaluatedSources is { IsDeclared: true })
+            {
+                scopeSources = evaluatedSources.IsSuccessful
+                    && !ScopeSourcesMatch(evaluatedSources, designResolution.Domain, designResolution.Team, designResolution.TargetRepo)
+                    ? evaluatedSources with
+                    {
+                        State = "refused",
+                        Cause = "scope-sources-identity-mismatch",
+                        Detail = "pinned ruling identity does not match the resolved design-review domain, team, and target repository",
+                        Provenance = null,
+                        ExpectedProvenanceBlock = null,
+                    }
+                    : evaluatedSources;
+            }
         }
 
         var read = CrossRuntimeDesignReviewStore.Read(context.RepoRoot, unit);
@@ -1514,6 +1611,18 @@ internal static class ReviewCrossRuntimeCommand
                 Unreadable = read.Unreadable,
             }
             : CrossRuntimeReviewGate.EvaluateDesign(declared ? declaration : null, resolution, digest, read);
+        if (scopeSources is { IsSuccessful: false })
+        {
+            gate = gate with
+            {
+                Decision = CrossRuntimeReviewGate.DecisionBlocked,
+                Reasons = [.. gate.Reasons, new CrossRuntimeReviewGateReason
+                {
+                    Cause = scopeSources.Cause,
+                    Detail = scopeSources.Detail,
+                }],
+            };
+        }
         var result = new CrossRuntimeReviewStatusResult
         {
             Command = $"{CommandName} status",
@@ -1526,10 +1635,11 @@ internal static class ReviewCrossRuntimeCommand
             ConductorRuntime = declared ? declaration.ConductorRuntime : null,
             RecordFiles = read.Records.Select(stored => stored.RelativePath).ToArray(),
             Gate = gate,
+            ScopeSources = scopeSources,
         };
 
         WriteDesignStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.PacketDigest);
-        return 0;
+        return scopeSources is { IsSuccessful: false } ? 1 : 0;
     }
 
     private static void WriteImplementationStatusResult(
@@ -1564,6 +1674,7 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         WriteStatusMarkdown(writer, "Cross-runtime design review status (G835)", result.Repo, result.Pr, result.HeadSha, result.PacketDigest, result.Resolution, result.Declared, result.DeclarationSource, result.ConductorRuntime, gate, totalRecords, keySelector);
+        WriteScopeSourcesMarkdown(writer, result.ScopeSources);
     }
 
     private static void WriteStatusMarkdown(
@@ -1966,7 +2077,8 @@ internal static class ReviewCrossRuntimeCommand
         string cause,
         string detail,
         string fix,
-        CrossRuntimeReviewResolution? resolution = null)
+        CrossRuntimeReviewResolution? resolution = null,
+        PacketScopeSources.Result? scopeSources = null)
     {
         var refusal = new CrossRuntimeReviewRefusal
         {
@@ -1976,6 +2088,7 @@ internal static class ReviewCrossRuntimeCommand
             Detail = detail,
             Fix = fix,
             Resolution = resolution,
+            ScopeSources = scopeSources,
         };
 
         if (format == FormatJson)
@@ -1995,9 +2108,26 @@ internal static class ReviewCrossRuntimeCommand
             {
                 writer.WriteLine($"- missing: {resolution.Missing}");
             }
+            WriteScopeSourcesMarkdown(writer, scopeSources);
         }
 
         return 1;
+    }
+
+    private static bool ScopeSourcesMatch(PacketScopeSources.Result sources, string? domain, string? team, string? targetRepo) =>
+        StringComparer.Ordinal.Equals(sources.SourceDomain, domain)
+        && StringComparer.Ordinal.Equals(sources.SourceTeam, team)
+        && StringComparer.Ordinal.Equals(sources.SourceTargetRepo, targetRepo);
+
+    private static void WriteScopeSourcesMarkdown(TextWriter writer, PacketScopeSources.Result? sources)
+    {
+        if (sources is null) return;
+        writer.WriteLine();
+        writer.WriteLine("## scope_sources");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(JsonSerializer.Serialize(sources, RequestJsonOptions));
+        writer.WriteLine("```");
     }
 
     private static void WriteHelp(TextWriter writer)
@@ -2020,6 +2150,9 @@ internal sealed record CrossRuntimeReviewRefusal
     [JsonPropertyName("detail")] public required string Detail { get; init; }
     [JsonPropertyName("fix")] public required string Fix { get; init; }
     [JsonPropertyName("resolution")] public CrossRuntimeReviewResolution? Resolution { get; init; }
+    [JsonPropertyName("scope_sources")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewImplementationRequestResult
@@ -2089,6 +2222,9 @@ internal sealed record CrossRuntimeReviewRequestResult
     [JsonPropertyName("read_only_enforcement")] public required string ReadOnlyEnforcement { get; init; }
     [JsonPropertyName("no_execution_boundary")] public required string NoExecutionBoundary { get; init; }
     [JsonPropertyName("terms")] public required string Terms { get; init; }
+    [JsonPropertyName("scope_sources")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewRecordResult
@@ -2146,6 +2282,9 @@ internal sealed record CrossRuntimeReviewStatusResult
     [JsonPropertyName("conductor_runtime")] public string? ConductorRuntime { get; init; }
     [JsonPropertyName("record_files")] public required IReadOnlyList<string> RecordFiles { get; init; }
     [JsonPropertyName("gate")] public required CrossRuntimeReviewGateResult Gate { get; init; }
+    [JsonPropertyName("scope_sources")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }
 
 internal sealed record CrossRuntimeDesignReviewRecordResult
@@ -2161,4 +2300,7 @@ internal sealed record CrossRuntimeDesignReviewRecordResult
     [JsonPropertyName("comment_body")] public required string CommentBody { get; init; }
     [JsonPropertyName("comment_out")] public string? CommentOut { get; init; }
     [JsonPropertyName("durability")] public required string Durability { get; init; }
+    [JsonPropertyName("scope_sources")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }

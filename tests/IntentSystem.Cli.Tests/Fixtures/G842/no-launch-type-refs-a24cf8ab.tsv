@@ -776,8 +776,9 @@ src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	IIssueCreator	5
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	IssueCreateOutcome	7
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	IssuePublishAuthorization	13
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	IssuePublishFlowCommand	4
-src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	IssuePublishFlowResult	7
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	IssuePublishFlowResult	9
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	ProcessOutputEncoding	4
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	RulingArtifact	4
 src/IntentSystem.Cli/Commands/IssuePublishReviewedCommand.cs	GhIssueCreator	1
 src/IntentSystem.Cli/Commands/IssueStatusCommand.cs	GhQueueDispatchPublisher	1
 src/IntentSystem.Cli/Commands/IssueStatusCommand.cs	GitHubRepositoryTargetResolver	1
@@ -1076,6 +1077,11 @@ src/IntentSystem.Cli/Commands/NotifyTransportPreflight.cs	NotifyTransportPreflig
 src/IntentSystem.Cli/Commands/OrcaRunSoloStore.cs	Options	2
 src/IntentSystem.Cli/Commands/PacketDraftCommand.cs	ClaimOwnershipVerifier	1
 src/IntentSystem.Cli/Commands/PacketDraftCommand.cs	ClaimVerificationCommand	1
+src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingArtifact	8
+src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingArtifactStore	1
+src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingDiagnostic	4
+src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingEvaluation	1
+src/IntentSystem.Cli/Commands/PacketValidateSourcesCommand.cs	RulingArtifact	4
 src/IntentSystem.Cli/Commands/PrClosingReferenceAnalyzer.cs	Classifications	1
 src/IntentSystem.Cli/Commands/PromptAdjudication.cs	NotifyPromptAudit	1
 src/IntentSystem.Cli/Commands/PublishDurableArtifactAnalyzer.cs	IssuePublishFlowCommand	4
@@ -1103,7 +1109,7 @@ src/IntentSystem.Cli/Commands/ReviewCollectSignalsCommand.cs	Kinds	2
 src/IntentSystem.Cli/Commands/ReviewCollectSignalsCommand.cs	Labels	4
 src/IntentSystem.Cli/Commands/ReviewCollectSignalsCommand.cs	WorkerSignalContract	1
 src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	INotifyProcessRunner	1
-src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	NotifyCommand	1
+src/IntentSystem.Cli/Commands/ReviewCrossRuntimeCommand.cs	NotifyCommand	0
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	GhCliGitHubLabelMutator	1
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	GitHubAutomationLabel	2
 src/IntentSystem.Cli/Commands/ReviewSignalHandledCommand.cs	IGitHubLabelMutator	2

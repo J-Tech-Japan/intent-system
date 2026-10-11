@@ -25,7 +25,7 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     private const string D2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private const string D3 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
-    private readonly string root = Directory.CreateTempSubdirectory("g835-host-").FullName;
+    private readonly string root = CreateTestRoot();
     private readonly Dictionary<string, string?> claims = new(StringComparer.Ordinal) { [Unit] = Team };
     private DateTimeOffset clock = new(2026, 9, 14, 12, 0, 0, TimeSpan.Zero);
 
@@ -308,6 +308,265 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.Contains(digest, prompt, StringComparison.Ordinal);
         using var result = JsonDocument.Parse(output);
         Assert.Equal(digest, result.RootElement.GetProperty("packet_digest").GetString());
+    }
+
+    [Fact]
+    public void DesignRequest_ValidatesPinnedSourcesAndEmbedsCanonicalRulingWithoutChangingPacketDigestAlgorithm()
+    {
+        var source = WritePinnedSourcePacket();
+        var outDir = Path.Combine(root, "design-pinned-source-out");
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", "json"]);
+        Assert.Equal(0, exit);
+        using var result = JsonDocument.Parse(output);
+        var sourceResult = result.RootElement.GetProperty("scope_sources");
+        Assert.Equal("satisfied", sourceResult.GetProperty("state").GetString());
+        Assert.Equal(source.Digest, sourceResult.GetProperty("provenance")[0].GetProperty("sha256").GetString());
+        Assert.Equal("supplied-not-authenticated", sourceResult.GetProperty("authority_verification").GetString());
+        Assert.Equal("not-verified", sourceResult.GetProperty("publication").GetString());
+        var prompt = File.ReadAllText(Path.Combine(outDir, "prompt.md"));
+        Assert.Contains("## Bound ruling sources", prompt, StringComparison.Ordinal);
+        Assert.Contains(source.Digest, prompt, StringComparison.Ordinal);
+        Assert.Contains(source.CanonicalJson, prompt, StringComparison.Ordinal);
+        Assert.Contains("supplied authority is not authenticated operator approval", prompt, StringComparison.Ordinal);
+
+        var before = Directory.Exists(outDir) ? Directory.GetFileSystemEntries(outDir).Order(StringComparer.Ordinal).ToArray() : [];
+        var packetYamlPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var yaml = File.ReadAllText(packetYamlPath).Replace(source.Digest, new string('0', 64), StringComparison.Ordinal);
+        File.WriteAllText(packetYamlPath, yaml);
+        var refusedDir = Path.Combine(root, "design-pinned-source-refused");
+        var (refusedExit, refusedOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", refusedDir), "--format", "json"]);
+        Assert.Equal(1, refusedExit);
+        using var refusal = JsonDocument.Parse(refusedOutput);
+        Assert.Equal("scope-sources-digest-mismatch", refusal.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+        Assert.False(Directory.Exists(refusedDir));
+        Assert.Equal(before, Directory.GetFileSystemEntries(outDir).Order(StringComparer.Ordinal).ToArray());
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_MalformedPacketCannotProveSourceDeclarationAbsent(string format)
+    {
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        // The syntax error occurs before the optional declaration. A text scan
+        // that treats this as a legacy packet would create an output directory.
+        File.WriteAllText(packetPath,
+            "implementation_issue_packet:\n  issue_title: [unterminated\nscope_sources: []\n");
+        var outDir = Path.Combine(root, "malformed-source-packet-" + format);
+
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
+
+        Assert.Equal(1, exit);
+        Assert.False(Directory.Exists(outDir));
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.Equal("scope-sources-packet-unavailable", result.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+            Assert.Equal("unavailable", result.RootElement.GetProperty("scope_sources").GetProperty("state").GetString());
+        }
+        else
+        {
+            Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+            Assert.Contains("scope_sources", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRecord_UsesActualPinnedSourceEvaluationBeforeWritingApproval(string format)
+    {
+        WritePinnedSourcePacket();
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
+        var designDirectory = CrossRuntimeReviewPaths.DesignDirectory(root, Unit);
+
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format]);
+
+        Assert.True(exit == 0, output);
+        using var source = ReadScopeSourcesOutput(output, format);
+        Assert.Equal("satisfied", source.RootElement.GetProperty("state").GetString());
+        Assert.Equal("not-verified", source.RootElement.GetProperty("publication").GetString());
+        Assert.Single(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
+        Assert.True(Directory.Exists(designDirectory));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRecord_InvalidPinnedSourceRefusesBeforeCreatingApprovalFiles(string format)
+    {
+        var pinned = WritePinnedSourcePacket();
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var packet = File.ReadAllText(packetPath).Replace(pinned.Digest, new string('0', 64), StringComparison.Ordinal);
+        File.WriteAllText(packetPath, packet);
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
+        var designDirectory = CrossRuntimeReviewPaths.DesignDirectory(root, Unit);
+
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format]);
+
+        Assert.Equal(1, exit);
+        using var source = ReadScopeSourcesOutput(output, format);
+        Assert.Equal("scope-sources-digest-mismatch", source.RootElement.GetProperty("cause").GetString());
+        Assert.False(Directory.Exists(designDirectory));
+        Assert.Empty(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
+    }
+
+    [Theory]
+    [InlineData("json", "markdown")]
+    [InlineData("markdown", "json")]
+    public void DesignIdentityMismatchRefusesRequestAndRecordWithoutStaleProvenance(string requestFormat, string recordFormat)
+    {
+        _ = WritePinnedSourcePacket(sourceTeam: "other-team");
+        var outDir = Path.Combine(root, "design-source-identity-mismatch");
+
+        var (requestExit, requestOutput) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", requestFormat,
+        ]);
+
+        Assert.Equal(1, requestExit);
+        Assert.False(Directory.Exists(outDir));
+        AssertSourceIdentityMismatch(requestOutput, requestFormat);
+
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
+        var (recordExit, recordOutput) = Route([
+            "review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", recordFormat,
+        ]);
+        Assert.Equal(1, recordExit);
+        Assert.False(Directory.Exists(CrossRuntimeReviewPaths.DesignDirectory(root, Unit)));
+        Assert.Empty(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
+        AssertSourceIdentityMismatch(recordOutput, recordFormat);
+
+        var (statusExit, statusOutput) = Route(["review", "cross-runtime", .. DesignStatusArgs(), "--format", "json"]);
+        Assert.Equal(1, statusExit);
+        using var status = JsonDocument.Parse(statusOutput);
+        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, Decision(status.RootElement));
+        var source = status.RootElement.GetProperty("scope_sources");
+        Assert.Equal("scope-sources-identity-mismatch", source.GetProperty("cause").GetString());
+        AssertNullOrMissing(source, "provenance");
+        AssertNullOrMissing(source, "expected_provenance_block");
+    }
+
+    [Fact]
+    public void DesignStatusBlocksPreviouslyMatchingApprovalsAfterPinnedRulingExpires()
+    {
+        WritePinnedSourcePacket(expiresAfter: TimeSpan.FromMinutes(60));
+        var requestOut = Path.Combine(root, "design-pinned-expiry-request");
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", requestOut), "--format", "json"]);
+        Assert.True(requestExit == 0, requestOutput);
+        var digest = CurrentDigest();
+        RecordDesign("codex", "approve", digest);
+        RecordDesign("claude", "approve", digest);
+        var beforeExpiry = DesignStatus();
+        Assert.Equal(0, beforeExpiry.ExitCode);
+        Assert.Equal(CrossRuntimeReviewGate.DecisionSatisfied, Decision(beforeExpiry.Status));
+
+        clock = clock.AddHours(2);
+        var (afterExpiryExit, afterExpiryOutput) = Route(["review", "cross-runtime", .. DesignStatusArgs(), "--format", "json"]);
+        Assert.Equal(1, afterExpiryExit);
+        using var status = JsonDocument.Parse(afterExpiryOutput);
+        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, Decision(status.RootElement));
+        Assert.Equal("scope-sources-ruling-inactive", status.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+        Assert.Contains(status.RootElement.GetProperty("gate").GetProperty("reasons").EnumerateArray(),
+            reason => reason.GetProperty("cause").GetString() == "scope-sources-ruling-inactive");
+        Assert.Equal(2, CrossRuntimeDesignReviewStore.Read(root, Unit).Records.Count);
+    }
+
+    [Fact]
+    public void DesignPinnedSourceReplacementChangesTheFourFileDigestAndRequiresFreshReviews()
+    {
+        var original = WritePinnedSourcePacket();
+        var requestOut = Path.Combine(root, "design-source-replacement-initial");
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", requestOut), "--format", "json"]);
+        Assert.True(requestExit == 0, requestOutput);
+        var originalDigest = CurrentDigest();
+        RecordDesign("codex", "approve", originalDigest);
+        RecordDesign("claude", "approve", originalDigest);
+        Assert.Equal(CrossRuntimeReviewGate.DecisionSatisfied, Decision(DesignStatus().Status));
+
+        var replacement = WriteSuccessorRuling("R-G863-REPLACEMENT", []);
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var originalPacketYaml = File.ReadAllText(packetPath);
+        var packetYaml = originalPacketYaml
+            .Replace("ruling:R-G863-PINNED", "ruling:R-G863-REPLACEMENT", StringComparison.Ordinal)
+            .Replace(original.Digest, replacement.Digest, StringComparison.Ordinal);
+        File.WriteAllText(packetPath, packetYaml);
+        var bodyPath = Path.Combine(PacketDir(Unit), "github-body.md");
+        var body = File.ReadAllText(bodyPath);
+        var currentBlock = PacketScopeSources.Evaluate(root, Unit, Encoding.UTF8.GetBytes(originalPacketYaml),
+            Encoding.UTF8.GetBytes(body), clock).ExpectedProvenanceBlock;
+        Assert.NotNull(currentBlock);
+        var replacementEvaluation = PacketScopeSources.Evaluate(root, Unit, Encoding.UTF8.GetBytes(packetYaml),
+            Encoding.UTF8.GetBytes(body), clock);
+        Assert.Equal("scope-sources-provenance-mismatch", replacementEvaluation.Cause);
+        Assert.NotNull(replacementEvaluation.ExpectedProvenanceBlock);
+        File.WriteAllText(bodyPath, body.Replace(currentBlock!, replacementEvaluation.ExpectedProvenanceBlock!, StringComparison.Ordinal));
+
+        var status = DesignStatus();
+        Assert.NotEqual(originalDigest, CurrentDigest());
+        Assert.Equal(0, status.ExitCode);
+        Assert.Equal(CrossRuntimeReviewGate.DecisionMissing, Decision(status.Status));
+        Assert.Contains(Reasons(status.Status), reason => reason.StartsWith(CrossRuntimeReviewCauses.Missing, StringComparison.Ordinal));
+        Assert.Equal("satisfied", status.Status.GetProperty("scope_sources").GetProperty("state").GetString());
+    }
+
+    [Theory]
+    [InlineData("missing", "scope-sources-ruling-missing")]
+    [InlineData("superseded", "scope-sources-ruling-inactive")]
+    [InlineData("tampered", "scope-sources-digest-mismatch")]
+    public void DesignLifecycle_StoredApprovalsCannotOutliveThePinnedSource(string change, string expectedSourceCause)
+    {
+        var source = WritePinnedSourcePacket();
+        var initialRequest = Path.Combine(root, "design-source-lifecycle-initial");
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", initialRequest), "--format", "json"]);
+        Assert.True(requestExit == 0, requestOutput);
+        var digest = CurrentDigest();
+        RecordDesign("codex", "approve", digest);
+        RecordDesign("claude", "approve", digest);
+        Assert.Equal(CrossRuntimeReviewGate.DecisionSatisfied, Decision(DesignStatus().Status));
+        var recordCountBefore = CrossRuntimeDesignReviewStore.Read(root, Unit).Records.Count;
+        var artifactPath = Path.Combine(root, ".intent-cli", "rulings", Domain, Team, "R-G863-PINNED.json");
+
+        switch (change)
+        {
+            case "missing":
+                File.Delete(artifactPath);
+                break;
+            case "superseded":
+                _ = WriteSuccessorRuling("R-G863-SUCCESSOR", ["R-G863-PINNED"]);
+                break;
+            case "tampered":
+                Assert.True(RulingArtifact.TryParse(File.ReadAllBytes(artifactPath), true, out var record, out var cause, out var detail), $"{cause}: {detail}");
+                File.WriteAllBytes(artifactPath, RulingArtifact.Serialize(record! with { Decision = "A canonical source changed after the approvals." }));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(change));
+        }
+
+        var refusedOutputDirectory = Path.Combine(root, "design-source-lifecycle-refused");
+        var (refusedRequestExit, refusedRequest) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", refusedOutputDirectory), "--format", "json"]);
+        Assert.Equal(1, refusedRequestExit);
+        using (var request = JsonDocument.Parse(refusedRequest))
+            Assert.Equal(expectedSourceCause, request.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+        Assert.False(Directory.Exists(refusedOutputDirectory));
+
+        var failedVerdict = WriteVerdictFile("cursor", Verdict("approve", digest));
+        var (failedRecordExit, failedRecord) = Route(["review", "cross-runtime", .. DesignRecordArgs("cursor", failedVerdict, digest, write: true), "--format", "json"]);
+        Assert.Equal(1, failedRecordExit);
+        using (var record = JsonDocument.Parse(failedRecord))
+            Assert.Equal(expectedSourceCause, record.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+        Assert.Equal(recordCountBefore, CrossRuntimeDesignReviewStore.Read(root, Unit).Records.Count);
+
+        var (statusExit, statusOutput) = Route(["review", "cross-runtime", .. DesignStatusArgs(), "--format", "json"]);
+        Assert.Equal(1, statusExit);
+        using var status = JsonDocument.Parse(statusOutput);
+        Assert.Equal(CrossRuntimeReviewGate.DecisionBlocked, Decision(status.RootElement));
+        Assert.Contains(status.RootElement.GetProperty("gate").GetProperty("reasons").EnumerateArray(),
+            reason => reason.GetProperty("cause").GetString() == expectedSourceCause);
+        Assert.Equal(recordCountBefore, CrossRuntimeDesignReviewStore.Read(root, Unit).Records.Count);
+        Assert.NotEmpty(source.CanonicalJson);
     }
 
     [Fact]
@@ -701,10 +960,24 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             Assert.Contains("G835", orchestration, StringComparison.Ordinal);
             Assert.Contains("--kind design", orchestration, StringComparison.Ordinal);
             Assert.Contains("--model", orchestration, StringComparison.Ordinal);
+            Assert.Contains("G863", orchestration, StringComparison.Ordinal);
+            Assert.Contains("packet validate-sources", orchestration, StringComparison.Ordinal);
+            Assert.Contains("supplied-not-authenticated", orchestration, StringComparison.Ordinal);
+            Assert.Contains("#1867", orchestration, StringComparison.Ordinal);
+
+            var commandReference = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "08-command-reference.md"));
+            Assert.Contains("G863", commandReference, StringComparison.Ordinal);
+            Assert.Contains("packet validate-sources", commandReference, StringComparison.Ordinal);
 
             var ledger = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "1.0-compatibility-ledger.md"));
             Assert.Contains("cross-runtime design review record store", ledger, StringComparison.Ordinal);
             Assert.Contains("issue publish-flow design gate", ledger, StringComparison.Ordinal);
+            Assert.Contains("G863", ledger, StringComparison.Ordinal);
+            Assert.Contains("scope_source_digests", ledger, StringComparison.Ordinal);
+            Assert.Contains("packet validate-sources", ledger, StringComparison.Ordinal);
+            var sourceRow = Assert.Single(ledger.Split('\n'), line => line.StartsWith("| `packet validate-sources` |", StringComparison.Ordinal));
+            Assert.Contains("G863", sourceRow, StringComparison.Ordinal);
+            Assert.Contains("preview-through-1.x", sourceRow, StringComparison.Ordinal);
             foreach (var row in new[] { "| `review cross-runtime request` |", "| `review cross-runtime record` |", "| `review cross-runtime status` |" })
             {
                 var line = Assert.Single(ledger.Split('\n'), candidate => candidate.StartsWith(row, StringComparison.Ordinal));
@@ -819,6 +1092,40 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             .Select(reason => reason.GetProperty("cause").GetString()
                 + (reason.TryGetProperty("relation", out var relation) ? ":" + relation.GetString() : string.Empty))
             .ToArray();
+
+    private static void AssertSourceIdentityMismatch(string output, string format)
+    {
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            var source = result.RootElement.GetProperty("scope_sources");
+            Assert.Equal("refused", source.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-identity-mismatch", source.GetProperty("cause").GetString());
+            AssertNullOrMissing(source, "provenance");
+            AssertNullOrMissing(source, "expected_provenance_block");
+            return;
+        }
+
+        Assert.Contains("scope-sources-identity-mismatch", output, StringComparison.Ordinal);
+        Assert.Contains("refused", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"provenance\"", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Expected public block", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+    }
+
+    private static void AssertNullOrMissing(JsonElement element, string propertyName)
+    {
+        if (element.TryGetProperty(propertyName, out var value))
+            Assert.Equal(JsonValueKind.Null, value.ValueKind);
+    }
+
+    private static string CreateTestRoot()
+    {
+        var baseDirectory = OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath();
+        var path = Path.Combine(baseDirectory, "g835-host-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
 
     private void RecordDesign(string runtime, string verdict, string digest, string unit = Unit, string? model = null)
     {
@@ -955,6 +1262,23 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
 
     private string CurrentDigest() => CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDir(Unit));
 
+    private static JsonDocument ReadScopeSourcesOutput(string output, string format)
+    {
+        if (format == "json")
+        {
+            using var command = JsonDocument.Parse(output);
+            return JsonDocument.Parse(command.RootElement.GetProperty("scope_sources").GetRawText());
+        }
+
+        const string marker = "## scope_sources\n\n```json\n";
+        var start = output.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, output);
+        start += marker.Length;
+        var end = output.IndexOf("\n```", start, StringComparison.Ordinal);
+        Assert.True(end >= 0, output);
+        return JsonDocument.Parse(output[start..end]);
+    }
+
     private string PacketDir(string unit) => Path.Combine(root, ".intent-cli", "issues", unit);
 
     private void CopyFixturePacket(string unit)
@@ -1005,6 +1329,95 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             claimed_at = DateTimeOffset.UtcNow,
             base_commit = D1,
         }));
+    }
+
+    private (string Digest, string CanonicalJson) WritePinnedSourcePacket(
+        TimeSpan? expiresAfter = null, string sourceTeam = Team)
+    {
+        var recordedAt = clock;
+        var artifact = new RulingArtifact
+        {
+            Id = "R-G863-PINNED",
+            Domain = Domain,
+            Team = sourceTeam,
+            AuthorityRole = "operator",
+            TargetRepo = Repo,
+            ScopeKind = "execution-units",
+            ExecutionUnits = [Unit],
+            Decision = "The packet uses this exact local ruling.",
+            Rationale = "The source binding is explicit and digest-pinned.",
+            EvidenceRefs = [$"https://github.com/J-Tech-Japan/intent-system/issues/1887"],
+            RecordedAt = recordedAt,
+            ExpiresAt = expiresAfter is null ? null : recordedAt.Add(expiresAfter.Value),
+            Supersedes = [],
+        };
+        var inputRoot = OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath();
+        var inputPath = Path.Combine(inputRoot, "g863-source-input-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllBytes(inputPath, RulingArtifact.Serialize(artifact));
+        using var writer = new StringWriter();
+        var exit = RulingCommand.ExecuteRecord(Context(),
+            ["--id", artifact.Id, "--domain", Domain, "--team", sourceTeam, "--from-file", inputPath,
+             "--authority-role", "operator", "--write", "--format", "json"], writer, null, recordedAt);
+        Assert.True(exit == 0, writer.ToString());
+        using var output = JsonDocument.Parse(writer.ToString());
+        Assert.True(output.RootElement.GetProperty("wrote").GetBoolean());
+        var artifactPath = Path.Combine(root, ".intent-cli", "rulings", Domain, sourceTeam, artifact.Id + ".json");
+        var bytes = File.ReadAllBytes(artifactPath);
+        var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        var canonicalJson = Encoding.UTF8.GetString(bytes);
+
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var packetYaml = File.ReadAllText(packetPath)
+            .Replace("  target_repo: " + Repo, "  target_repo: " + Repo + "\n  source_execution_unit: " + Unit + "\n  team: " + sourceTeam, StringComparison.Ordinal)
+            + "\nscope_sources:\n  - \"ruling:" + artifact.Id + "\"\nscope_source_digests:\n  \"ruling:" + artifact.Id + "\": \"" + digest + "\"\n";
+        File.WriteAllText(packetPath, packetYaml);
+        var bodyPath = Path.Combine(PacketDir(Unit), "github-body.md");
+        var body = File.ReadAllText(bodyPath);
+        var pending = PacketScopeSources.Evaluate(root, Unit, Encoding.UTF8.GetBytes(packetYaml), Encoding.UTF8.GetBytes(body), recordedAt);
+        Assert.Equal("scope-sources-provenance-mismatch", pending.Cause);
+        Assert.NotNull(pending.ExpectedProvenanceBlock);
+        File.WriteAllText(bodyPath, body.TrimEnd() + "\n\n" + pending.ExpectedProvenanceBlock + "\n");
+        var verified = PacketScopeSources.Evaluate(root, Unit, Encoding.UTF8.GetBytes(packetYaml), File.ReadAllBytes(bodyPath), recordedAt);
+        Assert.Equal("satisfied", verified.State);
+        return (digest, canonicalJson);
+    }
+
+    private (string Digest, string CanonicalJson) WriteSuccessorRuling(string id, IReadOnlyList<string> supersedes)
+    {
+        var recordedAt = clock;
+        var artifact = new RulingArtifact
+        {
+            Id = id,
+            Domain = Domain,
+            Team = Team,
+            AuthorityRole = "operator",
+            TargetRepo = Repo,
+            ScopeKind = "execution-units",
+            ExecutionUnits = [Unit],
+            Decision = "The operator recorded a later source.",
+            Rationale = "The successor is an actual writer-emitted graph edge.",
+            EvidenceRefs = [$"https://github.com/J-Tech-Japan/intent-system/issues/1887"],
+            RecordedAt = recordedAt,
+            ExpiresAt = null,
+            Supersedes = supersedes,
+        };
+        var inputDirectory = OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath();
+        var inputPath = Path.Combine(inputDirectory, "g863-successor-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllBytes(inputPath, RulingArtifact.Serialize(artifact));
+        using var output = new StringWriter();
+        var exit = RulingCommand.ExecuteRecord(Context(),
+            ["--id", id, "--domain", Domain, "--team", Team, "--from-file", inputPath,
+             "--authority-role", "operator", "--write", "--format", "json"], output, null, recordedAt);
+        Assert.True(exit == 0, output.ToString());
+        using var result = JsonDocument.Parse(output.ToString());
+        Assert.Equal("written", result.RootElement.GetProperty("disposition").GetString());
+        Assert.True(result.RootElement.GetProperty("wrote").GetBoolean());
+        var path = Path.Combine(root, ".intent-cli", "rulings", Domain, Team, id + ".json");
+        Assert.True(File.Exists(path));
+        var bytes = File.ReadAllBytes(path);
+        Assert.Equal(RulingArtifact.Serialize(artifact), bytes);
+        return (Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
+            Encoding.UTF8.GetString(bytes));
     }
 
     private void WriteQueue(params (string Unit, string? LinkedPr)[] items)

@@ -88,6 +88,11 @@ public sealed class GuideCommandsListCommandTests
         Assert.Contains(catalog.RootElement.GetProperty("groups").EnumerateArray(), group =>
             group.GetProperty("name").GetString() == "ruling"
             && group.GetProperty("purpose").GetString()!.Contains("Local immutable operator-ruling", StringComparison.Ordinal));
+        var packetPurpose = catalog.RootElement.GetProperty("groups").EnumerateArray()
+            .Single(group => group.GetProperty("name").GetString() == "packet")
+            .GetProperty("purpose").GetString()!;
+        Assert.Contains("packet validate-sources", packetPurpose, StringComparison.Ordinal);
+        Assert.Contains("config-independent", packetPurpose, StringComparison.Ordinal);
 
         const string prerequisite = "Start from a bug chain or from an operator ruling recorded in the host; do not author a packet without one.";
         const string previewCommand = "intent-cli ruling record --id <id> --domain <domain> --team <team> --from-file <ruling.json> --authority-role operator --format json";
@@ -119,6 +124,15 @@ public sealed class GuideCommandsListCommandTests
                 Assert.True(Array.IndexOf(commands, writeCommand) > Array.IndexOf(commands, previewCommand));
                 Assert.True(Array.IndexOf(commands, showCommand) > Array.IndexOf(commands, writeCommand));
                 Assert.True(Array.IndexOf(commands, validateCommand) > Array.IndexOf(commands, showCommand));
+
+                var packetStep = solo.RootElement.GetProperty("loop").EnumerateArray()
+                    .Single(step => step.GetProperty("id").GetString() == "packet-draft-and-validate");
+                var packetInstruction = packetStep.GetProperty("instruction").GetString()!;
+                Assert.Contains("packet validate-sources", packetInstruction, StringComparison.Ordinal);
+                Assert.Contains("only `issue publish-flow` consumes the source gate", packetInstruction, StringComparison.Ordinal);
+                Assert.Contains("repeat design review after the packet digest changes", packetInstruction, StringComparison.Ordinal);
+                Assert.Contains(packetStep.GetProperty("commands").EnumerateArray(), command =>
+                    command.GetProperty("command").GetString() == "intent-cli packet validate-sources --execution-unit <unit> --format json");
             }
             else
             {
@@ -134,6 +148,10 @@ public sealed class GuideCommandsListCommandTests
                 var showIndex = markdown.IndexOf(showCommand, StringComparison.Ordinal);
                 var validateIndex = markdown.IndexOf(validateCommand, StringComparison.Ordinal);
                 Assert.True(previewIndex >= 0 && writeIndex > previewIndex && showIndex > writeIndex && validateIndex > showIndex);
+                Assert.Contains("packet-draft-and-validate", markdown, StringComparison.Ordinal);
+                Assert.Contains("packet validate-sources", markdown, StringComparison.Ordinal);
+                Assert.Contains("only `issue publish-flow` consumes the source gate", markdown, StringComparison.Ordinal);
+                Assert.Contains("repeat design review after the packet digest changes", markdown, StringComparison.Ordinal);
             }
         }
     }

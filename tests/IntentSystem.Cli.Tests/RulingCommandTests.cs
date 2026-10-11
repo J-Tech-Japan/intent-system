@@ -234,6 +234,53 @@ public sealed class RulingCommandTests
     }
 
     [Fact]
+    public void PacketScopeSources_ActualWrittenRulingProducesVerifiedPublicBlock()
+    {
+        using var workspace = new TemporaryWorkspace();
+        var record = Artifact("R-G863-SOURCE", T0, []) with { ExecutionUnits = ["G863"] };
+        WriteActualRuling(workspace, workspace.Root, record, T0);
+        var diskBytes = ReadRulingBytes(workspace.Root, record.Id);
+        Assert.Equal(RulingArtifact.Serialize(record), diskBytes);
+        var sha = Convert.ToHexString(SHA256.HashData(diskBytes)).ToLowerInvariant();
+        var packetYaml = $$"""
+            implementation_issue_packet:
+              source_execution_unit: G863
+              domain: intent-cli
+              team: intent-cli-dev
+              target_repo: J-Tech-Japan/intent-system
+            scope_sources:
+              - "ruling:R-G863-SOURCE"
+            scope_source_digests:
+              "ruling:R-G863-SOURCE": "{{sha}}"
+            """;
+        var mismatch = PacketScopeSources.Evaluate(workspace.Root, "G863", Encoding.UTF8.GetBytes(packetYaml), [], T0);
+        Assert.Equal("scope-sources-provenance-mismatch", mismatch.Cause);
+        Assert.Equal(sha, Assert.Single(mismatch.Provenance!).Sha256);
+        Assert.NotNull(mismatch.ExpectedProvenanceBlock);
+
+        var packetDirectory = Path.Combine(workspace.Root, ".intent-cli", "issues", "G863");
+        Directory.CreateDirectory(packetDirectory);
+        File.WriteAllText(Path.Combine(packetDirectory, "packet.yaml"), packetYaml, new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(packetDirectory, "github-body.md"), mismatch.ExpectedProvenanceBlock!, new UTF8Encoding(false));
+        var rulingReads = 0;
+        using var writer = new StringWriter();
+        var exitCode = PacketValidateSourcesCommand.Execute(workspace.Root,
+            ["--execution-unit", "G863", "--format", "json"], writer, T0,
+            (_, _) => rulingReads++);
+        Assert.Equal(0, exitCode);
+        Assert.True(rulingReads > 0);
+        using var result = JsonDocument.Parse(writer.ToString());
+        var root = result.RootElement;
+        Assert.Equal("satisfied", root.GetProperty("state").GetString());
+        Assert.Equal("scope-sources-satisfied", root.GetProperty("cause").GetString());
+        Assert.Equal("supplied-not-authenticated", root.GetProperty("authority_verification").GetString());
+        Assert.Equal("not-verified", root.GetProperty("publication").GetString());
+        Assert.Equal(sha, root.GetProperty("provenance")[0].GetProperty("sha256").GetString());
+        Assert.Equal(".intent-cli/rulings/intent-cli/intent-cli-dev/R-G863-SOURCE.json",
+            root.GetProperty("provenance")[0].GetProperty("path").GetString());
+    }
+
+    [Fact]
     public void GeneratedTimestampReplayAndReaderClockSkew_PreserveTheFirstArtifact()
     {
         using var workspace = new TemporaryWorkspace();
