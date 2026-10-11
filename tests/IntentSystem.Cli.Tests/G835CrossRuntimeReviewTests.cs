@@ -569,32 +569,79 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     [InlineData("markdown")]
     public void DesignConsumers_ExplicitEmptySourcesKeepLegacyShapeAndClockBudget(string format)
     {
+        using var legacy = new G835CrossRuntimeReviewTests();
         File.AppendAllText(Path.Combine(PacketDir(Unit), "packet.yaml"),
             "\nscope_sources: []\nscope_source_digests: {}\n");
-        var clockCalls = 0;
-        ReviewCrossRuntimeCommand.Clock = () =>
+
+        (string Request, string Record, string Status, string Digest, string RawVerdictSha) Capture(G835CrossRuntimeReviewTests workspace)
         {
-            clockCalls++;
-            return clock;
-        };
+            var clockCalls = 0;
+            var fixedNow = new DateTimeOffset(2026, 10, 10, 12, 0, 0, TimeSpan.Zero);
+            ReviewCrossRuntimeCommand.Clock = () =>
+            {
+                clockCalls++;
+                return fixedNow;
+            };
 
-        var outDir = Path.Combine(root, "design-explicit-empty-source");
-        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
-        Assert.Equal(0, requestExit);
-        AssertNoScopeSources(requestOutput, format);
-        Assert.Equal(0, clockCalls);
+            var outDir = Path.Combine(workspace.root, "design-empty-parity-request");
+            var (requestExit, requestOutput) = workspace.Route([
+                "review", "cross-runtime", .. workspace.DesignRequestArgs("codex", outDir), "--format", format,
+            ]);
+            Assert.Equal(0, requestExit);
+            AssertNoScopeSources(requestOutput, format);
+            Assert.Equal(0, clockCalls);
 
-        var digest = CurrentDigest();
-        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
-        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format]);
-        Assert.Equal(0, recordExit);
-        AssertNoScopeSources(recordOutput, format);
-        Assert.Equal(1, clockCalls);
+            var digest = workspace.CurrentDigest();
+            var verdict = Path.Combine(workspace.root, "runs", "codex-empty-parity.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(verdict)!);
+            var verdictBytes = Encoding.UTF8.GetBytes(Verdict("approve", digest));
+            File.WriteAllBytes(verdict, verdictBytes);
+            var rawVerdictSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(verdictBytes)).ToLowerInvariant();
+            var (recordExit, recordOutput) = workspace.Route([
+                "review", "cross-runtime", .. workspace.DesignRecordArgs("codex", verdict, digest, write: true), "--format", format,
+            ]);
+            Assert.Equal(0, recordExit);
+            AssertNoScopeSources(recordOutput, format);
+            Assert.Equal(1, clockCalls);
 
-        var (statusExit, statusOutput) = Route(["review", "cross-runtime", .. DesignStatusArgs(), "--format", format]);
-        Assert.Equal(0, statusExit);
-        AssertNoScopeSources(statusOutput, format);
-        Assert.Equal(1, clockCalls);
+            var (statusExit, statusOutput) = workspace.Route([
+                "review", "cross-runtime", .. workspace.DesignStatusArgs(), "--format", format,
+            ]);
+            Assert.Equal(0, statusExit);
+            AssertNoScopeSources(statusOutput, format);
+            Assert.Equal(1, clockCalls);
+
+            foreach (var output in new[] { requestOutput, recordOutput, statusOutput })
+            {
+                Assert.Contains(digest, output, StringComparison.Ordinal);
+            }
+            if (format == "json")
+            {
+                Assert.Contains(rawVerdictSha, recordOutput, StringComparison.Ordinal);
+            }
+
+            return (requestOutput, recordOutput, statusOutput, digest, rawVerdictSha);
+        }
+
+        var legacyOutputs = Capture(legacy);
+        var explicitEmptyOutputs = Capture(this);
+        Assert.NotEqual(legacyOutputs.Digest, explicitEmptyOutputs.Digest);
+
+        static string Normalize(string output, G835CrossRuntimeReviewTests workspace, string digest, string rawVerdictSha) =>
+            output.Replace(workspace.root, "<root>", StringComparison.Ordinal)
+                .Replace(digest, "<packet-digest>", StringComparison.Ordinal)
+                .Replace(rawVerdictSha, "<raw-verdict-sha256>", StringComparison.Ordinal)
+                .Replace(digest[..7], "<digest-prefix>", StringComparison.Ordinal);
+
+        Assert.Equal(
+            Normalize(legacyOutputs.Request, legacy, legacyOutputs.Digest, legacyOutputs.RawVerdictSha),
+            Normalize(explicitEmptyOutputs.Request, this, explicitEmptyOutputs.Digest, explicitEmptyOutputs.RawVerdictSha));
+        Assert.Equal(
+            Normalize(legacyOutputs.Record, legacy, legacyOutputs.Digest, legacyOutputs.RawVerdictSha),
+            Normalize(explicitEmptyOutputs.Record, this, explicitEmptyOutputs.Digest, explicitEmptyOutputs.RawVerdictSha));
+        Assert.Equal(
+            Normalize(legacyOutputs.Status, legacy, legacyOutputs.Digest, legacyOutputs.RawVerdictSha),
+            Normalize(explicitEmptyOutputs.Status, this, explicitEmptyOutputs.Digest, explicitEmptyOutputs.RawVerdictSha));
     }
 
     [Theory]

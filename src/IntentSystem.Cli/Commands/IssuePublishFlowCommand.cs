@@ -387,6 +387,7 @@ internal static class IssuePublishFlowCommand
         PacketScopeSources.Result? scopeSources = null;
         CrossRuntimeDesignReviewDigest.PacketBytes? scopePacketSnapshot = null;
         string? scopePacketDigest = null;
+        var recheckLocalClaim = false;
         var sourcePacketYamlPath = Path.Combine(packetDirectory, "packet.yaml");
         if (packetYamlForSourceHint is not null
             && PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packetYamlForSourceHint))
@@ -414,6 +415,36 @@ internal static class IssuePublishFlowCommand
                     if (scopeSources is not null)
                     {
                         scopePacketDigest = checkedSources.PacketDigest;
+                        if (claimVerification.StoreConfigured)
+                        {
+                            if (!TryIsGitWorkTree(context.RepoRoot, out var isGitWorkTree, out var probeError))
+                            {
+                                var now = UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow;
+                                outputScopeSources = RefuseStaleScopeSources(
+                                    scopeSources,
+                                    now,
+                                    "scope-sources-identity-mismatch",
+                                    $"the source of claim evidence could not be identified safely: {probeError}") with
+                                {
+                                    Diagnostics = [new("claim-evidence-kind-unavailable", null, probeError)],
+                                };
+                                var claimEvidenceRefusal = NewResult(
+                                    executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                                    packetExists: true, githubBodyPresent: true, missingSections: missing, title: title,
+                                    created: false, idempotent: false, durableStateSynced: false, issueUrl: null,
+                                    issueNumber: null, queueStatePatched: false, publishYamlPatched: false,
+                                    runsAppended: false, error: outputScopeSources.Detail, titleSource: titleSource,
+                                    cause: outputScopeSources.Cause);
+                                EmitWithScopeSources(writer, claimEvidenceRefusal, format);
+                                return 1;
+                            }
+
+                            // Verify already selected its evidence source once. A Git
+                            // worktree uses that canonical remote judgment; a local-only
+                            // root must still recheck its local claim at each write edge.
+                            recheckLocalClaim = !isGitWorkTree;
+                        }
+
                         if (checkedSources.Packet is { } checkedPacket)
                         {
                             scopePacketSnapshot = checkedPacket;
@@ -580,6 +611,7 @@ internal static class IssuePublishFlowCommand
                 context,
                 authorization,
                 claimVerification,
+                recheckLocalClaim,
                 scopeSources,
                 scopePacketDigest);
         }
@@ -961,6 +993,7 @@ internal static class IssuePublishFlowCommand
                 context,
                 authorization,
                 claimVerification,
+                recheckLocalClaim,
                 scopeSources,
                 scopePacketDigest);
         }
@@ -1021,6 +1054,7 @@ internal static class IssuePublishFlowCommand
                     analysis,
                     authorization,
                     claimVerification,
+                    recheckLocalClaim,
                     gatedPublishResolution,
                     lookupSnapshotPacketYaml,
                     lookupSnapshotGithubBody,
@@ -1123,7 +1157,8 @@ internal static class IssuePublishFlowCommand
         if (scopeSources is not null)
         {
             outputScopeSources = RecheckPublishScopeSources(context.RepoRoot, executionUnit!, domain, effectiveTeam,
-                repo!, scopeSources, scopePacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow, claimVerification);
+                repo!, scopeSources, scopePacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow, claimVerification,
+                recheckLocalClaim);
             if (outputScopeSources is { IsSuccessful: false })
             {
                 var sourceRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write: true,
@@ -1396,6 +1431,7 @@ internal static class IssuePublishFlowCommand
         CliContext context,
         IssuePublishAuthorization authorization,
         ClaimOwnershipVerification initialClaimVerification,
+        bool recheckLocalClaim,
         PacketScopeSources.Result? initialScopeSources,
         string? expectedPacketDigest)
     {
@@ -1403,7 +1439,7 @@ internal static class IssuePublishFlowCommand
         var canonicalIssueUrl = analysis.CanonicalIssueUrl!;
         var restoredAt = (UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var scopeSources = RecheckPublishScopeSources(context.RepoRoot, executionUnit, domain, authorization.Team,
-            repo, initialScopeSources, expectedPacketDigest, restoredAt, initialClaimVerification);
+            repo, initialScopeSources, expectedPacketDigest, restoredAt, initialClaimVerification, recheckLocalClaim);
         if (scopeSources is { IsSuccessful: false })
         {
             var refusal = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
@@ -2015,6 +2051,109 @@ internal static class IssuePublishFlowCommand
         return new(current, packet, CrossRuntimeDesignReviewDigest.Compute(packet));
     }
 
+    private static bool TryIsGitWorkTree(string repoRoot, out bool isGitWorkTree, out string error)
+    {
+        isGitWorkTree = false;
+        error = string.Empty;
+        GitRemoteCommandResult result;
+        try
+        {
+            result = new GitRemoteCommandRunner().Run(repoRoot, ["rev-parse", "--is-inside-work-tree"]);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException
+                or ArgumentException
+                or System.ComponentModel.Win32Exception)
+        {
+            error = exception.Message;
+            return false;
+        }
+
+        if (result.TimedOut)
+        {
+            error = "the local Git worktree probe did not complete";
+            return false;
+        }
+
+        if (result.ExitCode == 0)
+        {
+            var value = result.StdOut.Trim();
+            if (string.Equals(value, "true", StringComparison.Ordinal))
+            {
+                isGitWorkTree = true;
+                return true;
+            }
+
+            if (string.Equals(value, "false", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            error = $"the local Git worktree probe returned an unexpected value: {value}";
+            return false;
+        }
+
+        if (!TryHasGitMetadataInAncestors(repoRoot, out var hasGitMetadata, out error))
+        {
+            return false;
+        }
+
+        if (!hasGitMetadata)
+        {
+            return true;
+        }
+
+        error = string.IsNullOrWhiteSpace(result.StdErr)
+            ? $"the local Git worktree probe failed with exit code {result.ExitCode}"
+            : result.StdErr.Trim();
+        return false;
+    }
+
+    private static bool TryHasGitMetadataInAncestors(string repoRoot, out bool hasGitMetadata, out string error)
+    {
+        hasGitMetadata = false;
+        error = string.Empty;
+        string? current;
+        try
+        {
+            current = Path.GetFullPath(repoRoot);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            error = exception.Message;
+            return false;
+        }
+
+        while (current is not null)
+        {
+            try
+            {
+                _ = File.GetAttributes(Path.Combine(current, ".git"));
+                hasGitMetadata = true;
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                // This ancestor is not a Git root; continue to its parent.
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // This ancestor is not a Git root; continue to its parent.
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                error = exception.Message;
+                return false;
+            }
+
+            current = Directory.GetParent(current)?.FullName;
+        }
+
+        return true;
+    }
+
     private static PacketScopeSources.Result? RecheckPublishScopeSources(
         string repoRoot,
         string executionUnit,
@@ -2025,10 +2164,11 @@ internal static class IssuePublishFlowCommand
         string? expectedPacketDigest,
         DateTimeOffset now,
         ClaimOwnershipVerification initialClaimVerification,
+        bool recheckLocalClaim,
         CrossRuntimeDesignReviewDigest.PacketBytes? suppliedPacket = null)
     {
         if (initiallyValid is null) return null;
-        if (initialClaimVerification.StoreConfigured)
+        if (initialClaimVerification.StoreConfigured && recheckLocalClaim)
         {
             var claimScope = $"execution-unit:{executionUnit}";
             var claimPath = ClaimCommand.ClaimPath(claimScope);
@@ -2605,6 +2745,7 @@ internal static class IssuePublishFlowCommand
         PublishDurableArtifactAnalysis analysis,
         IssuePublishAuthorization authorization,
         ClaimOwnershipVerification initialClaimVerification,
+        bool recheckLocalClaim,
         CrossRuntimeReviewPublishResolver.PublishResolution resolution,
         byte[]? snapshotPacketYaml,
         byte[]? snapshotGithubBody,
@@ -2693,7 +2834,7 @@ internal static class IssuePublishFlowCommand
         {
             scopeSources = RecheckPublishScopeSources(context.RepoRoot, executionUnit, domain, authorization.Team,
                 repo, initialScopeSources, expectedPacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
-                initialClaimVerification, packet);
+                initialClaimVerification, recheckLocalClaim, packet);
         }
         if (scopeSources is { IsSuccessful: false })
         {
@@ -2917,7 +3058,7 @@ internal static class IssuePublishFlowCommand
         {
             scopeSources = RecheckPublishScopeSources(context.RepoRoot, executionUnit, domain, authorization.Team,
                 repo, initialScopeSources, expectedPacketDigest, UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
-                initialClaimVerification, currentPacket);
+                initialClaimVerification, recheckLocalClaim, currentPacket);
         }
         if (scopeSources is { IsSuccessful: false })
         {

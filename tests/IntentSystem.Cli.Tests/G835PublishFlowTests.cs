@@ -159,6 +159,22 @@ public sealed class G835PublishFlowTests : IDisposable
     [InlineData("markdown")]
     public void PublishFlow_ExplicitEmptySourcesPreserveLegacyCreateAndClockBudget(string format)
     {
+        using var legacy = new G835PublishFlowWorkspace(declare: true);
+        legacy.WriteFullPacket(Unit, Repo);
+        legacy.SeedQueueState(Unit, Title());
+        legacy.RecordSatisfiedDesignReviews(Unit);
+        var legacyCreator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8638");
+        var legacyChecker = new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
+        IssuePublishFlowCommand.CreatorFactory = () => legacyCreator;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => legacyChecker;
+        var legacyClockCalls = 0;
+        IssuePublishFlowCommand.UtcNowFactory = () =>
+        {
+            legacyClockCalls++;
+            return new DateTimeOffset(2026, 10, 10, 12, 0, 1, TimeSpan.Zero);
+        };
+        var legacyResult = Run(legacy, Unit, Repo, write: true, format: format);
+
         using var workspace = new G835PublishFlowWorkspace(declare: true);
         workspace.WriteFullPacket(Unit, Repo);
         File.AppendAllText(Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml"),
@@ -167,29 +183,57 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.RecordSatisfiedDesignReviews(Unit);
 
         var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8638");
+        var checker = new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
         IssuePublishFlowCommand.CreatorFactory = () => creator;
-        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
         var clockCalls = 0;
         IssuePublishFlowCommand.UtcNowFactory = () =>
         {
             clockCalls++;
-            return new DateTimeOffset(2026, 10, 10, 12, 0, clockCalls, TimeSpan.Zero);
+            return new DateTimeOffset(2026, 10, 10, 12, 0, 1, TimeSpan.Zero);
         };
 
         var (exit, output) = Run(workspace, Unit, Repo, write: true, format: format);
 
+        Assert.Equal(0, legacyResult.ExitCode);
         Assert.Equal(0, exit);
+        Assert.Equal(1, legacyCreator.CallCount);
         Assert.Equal(1, creator.CallCount);
+        Assert.Equal(1, legacyChecker.CallCount);
+        Assert.Equal(1, checker.CallCount);
+        Assert.Equal(1, legacyClockCalls);
         Assert.Equal(1, clockCalls);
+        Assert.Equal(File.ReadAllBytes(legacy.GithubBodyPath(Unit)), legacyCreator.LastBodyBytes);
         Assert.Equal(File.ReadAllBytes(workspace.GithubBodyPath(Unit)), creator.LastBodyBytes);
+        Assert.True(CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+            legacy.PacketDirectory(Unit), out var legacyPacket, out var legacyMissing), legacyMissing);
+        Assert.True(CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+            workspace.PacketDirectory(Unit), out var emptyPacket, out var emptyMissing), emptyMissing);
+        var legacyPacketDigest = CrossRuntimeDesignReviewDigest.Compute(legacyPacket);
+        var emptyPacketDigest = CrossRuntimeDesignReviewDigest.Compute(emptyPacket);
+        Assert.NotEqual(legacyPacketDigest, emptyPacketDigest);
         if (format == "json")
         {
+            var legacyJson = System.Text.Json.Nodes.JsonNode.Parse(NormalizePublishOutput(legacyResult).Json)!.AsObject();
+            var emptyJson = System.Text.Json.Nodes.JsonNode.Parse(NormalizePublishOutput((exit, output)).Json)!.AsObject();
+            var legacyReview = legacyJson["cross_runtime_design_review"]!.AsObject();
+            var emptyReview = emptyJson["cross_runtime_design_review"]!.AsObject();
+            Assert.Equal(legacyPacketDigest, legacyReview["digest"]!.GetValue<string>());
+            Assert.Equal(emptyPacketDigest, emptyReview["digest"]!.GetValue<string>());
+            legacyReview["digest"] = "<packet-digest>";
+            emptyReview["digest"] = "<packet-digest>";
+            Assert.Equal(legacyJson.ToJsonString(), emptyJson.ToJsonString());
             using var result = JsonDocument.Parse(output);
             Assert.True(result.RootElement.GetProperty("created").GetBoolean());
             Assert.False(result.RootElement.TryGetProperty("scope_sources", out _));
         }
         else
         {
+            Assert.Equal(
+                legacyResult.Output.Replace(legacy.RootPath, "<normalized>", StringComparison.Ordinal)
+                    .Replace(legacyPacketDigest, "<packet-digest>", StringComparison.Ordinal),
+                output.Replace(workspace.RootPath, "<normalized>", StringComparison.Ordinal)
+                    .Replace(emptyPacketDigest, "<packet-digest>", StringComparison.Ordinal));
             Assert.Contains("- created: yes", output, StringComparison.Ordinal);
             Assert.DoesNotContain("## scope_sources", output, StringComparison.Ordinal);
         }
@@ -981,22 +1025,44 @@ public sealed class G835PublishFlowTests : IDisposable
     }
 
     [Theory]
-    [InlineData("same-local-claim", "json")]
-    [InlineData("same-local-claim", "markdown")]
-    [InlineData("changed-local-claim", "json")]
-    [InlineData("changed-local-claim", "markdown")]
-    public void PublishFlow_LateClaimRecheckUsesLocalEvidenceWithoutFetchingAdvancedOfflineOrigin(
-        string scenario, string format)
+    [InlineData("remote-default", "unchanged", "json")]
+    [InlineData("remote-default", "unchanged", "markdown")]
+    [InlineData("remote-default", "changed-pin", "json")]
+    [InlineData("remote-default", "changed-pin", "markdown")]
+    [InlineData("metadata-write", "unchanged", "json")]
+    [InlineData("metadata-write", "unchanged", "markdown")]
+    [InlineData("metadata-write", "changed-pin", "json")]
+    [InlineData("metadata-write", "changed-pin", "markdown")]
+    public void PublishFlow_GitClaimRecheckKeepsInitialRemoteAuthorityWithoutFetchingOfflineOrigin(
+        string branchMode, string scenario, string format)
     {
-        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        var metadataWriteBranch = branchMode == "metadata-write" ? "main-metadata" : null;
+        using var workspace = new G835PublishFlowWorkspace(
+            declare: false, heldTeam: null, metadataWriteBranch: metadataWriteBranch);
         var source = workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
         workspace.SeedQueueState(Unit, Title());
         workspace.InitializeGitAndCapture();
+        using (var claimOutput = new StringWriter())
+        {
+            var claimExit = ClaimCommand.ExecuteAcquire(workspace.Context,
+                ["--scope", $"execution-unit:{Unit}", "--actor", "implementation", "--team", UndeclaredTeam,
+                 "--write", "--format", "json"], claimOutput);
+            Assert.Equal(0, claimExit);
+            using var acquired = JsonDocument.Parse(claimOutput.ToString());
+            Assert.Equal("acquired", acquired.RootElement.GetProperty("status").GetString());
+            Assert.True(acquired.RootElement.GetProperty("push_succeeded").GetBoolean());
+            Assert.Equal(metadataWriteBranch is null ? "refs/heads/main" : $"refs/heads/{metadataWriteBranch}",
+                acquired.RootElement.GetProperty("target_ref").GetString());
+        }
+
+        Assert.False(File.Exists(workspace.LocalClaimPath(Unit)));
+        Assert.True(workspace.OriginHasClaim(Unit, metadataWriteBranch ?? "main"));
         var initialClaim = ClaimOwnershipVerifier.Verify(
             workspace.RootPath, $"execution-unit:{Unit}", UndeclaredTeam);
         Assert.True(initialClaim.Passed, initialClaim.Detail);
         Assert.True(initialClaim.StoreConfigured, initialClaim.Detail);
         Assert.Equal(ClaimOwnershipVerification.StatusOwned, initialClaim.Status);
+        Assert.False(File.Exists(workspace.LocalClaimPath(Unit)));
 
         G835PublishFlowWorkspace.GitSnapshot? refsBeforeLateCheck = null;
         var lateBoundaryReached = false;
@@ -1006,13 +1072,13 @@ public sealed class G835PublishFlowTests : IDisposable
             {
                 lateBoundaryReached = true;
                 refsBeforeLateCheck = workspace.CaptureGitState();
-                workspace.AdvanceOriginClaimTeam(Unit, "remote-advanced-team");
-                if (scenario == "changed-local-claim")
+                workspace.AdvanceOriginClaimTeam(Unit, "remote-advanced-team", metadataWriteBranch ?? "main");
+                workspace.MakeOriginUnavailable();
+                if (scenario == "changed-pin")
                 {
-                    workspace.WriteClaim(Unit, "late-local-team");
+                    workspace.ChangePinnedSourceDigest(source.Digest);
                     workspace.CaptureDurableBaseline();
                 }
-                workspace.MakeOriginUnavailable();
             });
         var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8682");
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
@@ -1024,8 +1090,9 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.True(lateBoundaryReached);
         Assert.NotNull(refsBeforeLateCheck);
         workspace.AssertGitStateUnchanged(refsBeforeLateCheck!);
+        Assert.False(File.Exists(workspace.LocalClaimPath(Unit)));
         Assert.Equal(1, checker.CallCount);
-        if (scenario == "same-local-claim")
+        if (scenario == "unchanged")
         {
             Assert.Equal(0, exit);
             Assert.Equal(1, creator.CallCount);
@@ -1054,17 +1121,15 @@ public sealed class G835PublishFlowTests : IDisposable
             if (format == "json")
             {
                 using var result = JsonDocument.Parse(output);
-                Assert.Equal("scope-sources-identity-mismatch", result.RootElement.GetProperty("cause").GetString());
+                Assert.Equal("scope-sources-changed", result.RootElement.GetProperty("cause").GetString());
                 var sources = result.RootElement.GetProperty("scope_sources");
-                Assert.Equal("scope-sources-identity-mismatch", sources.GetProperty("cause").GetString());
-                Assert.Contains("held-by-other-team", sources.GetProperty("diagnostics")[0].GetProperty("cause").GetString(), StringComparison.Ordinal);
+                Assert.Equal("scope-sources-changed", sources.GetProperty("cause").GetString());
                 AssertNullOrMissing(sources, "provenance");
                 AssertNullOrMissing(sources, "expected_provenance_block");
             }
             else
             {
-                Assert.Contains("scope-sources-identity-mismatch", output, StringComparison.Ordinal);
-                Assert.Contains("held-by-other-team", output, StringComparison.Ordinal);
+                Assert.Contains("scope-sources-changed", output, StringComparison.Ordinal);
                 Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
                 Assert.Contains("- created: no", output, StringComparison.Ordinal);
             }
@@ -2174,6 +2239,11 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.SeedQueueState(Unit, Title());
         if (declared) workspace.RecordSatisfiedDesignReviewsViaCommand(Unit);
         workspace.CaptureDurableBaseline();
+        workspace.InitializeGitAndCapture();
+        var initialClaim = ClaimOwnershipVerifier.Verify(workspace.RootPath,
+            $"execution-unit:{Unit}", sourceTeam);
+        Assert.True(initialClaim.Passed, initialClaim.Detail);
+        var gitBefore = workspace.CaptureGitState();
         var initialRulingBytes = File.ReadAllBytes(source.ArtifactPath);
         var initialPacketBytes = File.ReadAllBytes(Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml"));
         var initialBodyBytes = File.ReadAllBytes(workspace.GithubBodyPath(Unit));
@@ -2239,6 +2309,7 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.Equal(1, creatorFactoryCalls);
         Assert.Equal(0, creator.CallCount);
         AssertDurableStateUntouched(workspace);
+        workspace.AssertGitStateUnchanged(gitBefore);
         if (mutation == "missing") Assert.False(File.Exists(source.ArtifactPath));
         if (mutation == "tampered") Assert.NotEqual(initialRulingBytes, File.ReadAllBytes(source.ArtifactPath));
         if (mutation == "pin") Assert.NotEqual(initialPacketBytes, File.ReadAllBytes(Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml")));
@@ -2280,6 +2351,12 @@ public sealed class G835PublishFlowTests : IDisposable
             Assert.Contains("- idempotent: no", output, StringComparison.Ordinal);
             Assert.Contains("- durable_state_synced: no", output, StringComparison.Ordinal);
             Assert.Contains(expectedSourceCause, output, StringComparison.Ordinal);
+            if (expectedSourceCause == CrossRuntimeReviewCauses.DigestStale)
+            {
+                Assert.Contains("\"state\": \"refused\"", output, StringComparison.Ordinal);
+                Assert.Contains("\"cause\": \"scope-sources-changed\"", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Verified sources", output, StringComparison.Ordinal);
+            }
         }
     }
 
@@ -3421,7 +3498,8 @@ public sealed class G835PublishFlowTests : IDisposable
         }
 
         public G835PublishFlowWorkspace(bool declare = false, string? heldTeam = Team,
-            CrossRuntimeReviewTeamDeclaration[]? extraTeams = null, string? configuredDomain = null)
+            CrossRuntimeReviewTeamDeclaration[]? extraTeams = null, string? configuredDomain = null,
+            string? metadataWriteBranch = null)
         {
             var teams = new List<CrossRuntimeReviewTeamDeclaration>();
             if (declare)
@@ -3445,13 +3523,20 @@ public sealed class G835PublishFlowTests : IDisposable
                         Domain = configuredDomain ?? Domain,
                         ArtifactRoot = ".intent-cli",
                         WorktreeRoot = ".intent-cli/worktrees",
+                        SameRepoTopology = metadataWriteBranch is not null,
+                        MetadataWriteBranch = metadataWriteBranch ?? string.Empty,
                     },
                     CrossRuntimeReview = new CrossRuntimeReviewConfig { Teams = teams },
                 },
             };
 
             Directory.CreateDirectory(Path.Combine(rootPath, ".intent-cli"));
-            File.WriteAllText(Path.Combine(rootPath, ".intent-cli", "config.toml"), "default_domain = \"intent-cli\"\nartifact_root = \".intent-cli\"\n");
+            var configText = metadataWriteBranch is null
+                ? "default_domain = \"intent-cli\"\nartifact_root = \".intent-cli\"\n"
+                : "[project]\ndomain = \"intent-cli\"\nartifact_root = \".intent-cli\"\nsame_repo_topology = true\nmetadata_write_branch = \""
+                    + metadataWriteBranch + "\"\n";
+            File.WriteAllText(Path.Combine(rootPath, ".intent-cli", "config.toml"), configText);
+            MetadataWriteBranch = metadataWriteBranch;
             if (heldTeam is not null)
             {
                 WriteClaim(Unit, heldTeam);
@@ -3461,6 +3546,11 @@ public sealed class G835PublishFlowTests : IDisposable
         public CliContext Context { get; }
 
         public string RootPath => rootPath;
+
+        private string? MetadataWriteBranch { get; }
+
+        public string LocalClaimPath(string unit) => Path.Combine(rootPath,
+            ClaimCommand.ClaimPath($"execution-unit:{unit}").Replace('/', Path.DirectorySeparatorChar));
 
         public sealed record GitSnapshot(byte[] IndexBytes, string Refs);
 
@@ -3478,8 +3568,30 @@ public sealed class G835PublishFlowTests : IDisposable
             _ = Git("--git-dir", gitOriginPath, "symbolic-ref", "HEAD", "refs/heads/main");
             Git("remote", "add", "origin", gitOriginPath);
             Git("push", "--quiet", "--set-upstream", "origin", "main");
+            if (MetadataWriteBranch is not null)
+            {
+                Git("checkout", "-b", MetadataWriteBranch);
+                Git("push", "--quiet", "--set-upstream", "origin", MetadataWriteBranch);
+                Git("checkout", "main");
+            }
             Git("remote", "set-head", "origin", "main");
             return CaptureGitState();
+        }
+
+        public bool OriginHasClaim(string unit, string branch)
+        {
+            if (gitOriginPath is null) throw new InvalidOperationException("Git fixture origin has not been initialized.");
+            var relative = ClaimCommand.ClaimPath($"execution-unit:{unit}");
+            var result = RunGit(rootPath, ["--git-dir", gitOriginPath, "show", $"refs/heads/{branch}:{relative}"]);
+            return result.Length > 0;
+        }
+
+        public void ChangePinnedSourceDigest(string oldDigest)
+        {
+            var packetPath = Path.Combine(PacketDirectory(Unit), "packet.yaml");
+            var yaml = File.ReadAllText(packetPath);
+            Assert.Contains(oldDigest, yaml, StringComparison.Ordinal);
+            File.WriteAllText(packetPath, yaml.Replace(oldDigest, new string('0', oldDigest.Length), StringComparison.Ordinal));
         }
 
         public GitSnapshot CaptureGitState()
@@ -3500,13 +3612,13 @@ public sealed class G835PublishFlowTests : IDisposable
             Assert.Equal(before.Refs, after.Refs);
         }
 
-        public void AdvanceOriginClaimTeam(string unit, string team)
+        public void AdvanceOriginClaimTeam(string unit, string team, string branch = "main")
         {
             if (gitOriginPath is null) throw new InvalidOperationException("Git fixture origin has not been initialized.");
             var clonePath = rootPath + "-origin-advance";
             try
             {
-                _ = RunGit(rootPath, ["clone", "--quiet", gitOriginPath, clonePath]);
+                _ = RunGit(rootPath, ["clone", "--quiet", "--branch", branch, gitOriginPath, clonePath]);
                 _ = RunGit(clonePath, ["config", "user.name", "G863 remote fixture"]);
                 _ = RunGit(clonePath, ["config", "user.email", "g863-remote-fixture@example.invalid"]);
                 var scope = $"execution-unit:{unit}";
@@ -3517,7 +3629,7 @@ public sealed class G835PublishFlowTests : IDisposable
                     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) + Environment.NewLine);
                 _ = RunGit(clonePath, ["add", "--", relativeClaimPath]);
                 _ = RunGit(clonePath, ["commit", "--quiet", "-m", "advance remote claim fixture"]);
-                _ = RunGit(clonePath, ["push", "--quiet", "origin", "main"]);
+                _ = RunGit(clonePath, ["push", "--quiet", "origin", branch]);
             }
             finally
             {

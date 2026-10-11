@@ -769,6 +769,7 @@ src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GhCliExistingIssueCheck
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GhCliIssueCreator	3
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GhIssueListEntry	7
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GitHubExistingIssueLookupResult	8
+src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GitRemoteCommandRunner	1
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GraphQlData	2
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GraphQlError	2
 src/IntentSystem.Cli/Commands/IssuePublishFlowCommand.cs	GraphQlPageInfo	2
