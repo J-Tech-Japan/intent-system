@@ -239,7 +239,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityReadOnly,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Read-only per-unit lifecycle evidence: `unit status` composes current local receipts and a bounded exact-head GitHub review/CI observation; unavailable provenance remains explicit and the result is never merge readiness."
+            Purpose = "Read-only per-unit lifecycle evidence: `unit status` composes current local receipts, a bounded exact-head GitHub review/CI observation, and optional pinned local ruling-source observations; unavailable provenance remains explicit and the result is never merge readiness or a gate."
         },
         new CommandGroupEntry
         {

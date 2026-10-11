@@ -1328,6 +1328,22 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.Equal(["record", "request", "status"], CommandRouter.ReviewCrossRuntimeSubcommands.Keys.OrderBy(key => key, StringComparer.Ordinal));
         var list = GuideCommandsListCommand.Groups.Single(group => group.Name == "review").Purpose;
         Assert.Contains("--kind design", list, StringComparison.Ordinal);
+        var unit = GuideCommandsListCommand.Groups.Single(group => group.Name == "unit").Purpose;
+        Assert.Contains("pinned local ruling-source observations", unit, StringComparison.Ordinal);
+        Assert.Contains("never merge readiness or a gate", unit, StringComparison.Ordinal);
+
+        using var catalogJson = new StringWriter();
+        Assert.Equal(0, GuideCommandsListCommand.Execute(Context(), ["--format", "json"], catalogJson));
+        using var catalog = JsonDocument.Parse(catalogJson.ToString());
+        var unitCatalogEntry = Assert.Single(catalog.RootElement.GetProperty("groups").EnumerateArray(), entry =>
+            entry.GetProperty("name").GetString() == "unit");
+        Assert.Contains("unit status", unitCatalogEntry.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+        Assert.Contains("pinned local ruling-source observations", unitCatalogEntry.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+
+        using var catalogMarkdown = new StringWriter();
+        Assert.Equal(0, GuideCommandsListCommand.Execute(Context(), ["--format", "markdown"], catalogMarkdown));
+        Assert.Contains("unit status", catalogMarkdown.ToString(), StringComparison.Ordinal);
+        Assert.Contains("pinned local ruling-source observations", catalogMarkdown.ToString(), StringComparison.Ordinal);
 
         using var help = new StringWriter();
         Assert.Equal(0, GuideHelpCommand.Execute(Context(), ["--format", "json"], help));
@@ -1344,6 +1360,10 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.Contains(step3.Commands, command => command.Command.Contains("review cross-runtime request --kind design", StringComparison.Ordinal));
         Assert.Contains(step3.Commands, command => command.Command.Contains("review cross-runtime status --kind design", StringComparison.Ordinal));
         Assert.Contains("digest changes", step3.Instruction, StringComparison.Ordinal);
+        Assert.Contains("`unit status` separately reports pinned local ruling sources as a read-only observation", step3.Instruction, StringComparison.Ordinal);
+        Assert.Contains("does not authenticate the operator, verify publication, or contribute to a gate", step3.Instruction, StringComparison.Ordinal);
+        Assert.Contains(step3.Commands, command => command.Command.Contains("packet validate-sources", StringComparison.Ordinal));
+        Assert.Contains(guide.Loop.SelectMany(step => step.Commands), command => command.Command.Contains("intent-cli unit status", StringComparison.Ordinal));
 
         var step7 = guide.Loop.Single(step => step.Number == 7);
         Assert.Contains(step7.Commands, command => command.Command.Contains("--model <model>", StringComparison.Ordinal));
@@ -1352,6 +1372,15 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         using var solo = new StringWriter();
         Assert.Equal(0, GuideSoloConductorCommand.Execute(Context(), ["--format", "markdown"], solo));
         Assert.DoesNotMatch(affirmative, solo.ToString());
+        Assert.Contains("intent-cli packet validate-sources", solo.ToString(), StringComparison.Ordinal);
+        Assert.Contains("intent-cli unit status", solo.ToString(), StringComparison.Ordinal);
+        Assert.Contains("read-only observation", solo.ToString(), StringComparison.Ordinal);
+
+        using var soloJson = new StringWriter();
+        Assert.Equal(0, GuideSoloConductorCommand.Execute(Context(), ["--format", "json"], soloJson));
+        Assert.Contains("intent-cli packet validate-sources", soloJson.ToString(), StringComparison.Ordinal);
+        Assert.Contains("intent-cli unit status", soloJson.ToString(), StringComparison.Ordinal);
+        Assert.Contains("read-only observation", soloJson.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1368,6 +1397,16 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             Assert.Contains("packet validate-sources", orchestration, StringComparison.Ordinal);
             Assert.Contains("supplied-not-authenticated", orchestration, StringComparison.Ordinal);
             Assert.Contains("#1867", orchestration, StringComparison.Ordinal);
+            if (language == "en")
+            {
+                Assert.Contains("`unit status` separately reports pinned local", orchestration, StringComparison.Ordinal);
+                Assert.Contains("it does not authenticate the", orchestration, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains("`unit status` は pinned local ruling source を read-only observation", orchestration, StringComparison.Ordinal);
+                Assert.Contains("operator を認証せず", orchestration, StringComparison.Ordinal);
+            }
 
             var commandReference = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "08-command-reference.md"));
             Assert.Contains("G863", commandReference, StringComparison.Ordinal);
@@ -1392,6 +1431,11 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             var sourceRow = Assert.Single(ledger.Split('\n'), line => line.StartsWith("| `packet validate-sources` |", StringComparison.Ordinal));
             Assert.Contains("G863", sourceRow, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", sourceRow, StringComparison.Ordinal);
+            var consumerRow = Assert.Single(ledger.Split('\n'), line =>
+                line.StartsWith(language == "en" ? "| packet-pinned ruling sources |" : "| packet pinned ruling source |", StringComparison.Ordinal));
+            Assert.Contains("G864", consumerRow, StringComparison.Ordinal);
+            Assert.Contains("unit status", consumerRow, StringComparison.Ordinal);
+            Assert.Contains("read-only", consumerRow, StringComparison.Ordinal);
             foreach (var row in new[] { "| `review cross-runtime request` |", "| `review cross-runtime record` |", "| `review cross-runtime status` |" })
             {
                 var line = Assert.Single(ledger.Split('\n'), candidate => candidate.StartsWith(row, StringComparison.Ordinal));

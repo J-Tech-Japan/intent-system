@@ -857,9 +857,10 @@ intent-cli issue publish-flow G100 --domain intent-cli --team intent-cli-dev --r
 source の検証後、通常の body、facet、publish-flow check を実行します。design review は確認済み canonical ruling content を含みます。
 publish-flow は GitHub lookup の前と、create または idempotent repair の前に source を再確認します。参照、pin、provenance block を
 変更すると通常の4-file packet digest が変わるため、design review を新しく行ってください。local artifact だけでは remote 公開の証明に
-なりません。commit と plain-push の後、fresh clone で検証します。source を利用するのは packet validation、design review、
-`issue publish-flow` だけです。`unit-status`、queue/worker decision、`issue create`、`issue publish-reviewed`、他の publish や sync-body route
-はこの統合の対象外です。source #1867 と parent #1857 は open のままです。
+なりません。commit と plain-push の後、fresh clone で検証します。packet validation、design review、`issue publish-flow` は
+source を検証に利用します。`unit status` も pinned local ruling source を read-only observation として表示しますが、operator を認証せず、
+publication を確認せず、gate にも使いません。queue/worker decision、`issue create`、`issue publish-reviewed`、他の publish や sync-body route
+はこの integration の対象外です。source #1867 と parent #1857 は open のままです。
 
 ### 貼り付け evidence gate（G785）
 

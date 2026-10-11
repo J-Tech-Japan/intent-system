@@ -5074,8 +5074,10 @@ requires fresh design reviews. To rely on an artifact, commit and plain-push it
 and validate from a fresh clone; the local command does not establish remote
 publication.
 
-This integration is limited to the read-only validator, cross-runtime design
-review, and `issue publish-flow`. `unit-status`, worker decisions, queue
+The source checks are limited to the read-only validator, cross-runtime design
+review, and `issue publish-flow`. `unit status` separately reports pinned local
+ruling sources as a read-only observation; it does not authenticate the
+operator, verify publication, or contribute to a gate. Worker decisions, queue
 operations, `issue create`, `issue publish-reviewed`, sync-body, and other
 consumers remain outside the source gate. Source #1867 and parent #1857 remain
 open for broader follow-up work.

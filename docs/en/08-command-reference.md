@@ -1040,10 +1040,13 @@ the sources before GitHub lookup and again before create or idempotent repair.
 Editing a reference, pin, or provenance block changes the normal four-file
 packet digest, so request fresh design reviews. A local artifact is not proof
 of remote publication: commit and plain-push it, then validate from a fresh
-clone. Only packet validation, design review, and `issue publish-flow` consume
-this source declaration. `unit-status`, queue and worker decisions,
-`issue create`, `issue publish-reviewed`, and other publish or sync-body routes
-remain outside this integration; source #1867 and parent #1857 remain open.
+clone. Packet validation, design review, and `issue publish-flow` use this
+source declaration for their checks. `unit status` also reports pinned local
+ruling sources as a read-only observation; it does not authenticate the
+operator, verify publication, or contribute to a gate. Queue and worker
+decisions, `issue create`, `issue publish-reviewed`, and other publish or
+sync-body routes remain outside this integration; source #1867 and parent #1857
+remain open.
 
 ### Pasted-evidence gate (G785)
 

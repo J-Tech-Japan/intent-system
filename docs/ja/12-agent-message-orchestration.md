@@ -4369,7 +4369,7 @@ GitHub lookup 前と、issue 作成または idempotent repair の直前に sour
 pin や block の変更は通常の packet digest を変えるため、新しい design review が必要です。
 local artifact を remote 公開の証明として扱わず、commit と plain-push 後に fresh clone で確認します。
 
-この source gate を読むのは packet validation、cross-runtime design review、
-`issue publish-flow` のみです。`unit-status`、worker decision、queue、`issue create`、
-`issue publish-reviewed`、sync-body などは対象外です。source #1867 と parent #1857 は
-引き続き open です。詳細は [packet command reference](08-command-reference.md) を参照してください。
+source の検証を行うのは packet validation、cross-runtime design review、`issue publish-flow` です。
+`unit status` は pinned local ruling source を read-only observation として別途表示しますが、operator を認証せず、publication を確認せず、
+gate にも使いません。worker decision、queue、`issue create`、`issue publish-reviewed`、sync-body などは source gate の対象外です。
+source #1867 と parent #1857 は引き続き open です。詳細は [packet command reference](08-command-reference.md) を参照してください。

@@ -89,6 +89,8 @@ internal static class UnitStatusRenderer
 
                 writer.WriteLine($"  - repair_commands: {List(fact.RepairCommands)}");
                 writer.WriteLine($"  - repair_unavailable_reason: {Value(fact.RepairUnavailableReason)}");
+                if (fact.ScopeSources is { } sources)
+                    WriteScopeSources(writer, sources);
             }
         }
 
@@ -132,4 +134,34 @@ internal static class UnitStatusRenderer
     private static string DateTimeValue(DateTimeOffset? value) => value is null
         ? "null"
         : $"`{value.Value.ToString("O", CultureInfo.InvariantCulture)}`";
+
+    private static void WriteScopeSources(TextWriter writer, PacketScopeSources.Result source)
+    {
+        writer.WriteLine("  - scope_sources:");
+        writer.WriteLine($"    - execution_unit: {Value(source.ExecutionUnit)}");
+        writer.WriteLine($"    - state: {Value(source.State)}");
+        writer.WriteLine($"    - cause: {Value(source.Cause)}");
+        writer.WriteLine($"    - detail: {Value(source.Detail)}");
+        writer.WriteLine($"    - evaluated_at: {Value(source.EvaluatedAt)}");
+        writer.WriteLine($"    - authority_verification: {Value(source.AuthorityVerification)}");
+        writer.WriteLine($"    - publication: {Value(source.Publication)}");
+        if (source.Provenance is { } provenance)
+        {
+            foreach (var entry in provenance)
+            {
+                writer.WriteLine(
+                    $"    - provenance: reference={Value(entry.Reference)}; domain={Value(entry.Domain)}; team={Value(entry.Team)}; "
+                    + $"repo={Value(entry.TargetRepo)}; unit={Value(entry.ExecutionUnit)}; path={Value(entry.Path)}; sha256={Value(entry.Sha256)}");
+            }
+        }
+        foreach (var diagnostic in source.Diagnostics)
+            writer.WriteLine($"    - diagnostic: cause={Value(diagnostic.Cause)}; path={Value(diagnostic.Path)}; detail={Value(diagnostic.Detail)}");
+        if (source.ExpectedProvenanceBlock is { } expected)
+        {
+            writer.WriteLine("    - expected_provenance_block:");
+            writer.WriteLine("      ```text");
+            foreach (var line in expected.Split('\n')) writer.WriteLine("      " + line);
+            writer.WriteLine("      ```");
+        }
+    }
 }

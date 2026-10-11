@@ -100,6 +100,8 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
                     .Select(item => item.GetString()));
             }
             Assert.Contains("Design `review cross-runtime request`, `record`, and `status` also revalidate and report the declared local source proof.", guidance, StringComparison.Ordinal);
+            Assert.Contains("`unit status` separately reports pinned local ruling sources as a read-only observation", guidance, StringComparison.Ordinal);
+            Assert.Contains("does not authenticate the operator, verify publication, or contribute to a gate", guidance, StringComparison.Ordinal);
             Assert.Contains("`issue publish-flow` is the external issue create/publish boundary and rechecks these pins before mutation.", guidance, StringComparison.Ordinal);
             Assert.Contains("release consumers remain outside this integration", guidance, StringComparison.Ordinal);
         }
