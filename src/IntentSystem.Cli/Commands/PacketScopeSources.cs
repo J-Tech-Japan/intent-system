@@ -200,20 +200,51 @@ internal static class PacketScopeSources
             timestamp, validated, expected, [], IsDeclared: true) { SourceDomain = domain, SourceTeam = team, SourceTargetRepo = targetRepo };
     }
 
-    internal static bool HasDeclarationOrMisplacedDeclaration(byte[] packetYaml)
+    internal static bool HasDeclarationOrMisplacedDeclaration(byte[] packetYaml, bool malformedMeansDeclaration = true)
     {
         if (!TryParsePacket(packetYaml, out var root, out _))
         {
             // A malformed packet cannot establish that the optional declaration
             // is absent. Route it through the evaluator so callers fail closed
             // with the ordinary packet-unavailable result.
-            return true;
+            return malformedMeansDeclaration;
         }
         var entries = Entries(root!);
-        if (entries.Any(entry => IsKey(entry.Key, "scope_sources") || IsKey(entry.Key, "scope_source_digests"))) return true;
-        return entries.Where(entry => IsKey(entry.Key, "implementation_issue_packet"))
+        if (entries.Where(entry => IsKey(entry.Key, "implementation_issue_packet"))
             .Select(entry => entry.Value).OfType<YamlMappingNode>()
-            .Any(identity => Entries(identity).Any(entry => IsKey(entry.Key, "scope_sources") || IsKey(entry.Key, "scope_source_digests")));
+            .Any(identity => Entries(identity).Any(entry => IsKey(entry.Key, "scope_sources") || IsKey(entry.Key, "scope_source_digests"))))
+            return true;
+
+        var sources = FindUnique(entries, "scope_sources", out var sourcesDuplicate);
+        var pins = FindUnique(entries, "scope_source_digests", out var pinsDuplicate);
+        if (sourcesDuplicate || pinsDuplicate) return true;
+        if (HasInvalidRelevantKeyTag(entries, ["scope_sources", "scope_source_digests"])) return true;
+        if ((sources is not null || pins is not null)
+            && HasInvalidParticipatingAlias(StrictUtf8.GetString(packetYaml), [], inspectIdentity: false)) return true;
+        if (sources is YamlSequenceNode sequence
+            && sequence.Children.Count == 0
+            && IsImplicitOrExplicitSequence(sequence)
+            && (pins is null || pins is YamlMappingNode pinMap
+                && IsImplicitOrExplicitMap(pinMap)
+                && Entries(pinMap).Count == 0))
+            return false;
+
+        return sources is not null || pins is not null;
+    }
+
+    internal static bool HasDeclarationOrMisplacedDeclaration(string packetYaml)
+    {
+        try
+        {
+            // Text obtained through the legacy title reader may have been decoded with
+            // replacement fallback. Do not use it to prove absence after lossy decoding.
+            if (packetYaml.Contains('\uFFFD')) return true;
+            return HasDeclarationOrMisplacedDeclaration(StrictUtf8.GetBytes(packetYaml));
+        }
+        catch (EncoderFallbackException)
+        {
+            return true;
+        }
     }
 
     internal static string FormatProvenanceBlock(IReadOnlyList<ProvenanceEntry> provenance)

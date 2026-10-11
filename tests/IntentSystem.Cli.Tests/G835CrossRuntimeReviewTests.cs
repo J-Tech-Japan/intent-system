@@ -343,6 +343,72 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     }
 
     [Theory]
+    [InlineData("request-out-dir-file", "json")]
+    [InlineData("request-out-dir-file", "markdown")]
+    [InlineData("request-out-dir-nonempty", "json")]
+    [InlineData("request-out-dir-nonempty", "markdown")]
+    [InlineData("record-verdict", "json")]
+    [InlineData("record-verdict", "markdown")]
+    [InlineData("record-stale-digest", "json")]
+    [InlineData("record-stale-digest", "markdown")]
+    public void DesignRequestAndRecordPostEvaluationRefusalsRetainVerifiedSourceFacts(string scenario, string format)
+    {
+        var source = WritePinnedSourcePacket();
+        string output;
+        int exit;
+        string expectedCause;
+        var sourceBytes = File.ReadAllBytes(source.ArtifactPath);
+        if (scenario.StartsWith("request-out-dir", StringComparison.Ordinal))
+        {
+            var outDirPath = Path.Combine(root, "existing-file-as-out-dir");
+            if (scenario == "request-out-dir-file")
+            {
+                File.WriteAllText(outDirPath, "preserve this file\n");
+            }
+            else
+            {
+                Directory.CreateDirectory(outDirPath);
+                File.WriteAllText(Path.Combine(outDirPath, "preserve.txt"), "preserve this file\n");
+            }
+            var before = Directory.Exists(outDirPath)
+                ? File.ReadAllBytes(Path.Combine(outDirPath, "preserve.txt"))
+                : File.ReadAllBytes(outDirPath);
+            (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDirPath), "--format", format]);
+            expectedCause = scenario == "request-out-dir-nonempty"
+                ? CrossRuntimeReviewCauses.OutDirNotEmpty
+                : CrossRuntimeReviewCauses.PathInvalid;
+            Assert.Equal(before, Directory.Exists(outDirPath)
+                ? File.ReadAllBytes(Path.Combine(outDirPath, "preserve.txt"))
+                : File.ReadAllBytes(outDirPath));
+        }
+        else if (scenario == "record-verdict")
+        {
+            var digest = CurrentDigest();
+            var verdict = WriteVerdictFile("codex", "{not json");
+            (exit, output) = Route(["review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format]);
+            expectedCause = CrossRuntimeReviewCauses.VerdictInvalid;
+            Assert.Empty(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
+        }
+        else
+        {
+            var staleDigest = new string('0', 64);
+            var verdict = WriteVerdictFile("codex", Verdict("approve", staleDigest));
+            (exit, output) = Route(["review", "cross-runtime", .. DesignRecordArgs("codex", verdict, staleDigest, write: true), "--format", format]);
+            expectedCause = CrossRuntimeReviewCauses.DigestStale;
+            Assert.Empty(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
+        }
+
+        Assert.Equal(1, exit);
+        Assert.Contains(expectedCause, output, StringComparison.Ordinal);
+        using var sources = ReadScopeSourcesOutput(output, format);
+        Assert.Equal("satisfied", sources.RootElement.GetProperty("state").GetString());
+        Assert.Equal("not-verified", sources.RootElement.GetProperty("publication").GetString());
+        Assert.Equal(source.Digest, sources.RootElement.GetProperty("provenance")[0].GetProperty("sha256").GetString());
+        Assert.Equal(sourceBytes, File.ReadAllBytes(source.ArtifactPath));
+        Assert.Empty(CrossRuntimeDesignReviewStore.Read(root, Unit).Records);
+    }
+
+    [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
     public void DesignRequest_MalformedPacketCannotProveSourceDeclarationAbsent(string format)
@@ -367,6 +433,70 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         else
         {
             Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+            Assert.Contains("scope_sources", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignConsumers_ExplicitEmptySourcesKeepLegacyShapeAndClockBudget(string format)
+    {
+        File.AppendAllText(Path.Combine(PacketDir(Unit), "packet.yaml"),
+            "\nscope_sources: []\nscope_source_digests: {}\n");
+        var clockCalls = 0;
+        ReviewCrossRuntimeCommand.Clock = () =>
+        {
+            clockCalls++;
+            return clock;
+        };
+
+        var outDir = Path.Combine(root, "design-explicit-empty-source");
+        var (requestExit, requestOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
+        Assert.Equal(0, requestExit);
+        AssertNoScopeSources(requestOutput, format);
+        Assert.Equal(0, clockCalls);
+
+        var digest = CurrentDigest();
+        var verdict = WriteVerdictFile("codex", Verdict("approve", digest));
+        var (recordExit, recordOutput) = Route(["review", "cross-runtime", .. DesignRecordArgs("codex", verdict, digest, write: true), "--format", format]);
+        Assert.Equal(0, recordExit);
+        AssertNoScopeSources(recordOutput, format);
+        Assert.Equal(1, clockCalls);
+
+        var (statusExit, statusOutput) = Route(["review", "cross-runtime", .. DesignStatusArgs(), "--format", format]);
+        Assert.Equal(0, statusExit);
+        AssertNoScopeSources(statusOutput, format);
+        Assert.Equal(1, clockCalls);
+    }
+
+    [Theory]
+    [InlineData("root-empty-alias", "json")]
+    [InlineData("root-empty-alias", "markdown")]
+    [InlineData("tagged-source-key", "json")]
+    [InlineData("tagged-source-key", "markdown")]
+    public void DesignRequest_ExplicitEmptyAliasOrTaggedSourceStillRefuses(string scenario, string format)
+    {
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        File.AppendAllText(packetPath, scenario == "root-empty-alias"
+            ? "\nempty_sources: &no_sources []\nscope_sources: *no_sources\nscope_source_digests: {}\n"
+            : "\n!bad scope_sources: []\nscope_source_digests: {}\n");
+        var outDir = Path.Combine(root, "empty-invalid-source-" + scenario);
+
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
+
+        Assert.Equal(1, exit);
+        Assert.False(Directory.Exists(outDir));
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            var sources = result.RootElement.GetProperty("scope_sources");
+            Assert.Equal("refused", sources.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-invalid-declaration", sources.GetProperty("cause").GetString());
+        }
+        else
+        {
+            Assert.Contains("scope-sources-invalid-declaration", output, StringComparison.Ordinal);
             Assert.Contains("scope_sources", output, StringComparison.Ordinal);
         }
     }
@@ -516,6 +646,7 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     [InlineData("missing", "scope-sources-ruling-missing")]
     [InlineData("superseded", "scope-sources-ruling-inactive")]
     [InlineData("tampered", "scope-sources-digest-mismatch")]
+    [InlineData("pin", "scope-sources-digest-mismatch")]
     public void DesignLifecycle_StoredApprovalsCannotOutliveThePinnedSource(string change, string expectedSourceCause)
     {
         var source = WritePinnedSourcePacket();
@@ -540,6 +671,11 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             case "tampered":
                 Assert.True(RulingArtifact.TryParse(File.ReadAllBytes(artifactPath), true, out var record, out var cause, out var detail), $"{cause}: {detail}");
                 File.WriteAllBytes(artifactPath, RulingArtifact.Serialize(record! with { Decision = "A canonical source changed after the approvals." }));
+                break;
+            case "pin":
+                var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+                File.WriteAllText(packetPath, File.ReadAllText(packetPath)
+                    .Replace(source.Digest, new string('0', 64), StringComparison.Ordinal));
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(change));
@@ -1119,6 +1255,18 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             Assert.Equal(JsonValueKind.Null, value.ValueKind);
     }
 
+    private static void AssertNoScopeSources(string output, string format)
+    {
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(output);
+            Assert.False(document.RootElement.TryGetProperty("scope_sources", out _));
+            return;
+        }
+
+        Assert.DoesNotContain("## scope_sources", output, StringComparison.Ordinal);
+    }
+
     private static string CreateTestRoot()
     {
         var baseDirectory = OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath();
@@ -1331,7 +1479,7 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         }));
     }
 
-    private (string Digest, string CanonicalJson) WritePinnedSourcePacket(
+    private (string Digest, string CanonicalJson, string ArtifactPath) WritePinnedSourcePacket(
         TimeSpan? expiresAfter = null, string sourceTeam = Team)
     {
         var recordedAt = clock;
@@ -1379,7 +1527,7 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         File.WriteAllText(bodyPath, body.TrimEnd() + "\n\n" + pending.ExpectedProvenanceBlock + "\n");
         var verified = PacketScopeSources.Evaluate(root, Unit, Encoding.UTF8.GetBytes(packetYaml), File.ReadAllBytes(bodyPath), recordedAt);
         Assert.Equal("satisfied", verified.State);
-        return (digest, canonicalJson);
+        return (digest, canonicalJson, artifactPath);
     }
 
     private (string Digest, string CanonicalJson) WriteSuccessorRuling(string id, IReadOnlyList<string> supersedes)

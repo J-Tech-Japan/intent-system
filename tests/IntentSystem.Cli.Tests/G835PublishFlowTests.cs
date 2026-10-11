@@ -141,6 +141,202 @@ public sealed class G835PublishFlowTests : IDisposable
     [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
+    public void PublishFlow_ExplicitEmptySourcesPreserveLegacyCreateAndClockBudget(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.AppendAllText(Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml"),
+            "\nscope_sources: []\nscope_source_digests: {}\n");
+        workspace.SeedQueueState(Unit, Title());
+        workspace.RecordSatisfiedDesignReviews(Unit);
+
+        var creator = new RecordingIssueCreator($"https://github.com/{Repo}/issues/8638");
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => defaultChecker;
+        var clockCalls = 0;
+        IssuePublishFlowCommand.UtcNowFactory = () =>
+        {
+            clockCalls++;
+            return new DateTimeOffset(2026, 10, 10, 12, 0, clockCalls, TimeSpan.Zero);
+        };
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true, format: format);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(1, creator.CallCount);
+        Assert.Equal(1, clockCalls);
+        Assert.Equal(File.ReadAllBytes(workspace.GithubBodyPath(Unit)), creator.LastBodyBytes);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.True(result.RootElement.GetProperty("created").GetBoolean());
+            Assert.False(result.RootElement.TryGetProperty("scope_sources", out _));
+        }
+        else
+        {
+            Assert.Contains("- created: yes", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("## scope_sources", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("root-empty-alias", "json")]
+    [InlineData("root-empty-alias", "markdown")]
+    [InlineData("tagged-source-key", "json")]
+    [InlineData("tagged-source-key", "markdown")]
+    public void PublishFlow_ExplicitEmptyAliasOrTaggedSourceIsNotLegacy(string scenario, string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: true);
+        workspace.WriteFullPacket(Unit, Repo);
+        File.AppendAllText(Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml"), scenario == "root-empty-alias"
+            ? "\nempty_sources: &no_sources []\nscope_sources: *no_sources\nscope_source_digests: {}\n"
+            : "\n!bad scope_sources: []\nscope_source_digests: {}\n");
+        workspace.SeedQueueState(Unit, Title());
+        var checkerFactories = 0;
+        var creatorFactories = 0;
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => { checkerFactories++; return defaultChecker; };
+        IssuePublishFlowCommand.CreatorFactory = () => { creatorFactories++; return throwingCreator; };
+
+        var (exit, output) = Run(workspace, Unit, Repo, write: true, format: format);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, checkerFactories);
+        Assert.Equal(0, creatorFactories);
+        Assert.Equal(0, throwingCreator.CallCount);
+        Assert.False(File.Exists(workspace.PublishYamlPath(Unit)));
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.Equal("scope-sources-invalid-declaration", result.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+        }
+        else
+        {
+            Assert.Contains("scope-sources-invalid-declaration", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_OrdinaryOptInPreviewAndCreateKeepVerifiedSourceAndAuthoredBody(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        var source = workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueState(Unit, Title());
+        var checker = new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8637");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        var (previewExit, previewOutput) = Run(workspace, Unit, OtherRepo, write: false,
+            team: UndeclaredTeam, format: format);
+        Assert.Equal(0, previewExit);
+        if (format == "json")
+        {
+            using var preview = JsonDocument.Parse(previewOutput);
+            Assert.False(preview.RootElement.GetProperty("created").GetBoolean());
+            var sources = preview.RootElement.GetProperty("scope_sources");
+            Assert.Equal("satisfied", sources.GetProperty("state").GetString());
+            Assert.Equal("not-verified", sources.GetProperty("publication").GetString());
+            Assert.Equal(source.Digest, sources.GetProperty("provenance")[0].GetProperty("sha256").GetString());
+        }
+        else
+        {
+            Assert.Contains("- created: no", previewOutput, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"satisfied\"", previewOutput, StringComparison.Ordinal);
+            Assert.Contains("\"publication\": \"not-verified\"", previewOutput, StringComparison.Ordinal);
+            Assert.Contains(source.Digest, previewOutput, StringComparison.Ordinal);
+        }
+        Assert.Equal(0, creator.CallCount);
+
+        var (createExit, createOutput) = Run(workspace, Unit, OtherRepo, write: true,
+            team: UndeclaredTeam, format: format);
+        Assert.Equal(0, createExit);
+        Assert.Equal(1, creator.CallCount);
+        Assert.Equal(File.ReadAllBytes(workspace.GithubBodyPath(Unit)), creator.LastBodyBytes);
+        Assert.Equal(source.BodyBytes, creator.LastBodyBytes);
+        if (format == "json")
+        {
+            using var created = JsonDocument.Parse(createOutput);
+            Assert.True(created.RootElement.GetProperty("created").GetBoolean());
+            Assert.Equal("satisfied", created.RootElement.GetProperty("scope_sources").GetProperty("state").GetString());
+        }
+        else
+        {
+            Assert.Contains("- created: yes", createOutput, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"satisfied\"", createOutput, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_LocalExistingIssueKeepsSatisfiedPinnedSource(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueStateWithLinkedIssue(Unit, Title(), OtherRepo, 8636, $"https://github.com/{OtherRepo}/issues/8636");
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8636");
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        var (exit, output) = Run(workspace, Unit, OtherRepo, write: true, team: UndeclaredTeam, format: format);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(0, creator.CallCount);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.True(result.RootElement.GetProperty("idempotent").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("created").GetBoolean());
+            Assert.Equal("satisfied", result.RootElement.GetProperty("scope_sources").GetProperty("state").GetString());
+        }
+        else
+        {
+            Assert.Contains("- idempotent: yes", output, StringComparison.Ordinal);
+            Assert.Contains("- created: no", output, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"satisfied\"", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PublishFlow_GitHubUniqueRestoreKeepsSatisfiedPinnedSource(string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueState(Unit, Title());
+        var checker = new StubExistingIssueChecker(GitHubExistingIssueClassification.Unique, 8635,
+            $"https://github.com/{OtherRepo}/issues/8635");
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8635");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+
+        var (exit, output) = Run(workspace, Unit, OtherRepo, write: true, team: UndeclaredTeam, format: format);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(1, checker.CallCount);
+        Assert.Equal(0, creator.CallCount);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.True(result.RootElement.GetProperty("idempotent").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("created").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("durable_state_synced").GetBoolean());
+            Assert.Equal("satisfied", result.RootElement.GetProperty("scope_sources").GetProperty("state").GetString());
+        }
+        else
+        {
+            Assert.Contains("- idempotent: yes", output, StringComparison.Ordinal);
+            Assert.Contains("- created: no", output, StringComparison.Ordinal);
+            Assert.Contains("- durable_state_synced: yes", output, StringComparison.Ordinal);
+            Assert.Contains("\"state\": \"satisfied\"", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
     public void PublishFlow_PinnedSourceCreatePublishesExactAuthoredBody(string format)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: true);
@@ -440,9 +636,15 @@ public sealed class G835PublishFlowTests : IDisposable
     }
 
     [Theory]
-    [InlineData("json")]
-    [InlineData("markdown")]
-    public void PublishFlow_NoneFoundLookupRechecksPinnedRulingBeforeOrdinaryCreate(string format)
+    [InlineData("missing", "json")]
+    [InlineData("missing", "markdown")]
+    [InlineData("successor", "json")]
+    [InlineData("successor", "markdown")]
+    [InlineData("pin", "json")]
+    [InlineData("pin", "markdown")]
+    [InlineData("tampered", "json")]
+    [InlineData("tampered", "markdown")]
+    public void PublishFlow_NoneFoundLookupRechecksMissingSuccessorPinAndTamperedSources(string mutation, string format)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
         var source = workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
@@ -450,30 +652,62 @@ public sealed class G835PublishFlowTests : IDisposable
         workspace.CaptureDurableBaseline();
         var checker = new CallbackExistingIssueChecker(
             new GitHubExistingIssueLookupResult { Classification = GitHubExistingIssueClassification.None },
-            () => RewriteRulingDecision(source.ArtifactPath));
+            () =>
+            {
+                switch (mutation)
+                {
+                    case "missing":
+                        File.Delete(source.ArtifactPath);
+                        break;
+                    case "successor":
+                        workspace.WriteSuccessorRuling(Unit, OtherRepo, UndeclaredTeam, "R-G863-PUBLISH");
+                        break;
+                    case "pin":
+                        var packetPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
+                        File.WriteAllText(packetPath, File.ReadAllText(packetPath)
+                            .Replace(source.Digest, new string('0', 64), StringComparison.Ordinal));
+                        break;
+                    case "tampered":
+                        RewriteRulingDecision(source.ArtifactPath);
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(mutation));
+                }
+            });
         var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8641");
+        var creatorFactoryCalls = 0;
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
-        IssuePublishFlowCommand.CreatorFactory = () => creator;
+        IssuePublishFlowCommand.CreatorFactory = () => { creatorFactoryCalls++; return creator; };
 
         var (exit, output) = Run(workspace, Unit, OtherRepo, write: true, team: UndeclaredTeam, format: format);
 
         Assert.Equal(1, exit);
         Assert.Equal(1, checker.CallCount);
-        Assert.Equal(0, creator.CallCount);
+        // The command constructs the creator after lookup but still rechecks the
+        // captured source before calling CreateIssue; this seam is not the mutation.
+        Assert.Equal(1, creatorFactoryCalls);
         Assert.Equal(0, creator.CallCount);
         AssertDurableStateUntouched(workspace);
+        var expectedCause = mutation switch
+        {
+            "missing" => "scope-sources-ruling-missing",
+            "successor" => "scope-sources-ruling-inactive",
+            "pin" => "scope-sources-changed",
+            "tampered" => "scope-sources-digest-mismatch",
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
+        };
         if (format == "json")
         {
             using var result = JsonDocument.Parse(output);
             Assert.False(result.RootElement.GetProperty("created").GetBoolean());
             Assert.False(result.RootElement.GetProperty("idempotent").GetBoolean());
             Assert.False(result.RootElement.GetProperty("durable_state_synced").GetBoolean());
-            Assert.Equal("scope-sources-digest-mismatch", result.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+            Assert.Equal(expectedCause, result.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
         }
         else
         {
             Assert.Contains("- created: no", output, StringComparison.Ordinal);
-            Assert.Contains("scope-sources-digest-mismatch", output, StringComparison.Ordinal);
+            Assert.Contains(expectedCause, output, StringComparison.Ordinal);
         }
     }
 
@@ -534,8 +768,16 @@ public sealed class G835PublishFlowTests : IDisposable
         Assert.True(File.Exists(source.ArtifactPath));
     }
 
-    [Fact]
-    public void PublishFlow_ExistingGithubIssue_RechecksPinnedRulingBeforeIdempotentRestoration()
+    [Theory]
+    [InlineData("missing", "json")]
+    [InlineData("missing", "markdown")]
+    [InlineData("successor", "json")]
+    [InlineData("successor", "markdown")]
+    [InlineData("pin", "json")]
+    [InlineData("pin", "markdown")]
+    [InlineData("tampered", "json")]
+    [InlineData("tampered", "markdown")]
+    public void PublishFlow_GitHubUniqueRestoreRechecksMissingSuccessorPinAndTamperedSources(string mutation, string format)
     {
         using var workspace = new G835PublishFlowWorkspace(declare: false);
         var source = workspace.WritePinnedSourcePacket(Unit, OtherRepo);
@@ -546,21 +788,135 @@ public sealed class G835PublishFlowTests : IDisposable
             Classification = GitHubExistingIssueClassification.Unique,
             IssueNumber = 8632,
             IssueUrl = $"https://github.com/{OtherRepo}/issues/8632",
-        }, () => RewriteRulingDecision(source.ArtifactPath));
+        }, () =>
+        {
+            switch (mutation)
+            {
+                case "missing":
+                    File.Delete(source.ArtifactPath);
+                    break;
+                case "successor":
+                    workspace.WriteSuccessorRuling(Unit, OtherRepo, Team, "R-G863-PUBLISH");
+                    break;
+                case "pin":
+                    var packetPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
+                    File.WriteAllText(packetPath, File.ReadAllText(packetPath)
+                        .Replace(source.Digest, new string('0', 64), StringComparison.Ordinal));
+                    break;
+                case "tampered":
+                    RewriteRulingDecision(source.ArtifactPath);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(mutation));
+            }
+        });
         var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8633");
         IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
         IssuePublishFlowCommand.CreatorFactory = () => creator;
 
-        var (exit, output) = Run(workspace, Unit, OtherRepo, write: true);
+        var (exit, output) = Run(workspace, Unit, OtherRepo, write: true, format: format);
 
         Assert.Equal(1, exit);
         Assert.Equal(1, checker.CallCount);
         Assert.Equal(0, creator.CallCount);
-        using var result = JsonDocument.Parse(output);
-        Assert.False(result.RootElement.GetProperty("created").GetBoolean());
-        Assert.False(result.RootElement.GetProperty("idempotent").GetBoolean());
-        Assert.False(result.RootElement.GetProperty("durable_state_synced").GetBoolean());
-        Assert.Equal("scope-sources-digest-mismatch", result.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+        var expectedCause = mutation switch
+        {
+            "missing" => "scope-sources-ruling-missing",
+            "successor" => "scope-sources-ruling-inactive",
+            "pin" => "scope-sources-changed",
+            "tampered" => "scope-sources-digest-mismatch",
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
+        };
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.False(result.RootElement.GetProperty("created").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("idempotent").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("durable_state_synced").GetBoolean());
+            Assert.Equal(expectedCause, result.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+        }
+        else
+        {
+            Assert.Contains("- created: no", output, StringComparison.Ordinal);
+            Assert.Contains("- idempotent: no", output, StringComparison.Ordinal);
+            Assert.Contains("- durable_state_synced: no", output, StringComparison.Ordinal);
+            Assert.Contains(expectedCause, output, StringComparison.Ordinal);
+        }
+        AssertDurableStateUntouched(workspace);
+    }
+
+    [Theory]
+    [InlineData("missing", "json")]
+    [InlineData("missing", "markdown")]
+    [InlineData("successor", "json")]
+    [InlineData("successor", "markdown")]
+    [InlineData("pin", "json")]
+    [InlineData("pin", "markdown")]
+    public void PublishFlow_LocalExistingIssueRechecksMissingSuccessorAndPinAtSnapshot(string mutation, string format)
+    {
+        using var workspace = new G835PublishFlowWorkspace(declare: false, heldTeam: UndeclaredTeam);
+        var source = workspace.WritePinnedSourcePacket(Unit, OtherRepo, UndeclaredTeam);
+        workspace.SeedQueueStateWithLinkedIssue(Unit, Title(), OtherRepo, 8634,
+            $"https://github.com/{OtherRepo}/issues/8634");
+        workspace.CaptureDurableBaseline();
+        var sourceRecheckCalls = 0;
+        var checker = new StubExistingIssueChecker(GitHubExistingIssueClassification.None);
+        var creator = new RecordingIssueCreator($"https://github.com/{OtherRepo}/issues/8634");
+        IssuePublishFlowCommand.ExistingIssueCheckerFactory = () => checker;
+        IssuePublishFlowCommand.CreatorFactory = () => creator;
+        IssuePublishFlowCommand.UtcNowFactory = () =>
+        {
+            sourceRecheckCalls++;
+            if (sourceRecheckCalls == 2)
+            {
+                switch (mutation)
+                {
+                    case "missing":
+                        File.Delete(source.ArtifactPath);
+                        break;
+                    case "successor":
+                        workspace.WriteSuccessorRuling(Unit, OtherRepo, UndeclaredTeam, "R-G863-PUBLISH");
+                        break;
+                    case "pin":
+                        var packetPath = Path.Combine(workspace.PacketDirectory(Unit), "packet.yaml");
+                        File.WriteAllText(packetPath, File.ReadAllText(packetPath)
+                            .Replace(source.Digest, new string('0', 64), StringComparison.Ordinal));
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(mutation));
+                }
+            }
+            return new DateTimeOffset(2026, 10, 10, 12, 0, 0, TimeSpan.Zero);
+        };
+
+        var (exit, output) = Run(workspace, Unit, OtherRepo, write: true, team: UndeclaredTeam, format: format);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(2, sourceRecheckCalls);
+        Assert.Equal(0, checker.CallCount);
+        Assert.Equal(0, creator.CallCount);
+        var expectedCause = mutation switch
+        {
+            "missing" => "scope-sources-ruling-missing",
+            "successor" => "scope-sources-ruling-inactive",
+            "pin" => "scope-sources-changed",
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
+        };
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.False(result.RootElement.GetProperty("created").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("idempotent").GetBoolean());
+            Assert.False(result.RootElement.GetProperty("durable_state_synced").GetBoolean());
+            Assert.Equal(expectedCause, result.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+        }
+        else
+        {
+            Assert.Contains("- created: no", output, StringComparison.Ordinal);
+            Assert.Contains("- idempotent: no", output, StringComparison.Ordinal);
+            Assert.Contains("- durable_state_synced: no", output, StringComparison.Ordinal);
+            Assert.Contains(expectedCause, output, StringComparison.Ordinal);
+        }
         AssertDurableStateUntouched(workspace);
     }
 
@@ -720,7 +1076,11 @@ public sealed class G835PublishFlowTests : IDisposable
             if (expectedSourceCause == CrossRuntimeReviewCauses.DigestStale)
             {
                 Assert.Equal(expectedSourceCause, result.RootElement.GetProperty("cause").GetString());
-                Assert.Equal("satisfied", result.RootElement.GetProperty("scope_sources").GetProperty("state").GetString());
+                var nestedSources = result.RootElement.GetProperty("scope_sources");
+                Assert.Equal("refused", nestedSources.GetProperty("state").GetString());
+                Assert.Equal("scope-sources-changed", nestedSources.GetProperty("cause").GetString());
+                Assert.False(nestedSources.TryGetProperty("provenance", out _));
+                Assert.False(nestedSources.TryGetProperty("expected_provenance_block", out _));
             }
             else
             {

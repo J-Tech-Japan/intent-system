@@ -236,6 +236,7 @@ internal static class IssuePublishFlowCommand
         // `<id> (untitled)` fallback) stay verbatim.
         string? title = null;
         string? titleSource = null;
+        string? packetYamlForSourceHint = null;
         if (githubBodyPresent)
         {
             var packetYamlPath = Path.Combine(packetDirectory, "packet.yaml");
@@ -249,7 +250,8 @@ internal static class IssuePublishFlowCommand
                     out var titleRefusalCause,
                     out var titleRefusalDetail,
                     out var titleRefusalParseError,
-                    out var titleRefusalReadExceptionMessage))
+                    out var titleRefusalReadExceptionMessage,
+                    out packetYamlForSourceHint))
             {
                 var titleRefusalResult = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
                     packetExists: true,
@@ -385,7 +387,8 @@ internal static class IssuePublishFlowCommand
         PacketScopeSources.Result? scopeSources = null;
         string? scopePacketDigest = null;
         var sourcePacketYamlPath = Path.Combine(packetDirectory, "packet.yaml");
-        if (File.Exists(sourcePacketYamlPath))
+        if (packetYamlForSourceHint is not null
+            && PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packetYamlForSourceHint))
         {
             try
             {
@@ -634,6 +637,27 @@ internal static class IssuePublishFlowCommand
                 lookupSnapshotPacketYaml = packetBytes;
                 lookupSnapshotGithubBody = File.ReadAllBytes(githubBodyPath);
                 lookupBody = IssueBodyTextDecoder.Decode(lookupSnapshotGithubBody);
+
+                // A source declaration added after the title/source snapshot must not
+                // silently enter the legacy publication path. The previous snapshot
+                // had no opted-in source result to authorize it.
+                if (scopeSources is null && PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packetBytes, malformedMeansDeclaration: false))
+                {
+                    var racedSources = new PacketScopeSources.Result(executionUnit!, "refused", "scope-sources-changed",
+                        "packet.yaml gained a ruling source declaration after its initial publish-flow snapshot",
+                        RulingArtifact.FormatTimestamp(UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow), null, null,
+                        [new("packet-changed", $".intent-cli/issues/{executionUnit}/packet.yaml", "the source declaration changed before GitHub lookup")],
+                        IsDeclared: true);
+                    outputScopeSources = racedSources;
+                    var racedRefusal = NewResult(executionUnit!, domain, repo!, packetDirectory, githubBodyPath, publishYamlPath, write,
+                        packetExists: true, githubBodyPresent: true, missingSections: missing, title: title,
+                        created: false, idempotent: false, durableStateSynced: false, issueUrl: null, issueNumber: null,
+                        queueStatePatched: false, publishYamlPatched: false, runsAppended: false,
+                        error: racedSources.Detail, titleSource: titleSource, cause: racedSources.Cause);
+                    EmitWithScopeSources(writer, racedRefusal, format);
+                    return 1;
+                }
+
                 try
                 {
                     lookupTitle = ResolveLookupTitle(
@@ -2288,6 +2312,13 @@ internal static class IssuePublishFlowCommand
             if (!File.Exists(packetYamlPath) || !File.Exists(githubBodyPath))
             {
                 var missingPath = !File.Exists(packetYamlPath) ? packetYamlPath : githubBodyPath;
+                if (scopeSources is not null)
+                {
+                    scopeSources = RefuseStaleScopeSources(scopeSources,
+                        UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                        "scope-sources-packet-unavailable",
+                        $"the complete packet snapshot became unavailable before create: {missingPath}");
+                }
                 return EmitPacketMissingRefusal(
                     writer, format, executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath,
                     title, titleSource, authorization, resolution, missingPath, scopeSources);
@@ -2307,6 +2338,13 @@ internal static class IssuePublishFlowCommand
         if (!File.Exists(reviewContextPath) || !File.Exists(implementationPath))
         {
             var missingPath = !File.Exists(reviewContextPath) ? reviewContextPath : implementationPath;
+            if (scopeSources is not null)
+            {
+                scopeSources = RefuseStaleScopeSources(scopeSources,
+                    UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                    "scope-sources-packet-unavailable",
+                    $"the complete packet snapshot became unavailable before create: {missingPath}");
+            }
             return EmitPacketMissingRefusal(
                 writer, format, executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath,
                 title, titleSource, authorization, resolution, missingPath, scopeSources);
@@ -2321,6 +2359,13 @@ internal static class IssuePublishFlowCommand
         }
         catch (IOException exception)
         {
+            if (scopeSources is not null)
+            {
+                scopeSources = RefuseStaleScopeSources(scopeSources,
+                    UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                    "scope-sources-packet-unavailable",
+                    $"the complete packet snapshot became unavailable before create: {exception.Message}");
+            }
             return EmitPacketMissingRefusal(
                 writer, format, executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath,
                 title, titleSource, authorization, resolution, exception.Message, scopeSources);
@@ -2432,6 +2477,13 @@ internal static class IssuePublishFlowCommand
 
         if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var currentPacket, out var currentMissing))
         {
+            if (scopeSources is not null)
+            {
+                scopeSources = RefuseStaleScopeSources(scopeSources,
+                    UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                    "scope-sources-packet-unavailable",
+                    $"the complete packet snapshot became unavailable after the review gate: {currentMissing}");
+            }
             var staleResult = NewResult(executionUnit, domain, repo, packetDirectory, githubBodyPath, publishYamlPath, write: true,
                 packetExists: true,
                 githubBodyPresent: true,
@@ -2475,6 +2527,13 @@ internal static class IssuePublishFlowCommand
                 authorization: authorization,
                 cause: CrossRuntimeReviewCauses.DigestStale,
                 crossRuntimeDesignReview: EvaluateDeclaredDesignGate(context, resolution, currentPacket));
+            if (scopeSources is not null)
+            {
+                scopeSources = RefuseStaleScopeSources(scopeSources,
+                    UtcNowFactory?.Invoke() ?? DateTimeOffset.UtcNow,
+                    "scope-sources-changed",
+                    "packet bytes changed after the source and review gates were evaluated");
+            }
             EmitResultWithScopeSources(writer, staleResult, format, scopeSources);
             return 1;
         }
@@ -3088,7 +3147,8 @@ internal static class IssuePublishFlowCommand
                 out refusalCause,
                 out refusalDetail,
                 out refusalParseError,
-                out refusalReadExceptionMessage))
+                out refusalReadExceptionMessage,
+                out _))
             {
                 return false;
             }
@@ -3211,7 +3271,8 @@ internal static class IssuePublishFlowCommand
         out string? refusalCause,
         out string? refusalDetail,
         out PacketYamlParseError? refusalParseError,
-        out string? refusalReadExceptionMessage)
+        out string? refusalReadExceptionMessage,
+        out string? packetYamlText)
     {
         title = null;
         titleSource = null;
@@ -3219,6 +3280,7 @@ internal static class IssuePublishFlowCommand
         refusalDetail = null;
         refusalParseError = null;
         refusalReadExceptionMessage = null;
+        packetYamlText = null;
 
         string text;
         try
@@ -3232,6 +3294,8 @@ internal static class IssuePublishFlowCommand
             refusalDetail = PacketYamlParseMessages.ComposePublishFlowReadDetail(packetYamlPath, exception.Message);
             return false;
         }
+
+        packetYamlText = text;
 
         if (!PacketYamlDocument.TryParseWithLocation(text, out var document, out var parseError) || document is null)
         {

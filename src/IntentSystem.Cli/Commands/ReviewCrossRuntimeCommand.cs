@@ -465,19 +465,18 @@ internal static class ReviewCrossRuntimeCommand
         if (File.Exists(outDir))
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
-                $"--out-dir '{outDir}' is a file.", "pass a new or empty directory.");
+                $"--out-dir '{outDir}' is a file.", "pass a new or empty directory.", scopeSources: scopeSources);
         }
 
-        if (!CrossRuntimeReviewRequestSupport.TryValidateOutDir(
+        if (!TryValidateDesignRequestOutDir(
                 outDir,
                 runtime,
-                CrossRuntimeReviewRecord.KindDesign,
                 hasClone,
                 workspace,
                 opencodeProviderConfig,
+                scopeSources,
                 writer,
-                format,
-                out _))
+                format))
         {
             return 1;
         }
@@ -495,7 +494,8 @@ internal static class ReviewCrossRuntimeCommand
                 providerError,
                 modeRefusal
                     ? CrossRuntimeReviewOpencodeConfig.ModeRefusalFix(opencodeProviderConfig)
-                    : "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
+                    : "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.",
+                scopeSources: scopeSources);
         }
 
         if (opencodeProviderConfig is not null)
@@ -512,7 +512,8 @@ internal static class ReviewCrossRuntimeCommand
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketInvalid,
                 $"packet file bytes are not valid UTF-8: {exception.Message}",
-                "repair the packet files under `.intent-cli/issues/` so every file is UTF-8 text.");
+                "repair the packet files under `.intent-cli/issues/` so every file is UTF-8 text.",
+                scopeSources: scopeSources);
         }
 
         var invocation = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
@@ -535,7 +536,8 @@ internal static class ReviewCrossRuntimeCommand
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
                 exception.Message,
-                "do not read operator Copilot or OpenCode config directories.");
+                "do not read operator Copilot or OpenCode config directories.",
+                scopeSources: scopeSources);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -547,7 +549,8 @@ internal static class ReviewCrossRuntimeCommand
 
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
                 $"review request files could not be written under --out-dir '{outDir}': {exception.Message}",
-                "pass a writable --out-dir outside operator runtime state.");
+                "pass a writable --out-dir outside operator runtime state.",
+                scopeSources: scopeSources);
         }
 
         var result = new CrossRuntimeReviewRequestResult
@@ -575,6 +578,58 @@ internal static class ReviewCrossRuntimeCommand
 
         WriteDesignRequestResult(writer, format, result);
         return 0;
+    }
+
+    private static bool TryValidateDesignRequestOutDir(
+        string outDir,
+        string runtime,
+        bool hasClone,
+        string workspace,
+        string? opencodeProviderConfig,
+        PacketScopeSources.Result? scopeSources,
+        TextWriter writer,
+        string format)
+    {
+        if (scopeSources is null)
+        {
+            return CrossRuntimeReviewRequestSupport.TryValidateOutDir(
+                outDir,
+                runtime,
+                CrossRuntimeReviewRecord.KindDesign,
+                hasClone,
+                workspace,
+                opencodeProviderConfig,
+                writer,
+                format,
+                out _);
+        }
+
+        // Keep the shared path validator unchanged for legacy callers. For an opted-in
+        // design request, capture its existing refusal DTO and render it through this
+        // command so the already-evaluated source result accompanies the same cause.
+        using var captured = new StringWriter(CultureInfo.InvariantCulture);
+        if (CrossRuntimeReviewRequestSupport.TryValidateOutDir(
+                outDir,
+                runtime,
+                CrossRuntimeReviewRecord.KindDesign,
+                hasClone,
+                workspace,
+                opencodeProviderConfig,
+                captured,
+                FormatJson,
+                out _))
+        {
+            return true;
+        }
+
+        var refusal = JsonSerializer.Deserialize<CrossRuntimeReviewRefusal>(captured.ToString());
+        if (refusal is null)
+        {
+            throw new InvalidOperationException("out-dir validator did not produce a refusal record.");
+        }
+
+        Refuse(writer, format, "request", refusal.Cause, refusal.Detail, refusal.Fix, scopeSources: scopeSources);
+        return false;
     }
 
     private static void WriteImplementationRequestResult(TextWriter writer, string format, CrossRuntimeReviewImplementationRequestResult result)
@@ -1179,7 +1234,8 @@ internal static class ReviewCrossRuntimeCommand
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.DigestStale,
                 $"--packet-digest '{packetDigestArgument}' does not match the current packet digest '{currentDigest}'.",
-                "re-run design review against the current packet bytes and pass the current digest.");
+                "re-run design review against the current packet bytes and pass the current digest.",
+                scopeSources: scopeSources);
         }
 
         var verdictFile = ResolvePath(context, verdictFileArgument);
@@ -1187,7 +1243,8 @@ internal static class ReviewCrossRuntimeCommand
             && !CrossRuntimeReviewJsonlVerdict.TryValidateOpencodeExitStatus(verdictFile, out var exitCause, out var exitDetail))
         {
             return Refuse(writer, format, "record", exitCause, exitDetail,
-                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.");
+                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.",
+                scopeSources: scopeSources);
         }
 
         byte[] raw;
@@ -1204,7 +1261,8 @@ internal static class ReviewCrossRuntimeCommand
                     : $"verdict file '{verdictFile}' could not be read: {verdictReadError}";
                 return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                     verdictDetail,
-                    "pass the file the rendered invocation wrote (verdict.raw.json).");
+                    "pass the file the rendered invocation wrote (verdict.raw.json).",
+                    scopeSources: scopeSources);
             }
         }
         else
@@ -1217,7 +1275,8 @@ internal static class ReviewCrossRuntimeCommand
             {
                 return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                     $"verdict file '{verdictFile}' could not be read: {exception.Message}",
-                    "pass the file the rendered invocation wrote (verdict.raw.json).");
+                    "pass the file the rendered invocation wrote (verdict.raw.json).",
+                    scopeSources: scopeSources);
             }
         }
 
@@ -1229,14 +1288,16 @@ internal static class ReviewCrossRuntimeCommand
         catch (DecoderFallbackException exception)
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
-                $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.");
+                $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.",
+                scopeSources: scopeSources);
         }
 
         if (!CrossRuntimeReviewVerdict.TryParseDesign(runtime, content, out var verdict, out var verdictError))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                 $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': {verdictError}",
-                "re-run the reviewer with the pinned invocation; never hand-write a verdict.");
+                "re-run the reviewer with the pinned invocation; never hand-write a verdict.",
+                scopeSources: scopeSources);
         }
 
         CrossRuntimeReviewJsonlVerdict.TryReadCopilotObservedModel(content, out var observedModel, out _);
@@ -1247,7 +1308,8 @@ internal static class ReviewCrossRuntimeCommand
                 observedModel is null
                     ? $"copilot envelope data.model is missing but --model is '{model}'."
                     : $"copilot envelope data.model is '{observedModel}' but --model is '{model}'.",
-                "re-run the reviewer with the same --model value.");
+                "re-run the reviewer with the same --model value.",
+                scopeSources: scopeSources);
         }
 
         if (runtime == CrossRuntimeReviewRuntimes.Copilot
@@ -1256,14 +1318,16 @@ internal static class ReviewCrossRuntimeCommand
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.EffortMismatch,
                 effortError,
-                "re-run the reviewer with the same --effort value.");
+                "re-run the reviewer with the same --effort value.",
+                scopeSources: scopeSources);
         }
 
         if (!string.Equals(verdict.PacketDigest, currentDigest, StringComparison.OrdinalIgnoreCase))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.DigestMismatch,
                 $"the verdict echoes packet_digest '{verdict.PacketDigest}' but the current digest is '{currentDigest}'.",
-                "re-run the design review against the current packet bytes.");
+                "re-run the design review against the current packet bytes.",
+                scopeSources: scopeSources);
         }
 
         var write = options.ContainsKey("--write");
@@ -1306,7 +1370,8 @@ internal static class ReviewCrossRuntimeCommand
                         ? CrossRuntimeReviewCauses.RecordCollision
                         : CrossRuntimeReviewCauses.ArgumentInvalid,
                     stored.Error ?? "record could not be written.",
-                    "re-run `record --write`; an existing record is never overwritten.");
+                    "re-run `record --write`; an existing record is never overwritten.",
+                    scopeSources: scopeSources);
             }
 
             if (options.TryGetValue("--comment-out", out var commentOutArgument))

@@ -26,6 +26,8 @@ public sealed class PacketScopeSourcesTests
             ("refs-scalar", validYaml.Replace("scope_sources:\n  - \"ruling:R-G863-SOURCE\"", "scope_sources: \"ruling:R-G863-SOURCE\"", StringComparison.Ordinal), "scope_sources must be a sequence"),
             ("refs-map", validYaml.Replace("scope_sources:\n  - \"ruling:R-G863-SOURCE\"", "scope_sources: { item: \"ruling:R-G863-SOURCE\" }", StringComparison.Ordinal), "scope_sources must be a sequence"),
             ("ref-null-member", validYaml.Replace("\"ruling:R-G863-SOURCE\"", "null", StringComparison.Ordinal), "textual scalar"),
+            ("ref-map-member", validYaml.Replace("\"ruling:R-G863-SOURCE\"", "{ ref: \"ruling:R-G863-SOURCE\" }", StringComparison.Ordinal), "textual scalar"),
+            ("ref-array-member", validYaml.Replace("\"ruling:R-G863-SOURCE\"", "[\"ruling:R-G863-SOURCE\"]", StringComparison.Ordinal), "textual scalar"),
             ("ref-wrong-prefix", validYaml.Replace("ruling:R-G863-SOURCE", "R-G863-SOURCE", StringComparison.Ordinal), "invalid ruling reference"),
             ("ref-path", validYaml.Replace("ruling:R-G863-SOURCE", "ruling:../R-G863-SOURCE", StringComparison.Ordinal), "invalid ruling reference"),
             ("duplicate-ref", validYaml.Replace("  - \"ruling:R-G863-SOURCE\"", "  - \"ruling:R-G863-SOURCE\"\n  - \"ruling:R-G863-SOURCE\"", StringComparison.Ordinal), "duplicate or case-alias"),
@@ -46,6 +48,10 @@ public sealed class PacketScopeSourcesTests
             ("pin-sequence", validYaml.Replace($"\"{fixture.Digest}\"", "[" + fixture.Digest + "]", StringComparison.Ordinal), "textual scalar"),
             ("pin-short-digest", validYaml.Replace(fixture.Digest, "abc123", StringComparison.Ordinal), "64 lowercase hexadecimal"),
             ("missing-pin", validYaml.Replace("  \"ruling:R-G863-SOURCE\":", "  \"ruling:R-OTHER\":", StringComparison.Ordinal), "exactly one pin"),
+            ("extra-pin", validYaml.Replace(
+                $"  \"ruling:R-G863-SOURCE\": \"{fixture.Digest}\"",
+                $"  \"ruling:R-G863-SOURCE\": \"{fixture.Digest}\"\n  \"ruling:R-G863-EXTRA\": \"{fixture.Digest}\"",
+                StringComparison.Ordinal), "exactly one pin"),
             ("nested-pin-key", validYaml.Replace("  \"ruling:R-G863-SOURCE\":", "  nested:\n    \"ruling:R-G863-SOURCE\":", StringComparison.Ordinal), "keys and values must be textual scalars"),
             ("uppercase-digest", validYaml.Replace(fixture.Digest, fixture.Digest.ToUpperInvariant(), StringComparison.Ordinal), "lowercase hexadecimal"),
             ("misplaced-nested", validYaml.Replace("  target_repo: J-Tech-Japan/intent-system\n", "  target_repo: J-Tech-Japan/intent-system\n  scope_sources: []\n", StringComparison.Ordinal), "belong at the packet root"),
@@ -73,6 +79,8 @@ public sealed class PacketScopeSourcesTests
         var unrelated = fixture.Evaluate(metadataAlias, fixture.Body);
         Assert.Equal("satisfied", unrelated.State);
         Assert.NotEmpty(Assert.Single(unrelated.Provenance!).Sha256);
+        Assert.Equal(fixture.Bytes, File.ReadAllBytes(Path.Combine(fixture.Root,
+            fixture.Record.RelativePath.Replace('/', Path.DirectorySeparatorChar))));
 
         var duplicateIdentity = validYaml.Replace(
             "  domain: intent-cli\n",
@@ -582,6 +590,119 @@ public sealed class PacketScopeSourcesTests
     }
 
     [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void TargetScopedJsonDirectoryIsRefusedByTheActualValidationCommand(string format)
+    {
+        using var fixture = new SourceFixture();
+        var packetDirectory = Path.Combine(fixture.Root, ".intent-cli", "issues", "G863");
+        Directory.CreateDirectory(packetDirectory);
+        File.WriteAllText(Path.Combine(packetDirectory, "packet.yaml"), fixture.PacketYaml);
+        File.WriteAllText(Path.Combine(packetDirectory, "github-body.md"), fixture.Body);
+        var targetPath = Path.Combine(fixture.Root, fixture.Record.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        File.Delete(targetPath);
+        Directory.CreateDirectory(targetPath);
+        var reads = new List<string>();
+        using var output = new StringWriter();
+
+        var exit = PacketValidateSourcesCommand.Execute(fixture.Root,
+            ["--execution-unit", "G863", "--format", format], output, Now,
+            (operation, path) => { if (operation == "read") reads.Add(path); });
+
+        Assert.Equal(1, exit);
+        Assert.Contains("scope-sources-ruling-unavailable", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("ruling-unsafe-path", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(reads, path => path == targetPath);
+        Assert.True(Directory.Exists(targetPath));
+        Assert.Empty(Directory.GetFileSystemEntries(targetPath));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void NullSourceJsonIsRefusedByTheActualValidationCommandWithoutChangingRulingBytes(string format)
+    {
+        using var fixture = new SourceFixture();
+        var packetDirectory = Path.Combine(fixture.Root, ".intent-cli", "issues", "G863");
+        Directory.CreateDirectory(packetDirectory);
+        File.WriteAllText(Path.Combine(packetDirectory, "packet.yaml"),
+            "implementation_issue_packet:\n  source_execution_unit: G863\n  domain: intent-cli\n  team: intent-cli-dev\n  target_repo: J-Tech-Japan/intent-system\nscope_sources: null\nscope_source_digests: {}\n");
+        File.WriteAllText(Path.Combine(packetDirectory, "github-body.md"), fixture.Body);
+        var targetPath = Path.Combine(fixture.Root, fixture.Record.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var original = File.ReadAllBytes(targetPath);
+        using var output = new StringWriter();
+
+        var exit = PacketValidateSourcesCommand.Execute(fixture.Root,
+            ["--execution-unit", "G863", "--format", format], output, Now, null);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("scope-sources-invalid-declaration", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal(original, File.ReadAllBytes(targetPath));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".intent-cli", "rulings", Domain, Team, "R-G863-SOURCE.tmp")));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void NullJsonInAValidPinnedRulingIsRejectedByTheActualValidationCommandWithoutChangingState(string format)
+    {
+        using var fixture = new SourceFixture();
+        var packetDirectory = Path.Combine(fixture.Root, ".intent-cli", "issues", "G863");
+        Directory.CreateDirectory(packetDirectory);
+        var packetPath = Path.Combine(packetDirectory, "packet.yaml");
+        var bodyPath = Path.Combine(packetDirectory, "github-body.md");
+        File.WriteAllText(packetPath, fixture.PacketYaml);
+        File.WriteAllText(bodyPath, fixture.Body);
+
+        var targetPath = Path.Combine(fixture.Root, fixture.Record.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var invalidBytes = Encoding.UTF8.GetBytes("null");
+        File.WriteAllBytes(targetPath, invalidBytes);
+        var stateRoot = Path.Combine(fixture.Root, ".intent-cli");
+        var directoriesBefore = Directory.EnumerateDirectories(stateRoot, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(stateRoot, path))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var filesBefore = Directory.EnumerateFiles(stateRoot, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => Path.GetRelativePath(stateRoot, path), File.ReadAllBytes, StringComparer.Ordinal);
+        var reads = new List<string>();
+        using var output = new StringWriter();
+
+        var exit = PacketValidateSourcesCommand.Execute(fixture.Root,
+            ["--execution-unit", "G863", "--format", format], output, Now,
+            (operation, path) => { if (operation == "read") reads.Add(path); });
+
+        Assert.Equal(1, exit);
+        Assert.Contains(targetPath, reads, StringComparer.Ordinal);
+        Assert.Equal(invalidBytes, File.ReadAllBytes(targetPath));
+        var directoriesAfter = Directory.EnumerateDirectories(stateRoot, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(stateRoot, path))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(directoriesBefore, directoriesAfter);
+        var filesAfter = Directory.EnumerateFiles(stateRoot, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => Path.GetRelativePath(stateRoot, path), File.ReadAllBytes, StringComparer.Ordinal);
+        Assert.Equal(filesBefore.Keys.Order(StringComparer.Ordinal), filesAfter.Keys.Order(StringComparer.Ordinal));
+        foreach (var (relativePath, bytes) in filesBefore)
+            Assert.Equal(bytes, filesAfter[relativePath]);
+
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output.ToString());
+            Assert.Equal("unavailable", result.RootElement.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-ruling-unavailable", result.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(JsonValueKind.Null, result.RootElement.GetProperty("provenance").ValueKind);
+            Assert.Contains(result.RootElement.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("cause").GetString() == "ruling-invalid-input");
+        }
+        else
+        {
+            Assert.Contains("- State: unavailable", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("scope-sources-ruling-unavailable", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("ruling-invalid-input", output.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
     [InlineData(typeof(IOException))]
     [InlineData(typeof(UnauthorizedAccessException))]
     public void ActualRulingReadFailurePreservesTheReachedPathAndUnavailableState(Type exceptionType)
@@ -698,6 +819,49 @@ public sealed class PacketScopeSourcesTests
         finally
         {
             File.Delete(externalPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void TeamDirectorySymlinkIsRefusedByTheActualValidationCommandBeforeReadingOutside(string format)
+    {
+        using var fixture = new SourceFixture();
+        var rulingDirectory = Path.GetDirectoryName(Path.Combine(fixture.Root,
+            fixture.Record.RelativePath.Replace('/', Path.DirectorySeparatorChar)))!;
+        var teamDirectory = rulingDirectory;
+        var externalDirectory = Path.Combine(Path.GetDirectoryName(fixture.Root)!, "g863-team-target-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(externalDirectory);
+        var externalRecord = Path.Combine(externalDirectory, fixture.Record.Id + ".json");
+        File.WriteAllBytes(externalRecord, fixture.Bytes);
+        try
+        {
+            Directory.Delete(teamDirectory, recursive: true);
+            Directory.CreateSymbolicLink(teamDirectory, externalDirectory);
+            var packetDirectory = Path.Combine(fixture.Root, ".intent-cli", "issues", "G863");
+            Directory.CreateDirectory(packetDirectory);
+            File.WriteAllText(Path.Combine(packetDirectory, "packet.yaml"), fixture.PacketYaml);
+            File.WriteAllText(Path.Combine(packetDirectory, "github-body.md"), fixture.Body);
+            var reads = new List<string>();
+            using var output = new StringWriter();
+
+            var exit = PacketValidateSourcesCommand.Execute(fixture.Root,
+                ["--execution-unit", "G863", "--format", format], output, Now,
+                (operation, path) => { if (operation == "read") reads.Add(path); });
+
+            Assert.Equal(1, exit);
+            Assert.Contains("scope-sources-ruling-unavailable", output.ToString(), StringComparison.Ordinal);
+            Assert.Contains("ruling-unsafe-path", output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(reads, path => path == externalRecord);
+            Assert.Equal(fixture.Bytes, File.ReadAllBytes(externalRecord));
+            Assert.True(new DirectoryInfo(teamDirectory).LinkTarget is not null);
+        }
+        finally
+        {
+            if (Directory.Exists(teamDirectory) || new DirectoryInfo(teamDirectory).LinkTarget is not null)
+                Directory.Delete(teamDirectory);
+            Directory.Delete(externalDirectory, recursive: true);
         }
     }
 
