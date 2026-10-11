@@ -404,51 +404,95 @@ internal static class ReviewCrossRuntimeCommand
             return packetRefusal;
         }
 
-        CrossRuntimeDesignReviewDigest.PacketBytes packet;
-        string? missingPath;
-        if (runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode)
+        CrossRuntimeDesignReviewDigest.PacketBytes packet = null!;
+        string? missingPath = null;
+        string? unreadableFileName = null;
+        string? unreadableError = null;
+        PacketScopeSources.Result? unavailableSources = null;
+        var packetAvailable = false;
+        try
         {
-            if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
-                    packetDirectory,
-                    out packet,
-                    out missingPath,
-                    out var unreadableFileName,
-                    out var unreadableError))
+            packetAvailable = runtime is CrossRuntimeReviewRuntimes.Copilot or CrossRuntimeReviewRuntimes.Opencode
+                ? CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+                    packetDirectory, out packet, out missingPath, out unreadableFileName, out unreadableError)
+                : CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out missingPath);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            if (TryReadDeclaredPacketSnapshot(context.RepoRoot, unit, packetDirectory, out packet, out unavailableSources))
             {
-                if (unreadableFileName is not null)
-                {
-                    return RefuseUnreadablePacketFile(writer, format, "request", unit, unreadableFileName, unreadableError!);
-                }
-
-                return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
-                    $"packet file is missing: {missingPath}; a design reviewer cannot review against an incomplete packet.",
-                    $"run from the host root that holds `.intent-cli/issues/{unit}/` with packet.yaml, github-body.md, review-context.md, and implementation.md.");
+                packetAvailable = true;
+            }
+            else if (unavailableSources is not null)
+            {
+                return RefuseUnreadablePacketFile(writer, format, "request", unit,
+                    PacketSourceFailureFileName(unavailableSources), exception.Message, unavailableSources);
+            }
+            else
+            {
+                throw;
             }
         }
-        else if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out missingPath))
+
+        if (!packetAvailable
+            && !TryReadDeclaredPacketSnapshot(context.RepoRoot, unit, packetDirectory, out packet, out unavailableSources))
         {
+            if (unreadableFileName is not null)
+            {
+                return RefuseUnreadablePacketFile(writer, format, "request", unit, unreadableFileName, unreadableError!, unavailableSources);
+            }
+
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketMissing,
                 $"packet file is missing: {missingPath}; a design reviewer cannot review against an incomplete packet.",
-                $"run from the host root that holds `.intent-cli/issues/{unit}/` with packet.yaml, github-body.md, review-context.md, and implementation.md.");
+                $"run from the host root that holds `.intent-cli/issues/{unit}/` with packet.yaml, github-body.md, review-context.md, and implementation.md.",
+                scopeSources: unavailableSources);
         }
 
         var digest = CrossRuntimeDesignReviewDigest.Compute(packet);
+        PacketScopeSources.Result? scopeSources = PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packet.PacketYaml)
+            ? PacketScopeSources.Evaluate(context.RepoRoot, unit, packet.PacketYaml, packet.GithubBody, (Clock ?? (() => DateTimeOffset.UtcNow))())
+            : null;
+        if (scopeSources is { IsDeclared: true })
+        {
+            if (!scopeSources.IsSuccessful)
+            {
+                return Refuse(writer, format, "request", scopeSources.Cause, scopeSources.Detail,
+                    "repair the declared ruling source pins and public provenance before requesting design review.",
+                    scopeSources: scopeSources);
+            }
+
+            var sourceResolution = CrossRuntimeReviewDesignTeamResolver.Resolve(context.RepoRoot, unit);
+            if (sourceResolution.Resolved && !ScopeSourcesMatch(scopeSources, sourceResolution.Domain, sourceResolution.Team, sourceResolution.TargetRepo))
+            {
+                var mismatch = scopeSources with
+                {
+                    State = "refused",
+                    Cause = "scope-sources-identity-mismatch",
+                    Detail = "pinned ruling identity does not match the resolved design-review domain, team, and target repository",
+                    Provenance = null,
+                    ExpectedProvenanceBlock = null,
+                };
+                return Refuse(writer, format, "request", mismatch.Cause, mismatch.Detail,
+                    "align the packet's source identity with the resolved design-review team and repository.",
+                    scopeSources: mismatch);
+            }
+        }
+        else scopeSources = null;
         if (File.Exists(outDir))
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
-                $"--out-dir '{outDir}' is a file.", "pass a new or empty directory.");
+                $"--out-dir '{outDir}' is a file.", "pass a new or empty directory.", scopeSources: scopeSources);
         }
 
-        if (!CrossRuntimeReviewRequestSupport.TryValidateOutDir(
+        if (!TryValidateDesignRequestOutDir(
                 outDir,
                 runtime,
-                CrossRuntimeReviewRecord.KindDesign,
                 hasClone,
                 workspace,
                 opencodeProviderConfig,
+                scopeSources,
                 writer,
-                format,
-                out _))
+                format))
         {
             return 1;
         }
@@ -466,7 +510,8 @@ internal static class ReviewCrossRuntimeCommand
                 providerError,
                 modeRefusal
                     ? CrossRuntimeReviewOpencodeConfig.ModeRefusalFix(opencodeProviderConfig)
-                    : "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.");
+                    : "pass a UTF-8 JSON file whose root object has exactly one key 'provider' with an object value.",
+                scopeSources: scopeSources);
         }
 
         if (opencodeProviderConfig is not null)
@@ -477,13 +522,14 @@ internal static class ReviewCrossRuntimeCommand
         string prompt;
         try
         {
-            prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument));
+            prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument), scopeSources);
         }
         catch (DecoderFallbackException exception)
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PacketInvalid,
                 $"packet file bytes are not valid UTF-8: {exception.Message}",
-                "repair the packet files under `.intent-cli/issues/` so every file is UTF-8 text.");
+                "repair the packet files under `.intent-cli/issues/` so every file is UTF-8 text.",
+                scopeSources: scopeSources);
         }
 
         var invocation = CrossRuntimeReviewRuntimes.InvocationLabel(runtime) + "\n"
@@ -506,7 +552,8 @@ internal static class ReviewCrossRuntimeCommand
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
                 exception.Message,
-                "do not read operator Copilot or OpenCode config directories.");
+                "do not read operator Copilot or OpenCode config directories.",
+                scopeSources: scopeSources);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -518,7 +565,8 @@ internal static class ReviewCrossRuntimeCommand
 
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
                 $"review request files could not be written under --out-dir '{outDir}': {exception.Message}",
-                "pass a writable --out-dir outside operator runtime state.");
+                "pass a writable --out-dir outside operator runtime state.",
+                scopeSources: scopeSources);
         }
 
         var result = new CrossRuntimeReviewRequestResult
@@ -541,10 +589,63 @@ internal static class ReviewCrossRuntimeCommand
             ReadOnlyEnforcement = CrossRuntimeReviewRuntimes.ReadOnlyEnforcement[runtime],
             NoExecutionBoundary = NoExecutionBoundary,
             Terms = TermsNotice,
+            ScopeSources = scopeSources,
         };
 
         WriteDesignRequestResult(writer, format, result);
         return 0;
+    }
+
+    private static bool TryValidateDesignRequestOutDir(
+        string outDir,
+        string runtime,
+        bool hasClone,
+        string workspace,
+        string? opencodeProviderConfig,
+        PacketScopeSources.Result? scopeSources,
+        TextWriter writer,
+        string format)
+    {
+        if (scopeSources is null)
+        {
+            return CrossRuntimeReviewRequestSupport.TryValidateOutDir(
+                outDir,
+                runtime,
+                CrossRuntimeReviewRecord.KindDesign,
+                hasClone,
+                workspace,
+                opencodeProviderConfig,
+                writer,
+                format,
+                out _);
+        }
+
+        // Keep the shared path validator unchanged for legacy callers. For an opted-in
+        // design request, capture its existing refusal DTO and render it through this
+        // command so the already-evaluated source result accompanies the same cause.
+        using var captured = new StringWriter(CultureInfo.InvariantCulture);
+        if (CrossRuntimeReviewRequestSupport.TryValidateOutDir(
+                outDir,
+                runtime,
+                CrossRuntimeReviewRecord.KindDesign,
+                hasClone,
+                workspace,
+                opencodeProviderConfig,
+                captured,
+                FormatJson,
+                out _))
+        {
+            return true;
+        }
+
+        var refusal = JsonSerializer.Deserialize<CrossRuntimeReviewRefusal>(captured.ToString());
+        if (refusal is null)
+        {
+            throw new InvalidOperationException("out-dir validator did not produce a refusal record.");
+        }
+
+        Refuse(writer, format, "request", refusal.Cause, refusal.Detail, refusal.Fix, scopeSources: scopeSources);
+        return false;
     }
 
     private static void WriteImplementationRequestResult(TextWriter writer, string format, CrossRuntimeReviewImplementationRequestResult result)
@@ -607,6 +708,7 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine($"Read-only enforcement: {result.ReadOnlyEnforcement}");
             writer.WriteLine(result.NoExecutionBoundary);
             writer.WriteLine(result.Terms);
+            WriteScopeSourcesMarkdown(writer, result.ScopeSources);
         }
     }
 
@@ -709,7 +811,8 @@ internal static class ReviewCrossRuntimeCommand
         string unit,
         string packetDigest,
         CrossRuntimeDesignReviewDigest.PacketBytes packet,
-        bool cloneGiven)
+        bool cloneGiven,
+        PacketScopeSources.Result? scopeSources = null)
     {
         var builder = new StringBuilder();
         builder.Append($"# Design review: {unit}\n\n");
@@ -728,6 +831,23 @@ internal static class ReviewCrossRuntimeCommand
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[1], packet.GithubBody);
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[2], packet.ReviewContext);
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[3], packet.Implementation);
+        if (scopeSources is { State: "satisfied", Provenance: { Count: > 0 } sources })
+        {
+            builder.Append("## Bound ruling sources\n\n");
+            builder.Append("These local G862 records are pinned by the packet. Their supplied authority is not authenticated operator approval, and local existence does not verify publication.\n\n");
+            foreach (var source in sources)
+            {
+                builder.Append($"### {source.Reference}\n\n");
+                builder.Append($"- domain/team: {source.Domain}/{source.Team}\n");
+                builder.Append($"- target repository: {source.TargetRepo}\n");
+                builder.Append($"- execution unit: {source.ExecutionUnit}\n");
+                builder.Append($"- SHA-256: {source.Sha256}\n");
+                builder.Append($"- artifact: `{source.Path}`\n\n");
+                builder.Append("Canonical ruling record observed by the validator:\n\n```json\n");
+                builder.Append(source.CanonicalRecordJson);
+                builder.Append("\n```\n\n");
+            }
+        }
         builder.Append("## Output\n\n");
         builder.Append("Return only one JSON object that matches the schema below, with no text before or after it.\n\n");
         builder.Append($"- \"packet_digest\": echo the packet digest you reviewed ({packetDigest}).\n");
@@ -1090,19 +1210,75 @@ internal static class ReviewCrossRuntimeCommand
             return packetRefusal;
         }
 
-        if (!CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out var missingPath))
+        CrossRuntimeDesignReviewDigest.PacketBytes packet = null!;
+        string? missingPath = null;
+        PacketScopeSources.Result? unavailableSources = null;
+        bool packetAvailable;
+        try
+        {
+            packetAvailable = CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out missingPath);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            if (TryReadDeclaredPacketSnapshot(context.RepoRoot, unit, packetDirectory, out packet, out unavailableSources))
+            {
+                packetAvailable = true;
+            }
+            else if (unavailableSources is not null)
+            {
+                return RefuseUnreadablePacketFile(writer, format, "record", unit,
+                    PacketSourceFailureFileName(unavailableSources), exception.Message, unavailableSources);
+            }
+            else
+            {
+                throw;
+            }
+        }
+
+        if (!packetAvailable
+            && !TryReadDeclaredPacketSnapshot(context.RepoRoot, unit, packetDirectory, out packet, out unavailableSources))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.PacketMissing,
                 $"packet file is missing: {missingPath}.",
-                $"complete `.intent-cli/issues/{unit}/` with all four packet files.");
+                $"complete `.intent-cli/issues/{unit}/` with all four packet files.",
+                scopeSources: unavailableSources);
         }
+
+        PacketScopeSources.Result? scopeSources = PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packet.PacketYaml)
+            ? PacketScopeSources.Evaluate(context.RepoRoot, unit, packet.PacketYaml, packet.GithubBody, (Clock ?? (() => DateTimeOffset.UtcNow))())
+            : null;
+        if (scopeSources is { IsDeclared: true })
+        {
+            if (!scopeSources.IsSuccessful)
+            {
+                return Refuse(writer, format, "record", scopeSources.Cause, scopeSources.Detail,
+                    "repair the declared ruling source pins and public provenance before recording a design review.",
+                    scopeSources: scopeSources);
+            }
+            if (!ScopeSourcesMatch(scopeSources, designResolution.Domain, designResolution.Team, designResolution.TargetRepo))
+            {
+                scopeSources = scopeSources with
+                {
+                    State = "refused",
+                    Cause = "scope-sources-identity-mismatch",
+                    Detail = "pinned ruling identity does not match the resolved design-review domain, team, and target repository",
+                    Provenance = null,
+                    ExpectedProvenanceBlock = null,
+                };
+                return Refuse(writer, format, "record", scopeSources.Cause, scopeSources.Detail,
+                    "align the packet's source identity with the resolved design-review team and repository.",
+                    scopeSources: scopeSources);
+            }
+        }
+        else scopeSources = null;
 
         var currentDigest = CrossRuntimeDesignReviewDigest.Compute(packet);
         if (!string.Equals(packetDigestArgument, currentDigest, StringComparison.OrdinalIgnoreCase))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.DigestStale,
                 $"--packet-digest '{packetDigestArgument}' does not match the current packet digest '{currentDigest}'.",
-                "re-run design review against the current packet bytes and pass the current digest.");
+                "re-run design review against the current packet bytes and pass the current digest.",
+                scopeSources: scopeSources);
         }
 
         var verdictFile = ResolvePath(context, verdictFileArgument);
@@ -1110,7 +1286,8 @@ internal static class ReviewCrossRuntimeCommand
             && !CrossRuntimeReviewJsonlVerdict.TryValidateOpencodeExitStatus(verdictFile, out var exitCause, out var exitDetail))
         {
             return Refuse(writer, format, "record", exitCause, exitDetail,
-                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.");
+                "re-run the reviewer with the pinned invocation so opencode-exit.txt contains exactly 0\\n.",
+                scopeSources: scopeSources);
         }
 
         byte[] raw;
@@ -1127,7 +1304,8 @@ internal static class ReviewCrossRuntimeCommand
                     : $"verdict file '{verdictFile}' could not be read: {verdictReadError}";
                 return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                     verdictDetail,
-                    "pass the file the rendered invocation wrote (verdict.raw.json).");
+                    "pass the file the rendered invocation wrote (verdict.raw.json).",
+                    scopeSources: scopeSources);
             }
         }
         else
@@ -1140,7 +1318,8 @@ internal static class ReviewCrossRuntimeCommand
             {
                 return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                     $"verdict file '{verdictFile}' could not be read: {exception.Message}",
-                    "pass the file the rendered invocation wrote (verdict.raw.json).");
+                    "pass the file the rendered invocation wrote (verdict.raw.json).",
+                    scopeSources: scopeSources);
             }
         }
 
@@ -1152,14 +1331,16 @@ internal static class ReviewCrossRuntimeCommand
         catch (DecoderFallbackException exception)
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
-                $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.");
+                $"verdict file '{verdictFile}' is not UTF-8: {exception.Message}", "pass the file the rendered invocation wrote.",
+                scopeSources: scopeSources);
         }
 
         if (!CrossRuntimeReviewVerdict.TryParseDesign(runtime, content, out var verdict, out var verdictError))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.VerdictInvalid,
                 $"verdict file '{verdictFile}' is invalid for runtime '{runtime}': {verdictError}",
-                "re-run the reviewer with the pinned invocation; never hand-write a verdict.");
+                "re-run the reviewer with the pinned invocation; never hand-write a verdict.",
+                scopeSources: scopeSources);
         }
 
         CrossRuntimeReviewJsonlVerdict.TryReadCopilotObservedModel(content, out var observedModel, out _);
@@ -1170,7 +1351,8 @@ internal static class ReviewCrossRuntimeCommand
                 observedModel is null
                     ? $"copilot envelope data.model is missing but --model is '{model}'."
                     : $"copilot envelope data.model is '{observedModel}' but --model is '{model}'.",
-                "re-run the reviewer with the same --model value.");
+                "re-run the reviewer with the same --model value.",
+                scopeSources: scopeSources);
         }
 
         if (runtime == CrossRuntimeReviewRuntimes.Copilot
@@ -1179,14 +1361,16 @@ internal static class ReviewCrossRuntimeCommand
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.EffortMismatch,
                 effortError,
-                "re-run the reviewer with the same --effort value.");
+                "re-run the reviewer with the same --effort value.",
+                scopeSources: scopeSources);
         }
 
         if (!string.Equals(verdict.PacketDigest, currentDigest, StringComparison.OrdinalIgnoreCase))
         {
             return Refuse(writer, format, "record", CrossRuntimeReviewCauses.DigestMismatch,
                 $"the verdict echoes packet_digest '{verdict.PacketDigest}' but the current digest is '{currentDigest}'.",
-                "re-run the design review against the current packet bytes.");
+                "re-run the design review against the current packet bytes.",
+                scopeSources: scopeSources);
         }
 
         var write = options.ContainsKey("--write");
@@ -1229,7 +1413,8 @@ internal static class ReviewCrossRuntimeCommand
                         ? CrossRuntimeReviewCauses.RecordCollision
                         : CrossRuntimeReviewCauses.ArgumentInvalid,
                     stored.Error ?? "record could not be written.",
-                    "re-run `record --write`; an existing record is never overwritten.");
+                    "re-run `record --write`; an existing record is never overwritten.",
+                    scopeSources: scopeSources);
             }
 
             if (options.TryGetValue("--comment-out", out var commentOutArgument))
@@ -1261,6 +1446,7 @@ internal static class ReviewCrossRuntimeCommand
             Durability = write
                 ? $"The record exists only in this checkout until it is committed and pushed: commit `{recordRelative}` and `{record.RawVerdictFile}` in the host and push."
                 : "Dry run: nothing was written. Re-run with --write to store the record.",
+            ScopeSources = scopeSources,
         };
 
         if (format == FormatJson)
@@ -1278,6 +1464,7 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine($"- relation: {record.Relation} (conductor runtime {record.ConductorRuntime})");
             writer.WriteLine($"- verdict: {record.Verdict}");
             writer.WriteLine($"- durability: {result.Durability}");
+            WriteScopeSourcesMarkdown(writer, result.ScopeSources);
             writer.WriteLine();
             writer.WriteLine(commentBody);
         }
@@ -1499,9 +1686,31 @@ internal static class ReviewCrossRuntimeCommand
         var declared = context.Config.CrossRuntimeReview.TryGetDeclared(resolution.Domain, resolution.Team, out var declaration);
         var packetDirectory = CrossRuntimeReviewPaths.PacketDirectory(context.RepoRoot, unit);
         string? digest = null;
-        if (CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out var packet, out _))
+        PacketScopeSources.Result? scopeSources = null;
+        if (TryReadDesignStatusPacketSnapshot(context.RepoRoot, unit, packetDirectory, out var packet, out var unavailableSources))
         {
             digest = CrossRuntimeDesignReviewDigest.Compute(packet);
+            var evaluatedSources = PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packet.PacketYaml)
+                ? PacketScopeSources.Evaluate(context.RepoRoot, unit, packet.PacketYaml, packet.GithubBody, (Clock ?? (() => DateTimeOffset.UtcNow))())
+                : null;
+            if (evaluatedSources is { IsDeclared: true })
+            {
+                scopeSources = evaluatedSources.IsSuccessful
+                    && !ScopeSourcesMatch(evaluatedSources, designResolution.Domain, designResolution.Team, designResolution.TargetRepo)
+                    ? evaluatedSources with
+                    {
+                        State = "refused",
+                        Cause = "scope-sources-identity-mismatch",
+                        Detail = "pinned ruling identity does not match the resolved design-review domain, team, and target repository",
+                        Provenance = null,
+                        ExpectedProvenanceBlock = null,
+                    }
+                    : evaluatedSources;
+            }
+        }
+        else
+        {
+            scopeSources = unavailableSources;
         }
 
         var read = CrossRuntimeDesignReviewStore.Read(context.RepoRoot, unit);
@@ -1514,6 +1723,18 @@ internal static class ReviewCrossRuntimeCommand
                 Unreadable = read.Unreadable,
             }
             : CrossRuntimeReviewGate.EvaluateDesign(declared ? declaration : null, resolution, digest, read);
+        if (scopeSources is { IsSuccessful: false })
+        {
+            gate = gate with
+            {
+                Decision = CrossRuntimeReviewGate.DecisionBlocked,
+                Reasons = [.. gate.Reasons, new CrossRuntimeReviewGateReason
+                {
+                    Cause = scopeSources.Cause,
+                    Detail = scopeSources.Detail,
+                }],
+            };
+        }
         var result = new CrossRuntimeReviewStatusResult
         {
             Command = $"{CommandName} status",
@@ -1526,11 +1747,109 @@ internal static class ReviewCrossRuntimeCommand
             ConductorRuntime = declared ? declaration.ConductorRuntime : null,
             RecordFiles = read.Records.Select(stored => stored.RelativePath).ToArray(),
             Gate = gate,
+            ScopeSources = scopeSources,
         };
 
         WriteDesignStatusResult(writer, format, result, gate, read.Records.Count, entry => entry.PacketDigest);
-        return 0;
+        return scopeSources is { IsSuccessful: false } ? 1 : 0;
     }
+
+    private static bool TryReadDesignStatusPacketSnapshot(
+        string repoRoot,
+        string unit,
+        string packetDirectory,
+        out CrossRuntimeDesignReviewDigest.PacketBytes packet,
+        out PacketScopeSources.Result? unavailableSources)
+    {
+        unavailableSources = null;
+        try
+        {
+            if (CrossRuntimeDesignReviewDigest.TryReadFromDirectory(packetDirectory, out packet, out _))
+            {
+                return true;
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Preserve the legacy no-source exception surface. Opted-in packets
+            // are re-read below through the diagnostic reader so status can
+            // report an unavailable source instead of claiming no gate applies.
+            if (!TryReadDeclaredPacketSnapshot(repoRoot, unit, packetDirectory, out packet, out unavailableSources))
+            {
+                if (unavailableSources is null)
+                {
+                    throw;
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        return TryReadDeclaredPacketSnapshot(repoRoot, unit, packetDirectory, out packet, out unavailableSources);
+    }
+
+    private static bool TryReadDeclaredPacketSnapshot(
+        string repoRoot,
+        string unit,
+        string packetDirectory,
+        out CrossRuntimeDesignReviewDigest.PacketBytes packet,
+        out PacketScopeSources.Result? unavailableSources)
+    {
+        packet = null!;
+        unavailableSources = null;
+        byte[] packetYaml;
+        try
+        {
+            packetYaml = File.ReadAllBytes(Path.Combine(packetDirectory, CrossRuntimeDesignReviewDigest.PacketFileNames[0]));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // The existing status behavior for a packet whose declaration file
+            // itself cannot be read is retained; without readable opt-in there
+            // is no source declaration to project.
+            return false;
+        }
+
+        if (!PacketScopeSources.HasDeclarationOrMisplacedDeclaration(packetYaml))
+        {
+            return false;
+        }
+
+        if (CrossRuntimeDesignReviewDigest.TryReadFromDirectory(
+                packetDirectory, out packet, out var missingPath, out var unreadableFileName, out var unreadableError))
+        {
+            return true;
+        }
+
+        var unavailablePath = unreadableFileName is null
+            ? missingPath ?? packetDirectory
+            : Path.Combine(packetDirectory, unreadableFileName);
+        var relativePath = Path.GetRelativePath(repoRoot, unavailablePath)
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
+        var detail = unreadableFileName is null
+            ? $"the complete four-file packet snapshot is unavailable: {relativePath}"
+            : $"the complete four-file packet snapshot is unreadable: {relativePath}: {unreadableError}";
+        var now = (Clock ?? (() => DateTimeOffset.UtcNow))();
+        unavailableSources = new PacketScopeSources.Result(
+            unit,
+            "unavailable",
+            "scope-sources-packet-unavailable",
+            detail,
+            RulingArtifact.FormatTimestamp(now),
+            null,
+            null,
+            [new("packet-unavailable", relativePath, detail)],
+            IsDeclared: true);
+        return false;
+    }
+
+    private static string PacketSourceFailureFileName(PacketScopeSources.Result sources) =>
+        sources.Diagnostics.FirstOrDefault()?.Path is { Length: > 0 } path
+            ? Path.GetFileName(path)
+            : CrossRuntimeDesignReviewDigest.PacketFileNames[0];
 
     private static void WriteImplementationStatusResult(
         TextWriter writer,
@@ -1564,6 +1883,7 @@ internal static class ReviewCrossRuntimeCommand
         }
 
         WriteStatusMarkdown(writer, "Cross-runtime design review status (G835)", result.Repo, result.Pr, result.HeadSha, result.PacketDigest, result.Resolution, result.Declared, result.DeclarationSource, result.ConductorRuntime, gate, totalRecords, keySelector);
+        WriteScopeSourcesMarkdown(writer, result.ScopeSources);
     }
 
     private static void WriteStatusMarkdown(
@@ -1944,7 +2264,8 @@ internal static class ReviewCrossRuntimeCommand
         string subcommand,
         string executionUnit,
         string fileName,
-        string exceptionMessage)
+        string exceptionMessage,
+        PacketScopeSources.Result? scopeSources = null)
     {
         var relativePath = $".intent-cli/issues/{executionUnit}/{fileName}";
         return Refuse(
@@ -1953,7 +2274,8 @@ internal static class ReviewCrossRuntimeCommand
             subcommand,
             CrossRuntimeReviewCauses.PacketUnreadable,
             PacketYamlParseMessages.ComposeCrossRuntimeReadDetail(relativePath, exceptionMessage),
-            $"make `{relativePath}` readable, then re-run.");
+            $"make `{relativePath}` readable, then re-run.",
+            scopeSources: scopeSources);
     }
 
     private static int RefuseResolution(TextWriter writer, string format, string subcommand, CrossRuntimeReviewResolution resolution) =>
@@ -1966,7 +2288,8 @@ internal static class ReviewCrossRuntimeCommand
         string cause,
         string detail,
         string fix,
-        CrossRuntimeReviewResolution? resolution = null)
+        CrossRuntimeReviewResolution? resolution = null,
+        PacketScopeSources.Result? scopeSources = null)
     {
         var refusal = new CrossRuntimeReviewRefusal
         {
@@ -1976,6 +2299,7 @@ internal static class ReviewCrossRuntimeCommand
             Detail = detail,
             Fix = fix,
             Resolution = resolution,
+            ScopeSources = scopeSources,
         };
 
         if (format == FormatJson)
@@ -1995,9 +2319,26 @@ internal static class ReviewCrossRuntimeCommand
             {
                 writer.WriteLine($"- missing: {resolution.Missing}");
             }
+            WriteScopeSourcesMarkdown(writer, scopeSources);
         }
 
         return 1;
+    }
+
+    private static bool ScopeSourcesMatch(PacketScopeSources.Result sources, string? domain, string? team, string? targetRepo) =>
+        StringComparer.Ordinal.Equals(sources.SourceDomain, domain)
+        && StringComparer.Ordinal.Equals(sources.SourceTeam, team)
+        && StringComparer.Ordinal.Equals(sources.SourceTargetRepo, targetRepo);
+
+    private static void WriteScopeSourcesMarkdown(TextWriter writer, PacketScopeSources.Result? sources)
+    {
+        if (sources is null) return;
+        writer.WriteLine();
+        writer.WriteLine("## scope_sources");
+        writer.WriteLine();
+        writer.WriteLine("```json");
+        writer.WriteLine(JsonSerializer.Serialize(sources, RequestJsonOptions));
+        writer.WriteLine("```");
     }
 
     private static void WriteHelp(TextWriter writer)
@@ -2020,6 +2361,9 @@ internal sealed record CrossRuntimeReviewRefusal
     [JsonPropertyName("detail")] public required string Detail { get; init; }
     [JsonPropertyName("fix")] public required string Fix { get; init; }
     [JsonPropertyName("resolution")] public CrossRuntimeReviewResolution? Resolution { get; init; }
+    [JsonPropertyName("scope_sources")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewImplementationRequestResult
@@ -2089,6 +2433,9 @@ internal sealed record CrossRuntimeReviewRequestResult
     [JsonPropertyName("read_only_enforcement")] public required string ReadOnlyEnforcement { get; init; }
     [JsonPropertyName("no_execution_boundary")] public required string NoExecutionBoundary { get; init; }
     [JsonPropertyName("terms")] public required string Terms { get; init; }
+    [JsonPropertyName("scope_sources")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewRecordResult
@@ -2146,6 +2493,9 @@ internal sealed record CrossRuntimeReviewStatusResult
     [JsonPropertyName("conductor_runtime")] public string? ConductorRuntime { get; init; }
     [JsonPropertyName("record_files")] public required IReadOnlyList<string> RecordFiles { get; init; }
     [JsonPropertyName("gate")] public required CrossRuntimeReviewGateResult Gate { get; init; }
+    [JsonPropertyName("scope_sources")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }
 
 internal sealed record CrossRuntimeDesignReviewRecordResult
@@ -2161,4 +2511,7 @@ internal sealed record CrossRuntimeDesignReviewRecordResult
     [JsonPropertyName("comment_body")] public required string CommentBody { get; init; }
     [JsonPropertyName("comment_out")] public string? CommentOut { get; init; }
     [JsonPropertyName("durability")] public required string Durability { get; init; }
+    [JsonPropertyName("scope_sources")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketScopeSources.Result? ScopeSources { get; init; }
 }

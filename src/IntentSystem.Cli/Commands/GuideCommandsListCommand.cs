@@ -119,7 +119,7 @@ internal static class GuideCommandsListCommand
             Classification = ClassificationPrimary,
             Mutability = MutabilityMixed,
             RecommendedCaller = CallerChatAgent,
-            Purpose = "Scaffold the canonical packet directory (packet.yaml / implementation.md / review-context.md / github-body.md); read-only without --write."
+            Purpose = "Scaffold the canonical packet directory (packet.yaml / implementation.md / review-context.md / github-body.md); read-only without --write. `packet validate-sources --execution-unit <unit>` is a read-only, config-independent check for explicitly pinned local ruling sources and their authored body provenance; it is not full packet readiness."
         },
         new CommandGroupEntry
         {

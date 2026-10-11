@@ -1,7 +1,9 @@
 using System.Text.Json;
+using System.Text;
 using System.Diagnostics;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
+using IntentSystem.Cli.Models;
 
 namespace IntentSystem.Cli.Tests;
 
@@ -104,6 +106,224 @@ public sealed class ProgramTests
         Assert.False(context.Config.Project.SameRepoTopology);
         Assert.Equal(string.Empty, context.Config.Project.MetadataSourceBranch);
         Assert.Equal(".intent-cli", context.Config.Project.ArtifactRoot);
+    }
+
+    [Fact]
+    public void Main_PacketValidateSources_UsesNestedRepoRootWithoutConfig()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var repoRoot = tempDirectory.CreateDirectory("repo");
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli", "issues", "G863"));
+            tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "issues", "G863", "packet.yaml"),
+                "implementation_issue_packet:\n  source_execution_unit: G863\n  domain: intent-cli\n");
+            tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "issues", "G863", "github-body.md"), "# Legacy packet\n");
+            var nestedCwd = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "config.toml")));
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+
+            var exitCode = Program.Main(["packet", "validate-sources", "--execution-unit", "G863", "--format", "json"]);
+
+            Assert.Equal(0, exitCode);
+            using var result = JsonDocument.Parse(console.Out.ToString());
+            Assert.Equal("not-declared", result.RootElement.GetProperty("state").GetString());
+            Assert.Equal("scope-sources-not-declared", result.RootElement.GetProperty("cause").GetString());
+            Assert.False(Directory.Exists(Path.Combine(repoRoot, ".intent-cli", "rulings")));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Fact]
+    public void Main_PacketValidateSourcesHelpShowsTheRegisteredRoute()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var repoRoot = tempDirectory.CreateDirectory("repo");
+            tempDirectory.CreateDirectory(Path.Combine("repo", ".intent-cli"));
+            var nestedCwd = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "config.toml")));
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+
+            var exit = Program.Main(["packet", "validate-sources", "--help"]);
+
+            Assert.Equal(0, exit);
+            Assert.Contains("Usage: intent-cli packet validate-sources --execution-unit <unit> --format json|markdown", console.Out.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Validates declared ruling pins", console.Out.ToString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(repoRoot, ".intent-cli", "rulings")));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Fact]
+    public void Main_PacketValidateSources_RequiresPlainPushAndWorksFromFreshCloneWithoutConfig()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var bare = tempDirectory.CreateDirectory("origin.git");
+            var writerRepo = Path.Combine(tempDirectory.CreateDirectory("repos"), "writer");
+            var beforeRepo = Path.Combine(tempDirectory.CreateDirectory("repos"), "before-publication");
+            var afterRepo = Path.Combine(tempDirectory.CreateDirectory("repos"), "after-publication");
+            RunGit(tempDirectory.CreateDirectory("."), "init", "--bare", "--quiet", "--initial-branch=main", bare);
+            Directory.CreateDirectory(writerRepo);
+            RunGit(writerRepo, "init", "--quiet", "--initial-branch=main");
+            RunGit(writerRepo, "config", "user.name", "intent-cli-g863-test");
+            RunGit(writerRepo, "config", "user.email", "intent-cli-g863@example.invalid");
+            RunGit(writerRepo, "remote", "add", "origin", bare);
+            File.WriteAllText(Path.Combine(writerRepo, "README.md"), "G863 fresh-clone source fixture\n");
+            RunGit(writerRepo, "add", "README.md");
+            RunGit(writerRepo, "commit", "--quiet", "-m", "baseline");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+
+            var unit = "G863";
+            var id = "R-G863-REMOTE";
+            var domain = "intent-cli";
+            var team = "intent-cli-dev";
+            var targetRepo = "J-Tech-Japan/intent-system";
+            var source = new RulingArtifact
+            {
+                Id = id,
+                Domain = domain,
+                Team = team,
+                AuthorityRole = "operator",
+                TargetRepo = targetRepo,
+                ScopeKind = "execution-units",
+                ExecutionUnits = [unit],
+                Decision = "Use this published source.",
+                Rationale = "The actual writer emits the pinned canonical bytes.",
+                EvidenceRefs = ["https://github.com/J-Tech-Japan/intent-system/issues/1887"],
+                RecordedAt = DateTimeOffset.Parse("2026-10-10T11:00:00Z"),
+                ExpiresAt = null,
+                Supersedes = [],
+            };
+            var rulingInput = Path.Combine(writerRepo, "ruling-input.json");
+            File.WriteAllBytes(rulingInput, RulingArtifact.Serialize(source));
+            var inputContext = new CliContext
+            {
+                RepoRoot = writerRepo,
+                Config = new CliConfig { Project = new ProjectConfig { Domain = domain, ArtifactRoot = ".intent-cli" } },
+            };
+            using var rulingOutput = new StringWriter();
+            var rulingExit = RulingCommand.ExecuteRecord(inputContext,
+                ["--id", id, "--domain", domain, "--team", team, "--from-file", rulingInput,
+                 "--authority-role", "operator", "--write", "--format", "json"], rulingOutput, null, source.RecordedAt);
+            Assert.True(rulingExit == 0, rulingOutput.ToString());
+            using var writerResult = JsonDocument.Parse(rulingOutput.ToString());
+            Assert.True(writerResult.RootElement.GetProperty("wrote").GetBoolean());
+            Assert.Equal("not-verified", writerResult.RootElement.GetProperty("publication_status").GetString());
+            var rulingRelativePath = Path.Combine(".intent-cli", "rulings", domain, team, id + ".json");
+            var rulingBytes = File.ReadAllBytes(Path.Combine(writerRepo, rulingRelativePath));
+            var rulingDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(rulingBytes)).ToLowerInvariant();
+
+            var packetDirectory = Path.Combine(writerRepo, ".intent-cli", "issues", unit);
+            Directory.CreateDirectory(packetDirectory);
+            var pinnedYaml = $$"""
+                implementation_issue_packet:
+                  source_execution_unit: {{unit}}
+                  domain: {{domain}}
+                  team: {{team}}
+                  target_repo: {{targetRepo}}
+                scope_sources:
+                  - "ruling:{{id}}"
+                scope_source_digests:
+                  "ruling:{{id}}": "{{rulingDigest}}"
+                """;
+            File.WriteAllText(Path.Combine(packetDirectory, "packet.yaml"), pinnedYaml);
+            File.WriteAllText(Path.Combine(packetDirectory, "implementation.md"), "# Implementation\n");
+            File.WriteAllText(Path.Combine(packetDirectory, "review-context.md"), "# Review context\n");
+            var authoredBody = "# G863 pinned source\n";
+            var expectedBlock = PacketScopeSources.Evaluate(writerRepo, unit, System.Text.Encoding.UTF8.GetBytes(pinnedYaml),
+                System.Text.Encoding.UTF8.GetBytes(authoredBody), source.RecordedAt);
+            Assert.Equal("scope-sources-provenance-mismatch", expectedBlock.Cause);
+            Assert.NotNull(expectedBlock.ExpectedProvenanceBlock);
+            File.WriteAllText(Path.Combine(packetDirectory, "github-body.md"), authoredBody.TrimEnd() + "\n\n" + expectedBlock.ExpectedProvenanceBlock + "\n");
+
+            var packetFiles = new[]
+            {
+                Path.Combine(".intent-cli", "issues", unit, "packet.yaml"),
+                Path.Combine(".intent-cli", "issues", unit, "implementation.md"),
+                Path.Combine(".intent-cli", "issues", unit, "review-context.md"),
+                Path.Combine(".intent-cli", "issues", unit, "github-body.md"),
+            };
+            RunGit(writerRepo, new[] { "add", "--" }.Concat(packetFiles).ToArray());
+            RunGit(writerRepo, "commit", "--quiet", "-m", "publish four-file packet with exact ruling pin and provenance");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+            RunGit(tempDirectory.CreateDirectory("."), "clone", "--quiet", bare, beforeRepo);
+            Assert.False(File.Exists(Path.Combine(beforeRepo, ".intent-cli", "config.toml")));
+            Assert.False(File.Exists(Path.Combine(beforeRepo, rulingRelativePath)));
+            AssertPacketValidationFromClone(beforeRepo, unit, "scope-sources-ruling-missing", 1);
+
+            RunGit(writerRepo, "add", "--", rulingRelativePath);
+            RunGit(writerRepo, "commit", "--quiet", "-m", "publish pinned ruling artifact");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+            RunGit(tempDirectory.CreateDirectory("."), "clone", "--quiet", bare, afterRepo);
+            Assert.False(File.Exists(Path.Combine(afterRepo, ".intent-cli", "config.toml")));
+            Assert.Equal(rulingBytes, File.ReadAllBytes(Path.Combine(afterRepo, rulingRelativePath)));
+
+            Assert.False(Directory.Exists(Path.Combine(beforeRepo, ".intent-cli", "rulings")));
+            AssertPacketValidationFromClone(afterRepo, unit, "scope-sources-satisfied", 0, rulingDigest);
+            var foreignConfig = Encoding.UTF8.GetBytes("[project]\ndomain = \"foreign-default\"\nartifact_root = \".foreign-artifacts\"\nworktree_root = \".foreign-worktrees\"\n");
+            File.WriteAllBytes(Path.Combine(afterRepo, ".intent-cli", "config.toml"), foreignConfig);
+            AssertPacketValidationFromClone(afterRepo, unit, "scope-sources-satisfied", 0, rulingDigest, foreignConfig);
+            RunGit(afterRepo, "remote", "set-url", "origin", "https://github.com/foreign-owner/foreign-repository.git");
+            Assert.Equal("https://github.com/foreign-owner/foreign-repository.git", RunGit(afterRepo, "remote", "get-url", "origin"));
+            AssertPacketValidationFromClone(afterRepo, unit, "scope-sources-satisfied", 0, rulingDigest, foreignConfig, targetRepo);
+        }
+    }
+
+    private static void AssertPacketValidationFromClone(string repoRoot, string unit, string expectedCause, int expectedExit,
+        string? expectedDigest = null, byte[]? expectedConfigBytes = null, string? expectedTargetRepo = null)
+    {
+        var nestedCwd = Directory.CreateDirectory(Path.Combine(repoRoot, "src", "feature")).FullName;
+        var configPath = Path.Combine(repoRoot, ".intent-cli", "config.toml");
+        if (expectedConfigBytes is null)
+        {
+            Assert.False(File.Exists(configPath));
+        }
+        else
+        {
+            Assert.Equal(expectedConfigBytes, File.ReadAllBytes(configPath));
+        }
+        var headBefore = RunGit(repoRoot, "rev-parse", "HEAD");
+        var refsBefore = RunGit(repoRoot, "show-ref", "--head");
+        var indexPath = Path.Combine(repoRoot, ".git", "index");
+        var indexBefore = File.ReadAllBytes(indexPath);
+        using var console = new ConsoleScope();
+        using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+
+        var exit = Program.Main(["packet", "validate-sources", "--execution-unit", unit, "--format", "json"]);
+
+        Assert.Equal(expectedExit, exit);
+        using var result = JsonDocument.Parse(console.Out.ToString());
+        Assert.True(expectedCause == result.RootElement.GetProperty("cause").GetString(), console.Out.ToString());
+        Assert.Equal("not-verified", result.RootElement.GetProperty("publication").GetString());
+        Assert.Equal("supplied-not-authenticated", result.RootElement.GetProperty("authority_verification").GetString());
+        if (expectedDigest is not null)
+        {
+            var provenance = result.RootElement.GetProperty("provenance")[0];
+            Assert.Equal(expectedDigest, provenance.GetProperty("sha256").GetString());
+            Assert.StartsWith(".intent-cli/rulings/", provenance.GetProperty("path").GetString()!, StringComparison.Ordinal);
+            if (expectedTargetRepo is not null)
+            {
+                Assert.Equal(expectedTargetRepo, provenance.GetProperty("target_repo").GetString());
+            }
+        }
+        Assert.Equal(headBefore, RunGit(repoRoot, "rev-parse", "HEAD"));
+        Assert.Equal(refsBefore, RunGit(repoRoot, "show-ref", "--head"));
+        Assert.Equal(indexBefore, File.ReadAllBytes(indexPath));
+        if (expectedConfigBytes is null)
+        {
+            Assert.False(File.Exists(configPath));
+        }
+        else
+        {
+            Assert.Equal(expectedConfigBytes, File.ReadAllBytes(configPath));
+        }
+        Assert.Equal(string.Empty, console.Error.ToString());
     }
 
     [Fact]
@@ -468,7 +688,20 @@ public sealed class ProgramTests
 
     private sealed class TemporaryDirectory : IDisposable
     {
-        private readonly string rootPath = Directory.CreateTempSubdirectory("intent-cli-program-tests-").FullName;
+        private readonly string rootPath;
+
+        public TemporaryDirectory(string? parent = null)
+        {
+            if (parent is null)
+            {
+                rootPath = Directory.CreateTempSubdirectory("intent-cli-program-tests-").FullName;
+            }
+            else
+            {
+                rootPath = Path.Combine(parent, "intent-cli-program-tests-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(rootPath);
+            }
+        }
 
         public string CreateDirectory(string relativePath)
         {

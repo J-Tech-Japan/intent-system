@@ -1000,6 +1000,51 @@ then use a fresh clone with `ruling show` or `ruling validate` to verify remote
 visibility. This record/read foundation does not add ruling references to
 packets or gates; source issue #1867 and parent #1857 remain unfinished.
 
+### Packet-pinned ruling sources (G863 — preview-through-1.x)
+
+Packet authors may opt in to exact local rulings. Put both source fields at
+the packet root; for a non-empty list, the implementation identity must also
+name the exact execution unit, domain, team, and target repository. Copy each
+actual lowercase digest from the scoped `ruling show` result:
+
+```yaml
+implementation_issue_packet:
+  source_execution_unit: G100
+  domain: intent-cli
+  team: intent-cli-dev
+  target_repo: J-Tech-Japan/intent-system
+scope_sources:
+  - ruling:R-EXAMPLE
+scope_source_digests:
+  ruling:R-EXAMPLE: "<actual lowercase 64-hex sha256>"
+```
+
+For a non-empty declaration, put the exact block printed by
+`packet validate-sources` once in `github-body.md`. It contains source identity,
+digest, and the statements `supplied-not-authenticated` and `not-verified`; it
+does not include the artifact path, ruling decision, or rationale. The
+validator result reports the relative artifact path separately. It is
+read-only and works without `config.toml`:
+
+```bash
+intent-cli ruling show R-EXAMPLE --domain intent-cli --team intent-cli-dev --format json
+intent-cli packet validate-sources --execution-unit G100 --format json
+intent-cli issue validate-body --from-file .intent-cli/issues/G100/github-body.md
+intent-cli intent facet-check --domain intent-cli --packet G100 --format json
+intent-cli issue publish-flow G100 --domain intent-cli --team intent-cli-dev --repo J-Tech-Japan/intent-system --format json
+```
+
+Run the ordinary body, facet, and publish-flow checks after source validation.
+Design review includes verified canonical ruling content; publish-flow rechecks
+the sources before GitHub lookup and again before create or idempotent repair.
+Editing a reference, pin, or provenance block changes the normal four-file
+packet digest, so request fresh design reviews. A local artifact is not proof
+of remote publication: commit and plain-push it, then validate from a fresh
+clone. Only packet validation, design review, and `issue publish-flow` consume
+this source declaration. `unit-status`, queue and worker decisions,
+`issue create`, `issue publish-reviewed`, and other publish or sync-body routes
+remain outside this integration; source #1867 and parent #1857 remain open.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by

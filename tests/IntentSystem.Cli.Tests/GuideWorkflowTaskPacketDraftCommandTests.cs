@@ -45,6 +45,8 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
         Assert.Contains("target_paths_invalid", output, StringComparison.Ordinal);
         // intent-target warning (acceptance criterion 3).
         Assert.Contains("intent-target", output, StringComparison.Ordinal);
+        Assert.Contains("`review cross-runtime request`, `record`, and `status` commands also revalidate and report the declared local source proof", output, StringComparison.Ordinal);
+        Assert.Contains("`issue publish-flow` is the external issue create/publish boundary and rechecks these pins before mutation", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -75,6 +77,12 @@ public sealed class GuideWorkflowTaskPacketDraftCommandTests
         var targetSection = sections.EnumerateArray()
             .Single(section => section.GetProperty("section").GetString() == "target-repo-path-part");
         Assert.Contains("- Target paths: <comma- or space-separated paths>", targetSection.GetProperty("purpose").GetString(), StringComparison.Ordinal);
+        var output = writer.ToString();
+        var stopConditions = root.GetProperty("stop_conditions").EnumerateArray()
+            .Select(condition => condition.GetString()!).ToArray();
+        var renderedGuidance = string.Join(" ", stopConditions);
+        Assert.Contains("`review cross-runtime request`, `record`, and `status` commands also revalidate and report the declared local source proof", renderedGuidance, StringComparison.Ordinal);
+        Assert.Contains("`issue publish-flow` is the external issue create/publish boundary and rechecks these pins before mutation", renderedGuidance, StringComparison.Ordinal);
     }
 
     [Fact]

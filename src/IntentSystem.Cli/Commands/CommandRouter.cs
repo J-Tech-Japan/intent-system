@@ -465,7 +465,8 @@ internal static class CommandRouter
             ["packet"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["draft"] = PacketDraftCommand.Execute,
-                ["retire"] = PacketRetireCommand.Execute
+                ["retire"] = PacketRetireCommand.Execute,
+                ["validate-sources"] = PacketValidateSourcesCommand.Execute
             },
             ["closeout"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {

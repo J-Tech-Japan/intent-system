@@ -83,6 +83,29 @@ public sealed class GuideWorkflowTaskIssuePublishCommandTests
     }
 
     [Fact]
+    public void ScopeSourcesGuidanceSeparatesDesignEvidenceChecksFromPublishBoundaryInBothFormats()
+    {
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var writer = new StringWriter();
+            var args = format == "json" ? new[] { "--format", "json" } : Array.Empty<string>();
+
+            Assert.Equal(0, GuideWorkflowTaskIssuePublishCommand.Execute(CreateContext(), args, writer));
+            var output = writer.ToString();
+            var guidance = output;
+            if (format == "json")
+            {
+                using var document = JsonDocument.Parse(output);
+                guidance = string.Join(" ", document.RootElement.GetProperty("invariants").EnumerateArray()
+                    .Select(item => item.GetString()));
+            }
+            Assert.Contains("Design `review cross-runtime request`, `record`, and `status` also revalidate and report the declared local source proof.", guidance, StringComparison.Ordinal);
+            Assert.Contains("`issue publish-flow` is the external issue create/publish boundary and rechecks these pins before mutation.", guidance, StringComparison.Ordinal);
+            Assert.Contains("release consumers remain outside this integration", guidance, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Execute_JsonFormat_HasStableShape()
     {
         using var writer = new StringWriter();

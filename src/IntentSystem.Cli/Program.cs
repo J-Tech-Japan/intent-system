@@ -46,6 +46,18 @@ internal static class Program
                 return PrivatePreviewExpiryGate.ExpiredExitCode;
             }
 
+            // G863: packet ruling-source validation is a bounded read-only
+            // packet-local operation. It deliberately resolves only the repo
+            // root and never loads host config or creates bootstrap identity.
+            if (args.Length >= 2
+                && string.Equals(args[0], "packet", StringComparison.Ordinal)
+                && string.Equals(args[1], "validate-sources", StringComparison.Ordinal))
+            {
+                var validationCwd = Directory.GetCurrentDirectory();
+                var validationRoot = RepoRootResolver.Resolve(validationCwd) ?? validationCwd;
+                return PacketValidateSourcesCommand.Execute(validationRoot, args[2..], Console.Out);
+            }
+
             // G855: unit status is a read-only historical observation. It
             // must not inherit CreateBootstrapContext's fallback domain when
             // invoked from a metadata-free child checkout, and remains behind
