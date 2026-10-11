@@ -5065,6 +5065,12 @@ printed by `packet validate-sources` in `github-body.md`. The check is
 read-only, needs no `config.toml`, and reports supplied local evidence as
 `supplied-not-authenticated` and `not-verified`.
 
+The legacy scalar `ruling_artifact` remains unsupported and is not inferred as
+a ruling ID or path. Only structural root-level `scope_sources` and
+`scope_source_digests` opt in; absent or empty fields retain the previous
+legacy behavior, while a non-empty structural declaration takes precedence
+over legacy source aliases.
+
 Run `packet validate-sources` before the existing body, facet, and
 `issue publish-flow` checks. Design-review requests include the verified
 canonical source content. Publish-flow rechecks the active source before

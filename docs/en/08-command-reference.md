@@ -1007,6 +1007,12 @@ the packet root; for a non-empty list, the implementation identity must also
 name the exact execution unit, domain, team, and target repository. Copy each
 actual lowercase digest from the scoped `ruling show` result:
 
+The older scalar `ruling_artifact` field remains unsupported: it is not
+interpreted as a ruling ID or filesystem path. Only the structural root-level
+`scope_sources` and `scope_source_digests` fields opt in. When they are absent
+or empty, the prior legacy source behavior remains; a non-empty structural
+declaration takes precedence over legacy source aliases.
+
 ```yaml
 implementation_issue_packet:
   source_execution_unit: G100

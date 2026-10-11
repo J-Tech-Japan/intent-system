@@ -829,6 +829,10 @@ packet author は local ruling を明示的に参照できます。2 つの sour
 参照が空でない場合、implementation identity に正確な execution unit、domain、team、target repository も必要です。
 scope を指定した `ruling show` の結果から、実際の lowercase digest をコピーしてください。
 
+旧 scalar field `ruling_artifact` は引き続き未対応です。ruling ID や filesystem path として推測・解釈しません。
+opt-in になるのは packet root の構造化された `scope_sources` と `scope_source_digests` だけです。これらが absent または empty なら
+従来の legacy source 動作を保ち、空でない構造化 declaration は legacy source alias より優先されます。
+
 ```yaml
 implementation_issue_packet:
   source_execution_unit: G100

@@ -4358,6 +4358,10 @@ packet author は、明示した local ruling を packet root の `scope_sources
 `implementation_issue_packet` に正確な execution unit、domain、team、target repository
 が必要です。digest は同じ scope の `ruling show` が示す lowercase SHA-256 値を使います。
 
+旧 scalar field `ruling_artifact` は未対応で、ruling ID や path として推測しません。packet root の構造化された
+`scope_sources` と `scope_source_digests` だけが opt-in です。これらが absent または empty なら従来の legacy 動作を保ち、
+空でない構造化 declaration は legacy source alias より優先されます。
+
 `packet validate-sources` は read-only で、`config.toml` を必要としません。返す block を
 `github-body.md` に一度だけ記載します。block は source identity、digest、および
 `supplied-not-authenticated` / `not-verified` の状態を示します。相対 artifact path は validator result に

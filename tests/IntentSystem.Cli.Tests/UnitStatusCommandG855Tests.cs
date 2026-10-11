@@ -19,11 +19,43 @@ public sealed class UnitStatusCommandG855Tests
     private static string LegacyForeignSourceReport => File.ReadAllText(Path.Combine(
         RepoVersionPolicySource.RepoRoot(), "tests", "IntentSystem.Cli.Tests", "Fixtures", "G859", "legacy-observed-report.yaml"));
 
-    private static string SnapshotFiles(string root, string? excludedRelativePath = null) => string.Join("\n", Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-        .OrderBy(path => path, StringComparer.Ordinal)
-        .Where(path => excludedRelativePath is null || !string.Equals(
-            Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/'), excludedRelativePath, StringComparison.Ordinal))
-        .Select(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/') + "=" + Convert.ToHexString(File.ReadAllBytes(path))));
+    private static string SnapshotFiles(string root, string? excludedRelativePath = null)
+    {
+        var entries = new List<string>();
+        var pending = new Stack<string>();
+        pending.Push(Path.GetFullPath(root));
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            foreach (var path in Directory.EnumerateFileSystemEntries(directory).OrderBy(value => value, StringComparer.Ordinal))
+            {
+                var relative = Path.GetRelativePath(root, path)
+                    .Replace(Path.DirectorySeparatorChar, '/')
+                    .Replace(Path.AltDirectorySeparatorChar, '/');
+                if (excludedRelativePath is not null && string.Equals(relative, excludedRelativePath, StringComparison.Ordinal))
+                    continue;
+
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    FileSystemInfo link = (attributes & FileAttributes.Directory) != 0
+                        ? new DirectoryInfo(path)
+                        : new FileInfo(path);
+                    entries.Add("L:" + relative + "->" + link.LinkTarget);
+                    continue;
+                }
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    entries.Add("D:" + relative + "/");
+                    pending.Push(path);
+                    continue;
+                }
+
+                entries.Add("F:" + relative + "=" + Convert.ToHexString(File.ReadAllBytes(path)));
+            }
+        }
+        return string.Join("\n", entries.OrderBy(value => value, StringComparer.Ordinal));
+    }
 
     private static JsonDocument RunStatusJson(TempHost host, FixedReader reader, out int exit)
     {
@@ -859,6 +891,10 @@ public sealed class UnitStatusCommandG855Tests
         WriteG864SourcePacket(host, pinnedSha, id);
         var artifactPath = Path.Combine(host.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", id + ".json");
         var originalBytes = File.ReadAllBytes(artifactPath);
+        using var baselineReport = RunStatusJson(host, CreateKnownSixProvenanceLimitsReader(), out var baselineExit);
+        Assert.Equal(0, baselineExit);
+        var baselineOtherFacts = SnapshotRenderedFacts(baselineReport.RootElement, "bug-chain-or-ruling");
+        Assert.Equal(25, baselineOtherFacts.Count);
         byte[] replacementBytes;
         switch (scenario)
         {
@@ -892,6 +928,22 @@ public sealed class UnitStatusCommandG855Tests
         var output = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), format, out var exit);
         Assert.Equal(1, exit);
         Assert.Equal(beforeStatus, SnapshotFiles(host.Root));
+        JsonDocument afterFactsReport;
+        if (format == "json")
+        {
+            afterFactsReport = JsonDocument.Parse(output);
+        }
+        else
+        {
+            afterFactsReport = RunStatusJson(host, CreateKnownSixProvenanceLimitsReader(), out var comparisonExit);
+            Assert.Equal(1, comparisonExit);
+        }
+        using (afterFactsReport)
+        {
+            var afterOtherFacts = SnapshotRenderedFacts(afterFactsReport.RootElement, "bug-chain-or-ruling");
+            Assert.Equal(25, afterOtherFacts.Count);
+            Assert.Equal(baselineOtherFacts, afterOtherFacts);
+        }
         if (format == "json")
         {
             using var report = JsonDocument.Parse(output);
@@ -923,6 +975,93 @@ public sealed class UnitStatusCommandG855Tests
                 Assert.Contains(".intent-cli/rulings/intent-cli/intent-cli-dev/" + id + ".json", output, StringComparison.Ordinal);
             }
         }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void UnreadablePinnedArtifactPreservesOtherFactsAndReportsItsReachedPath(string format)
+    {
+        if (OperatingSystem.IsWindows())
+            throw Xunit.Sdk.SkipException.ForSkip("Unix permission-denied fixture requires Unix file modes.");
+        if (!G841TestHelpers.IsNonRootUnixUser())
+            throw Xunit.Sdk.SkipException.ForSkip("Unix permission-denied fixture cannot prove denial while running as root.");
+
+        var physicalTemp = OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath();
+        using var host = new TempHost(Path.Combine(physicalTemp, "g864-status-ruling-denied-" + Guid.NewGuid().ToString("N")));
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact();
+        var sha256 = WriteActualG864Ruling(host);
+        WriteG864SourcePacket(host, sha256);
+        var artifactPath = Path.Combine(host.Root, ".intent-cli", "rulings", "intent-cli", "intent-cli-dev", "R-G864-STATUS.json");
+        const string relativeArtifactPath = ".intent-cli/rulings/intent-cli/intent-cli-dev/R-G864-STATUS.json";
+        var originalBytes = File.ReadAllBytes(artifactPath);
+        var originalMode = File.GetUnixFileMode(artifactPath);
+        using var baselineReport = RunStatusJson(host, CreateKnownSixProvenanceLimitsReader(), out var baselineExit);
+        Assert.Equal(0, baselineExit);
+        var baselineOtherFacts = SnapshotRenderedFacts(baselineReport.RootElement, "bug-chain-or-ruling");
+        Assert.Equal(25, baselineOtherFacts.Count);
+
+        try
+        {
+            File.SetUnixFileMode(artifactPath, UnixFileMode.None);
+            try
+            {
+                _ = File.ReadAllBytes(artifactPath);
+                throw Xunit.Sdk.SkipException.ForSkip("The operating system did not reject direct reads of the mode-000 ruling fixture.");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // The fixture reached the real pinned-artifact read boundary.
+            }
+
+            var before = SnapshotFiles(host.Root, relativeArtifactPath);
+            var output = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), format, out var exit);
+            Assert.Equal(1, exit);
+            Assert.Equal(before, SnapshotFiles(host.Root, relativeArtifactPath));
+            JsonDocument comparisonReport;
+            if (format == "json")
+            {
+                comparisonReport = JsonDocument.Parse(output);
+            }
+            else
+            {
+                comparisonReport = RunStatusJson(host, CreateKnownSixProvenanceLimitsReader(), out var comparisonExit);
+                Assert.Equal(1, comparisonExit);
+            }
+            using (comparisonReport)
+            {
+                var root = comparisonReport.RootElement;
+                var otherFacts = SnapshotRenderedFacts(root, "bug-chain-or-ruling");
+                Assert.Equal(25, otherFacts.Count);
+                Assert.Equal(baselineOtherFacts, otherFacts);
+                var fact = FindBugSource(root);
+                Assert.Equal("unavailable", fact.GetProperty("state").GetString());
+                Assert.Equal("read-failure", fact.GetProperty("unavailable_class").GetString());
+                Assert.Equal("scope-sources-ruling-unavailable", fact.GetProperty("cause").GetString());
+                var source = fact.GetProperty("scope_sources");
+                Assert.Equal(JsonValueKind.Null, source.GetProperty("provenance").ValueKind);
+                Assert.Equal(JsonValueKind.Null, source.GetProperty("expected_provenance_block").ValueKind);
+                Assert.Contains(source.GetProperty("diagnostics").EnumerateArray(), diagnostic =>
+                    diagnostic.GetProperty("cause").GetString() == "ruling-artifact-unavailable"
+                    && diagnostic.GetProperty("path").GetString() == relativeArtifactPath);
+                AssertKnownSixProvenanceLimits(root, expectedObservationExitCode: 1);
+            }
+            if (format == "markdown")
+            {
+                AssertMarkdownFactUnavailableClass(output, "bug-chain-or-ruling", "read-failure");
+                Assert.Contains("cause: `scope-sources-ruling-unavailable`", output, StringComparison.Ordinal);
+                Assert.Contains("ruling-artifact-unavailable", output, StringComparison.Ordinal);
+                Assert.Contains("path=`" + relativeArtifactPath + "`", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("provenance: reference=", output, StringComparison.Ordinal);
+                AssertKnownSixProvenanceLimitsInMarkdown(output);
+            }
+        }
+        finally
+        {
+            File.SetUnixFileMode(artifactPath, originalMode);
+        }
+        Assert.Equal(originalBytes, File.ReadAllBytes(artifactPath));
     }
 
     public static IEnumerable<object[]> G864BodyBoundaryCases()
@@ -1278,6 +1417,41 @@ public sealed class UnitStatusCommandG855Tests
         Assert.Equal(baselineMarkdownReader.ClaimReads, replacementMarkdownReader.ClaimReads);
         Assert.Equal(baselineMarkdownReader.GitHubReads, replacementMarkdownReader.GitHubReads);
         Assert.DoesNotContain("scope_sources:", replacementMarkdown, StringComparison.Ordinal);
+
+        var bodyPath = Path.Combine(host.Root, ".intent-cli", "issues", "G855", "github-body.md");
+        File.Delete(bodyPath);
+        var packetWithReplacement = File.ReadAllText(packetPath);
+        var packetWithoutReplacement = packetWithReplacement.Replace("legacy_note: \"\uFFFD\"\n", string.Empty, StringComparison.Ordinal);
+        Assert.NotEqual(packetWithReplacement, packetWithoutReplacement);
+
+        File.WriteAllText(packetPath, packetWithoutReplacement, new UTF8Encoding(false));
+        var missingBodyBaselineJsonReader = CreateKnownSixProvenanceLimitsReader();
+        var missingBodyBaselineJson = RunStatusOutput(host, missingBodyBaselineJsonReader, "json", out var missingBodyBaselineJsonExit);
+        Assert.Equal(0, missingBodyBaselineJsonExit);
+        var missingBodyBaselineMarkdownReader = CreateKnownSixProvenanceLimitsReader();
+        var missingBodyBaselineMarkdown = RunStatusOutput(host, missingBodyBaselineMarkdownReader, "markdown", out var missingBodyBaselineMarkdownExit);
+        Assert.Equal(0, missingBodyBaselineMarkdownExit);
+
+        File.WriteAllText(packetPath, packetWithReplacement, new UTF8Encoding(false));
+        var missingBodyReplacementJsonReader = CreateKnownSixProvenanceLimitsReader();
+        var missingBodyReplacementJson = RunStatusOutput(host, missingBodyReplacementJsonReader, "json", out var missingBodyReplacementJsonExit);
+        Assert.Equal(0, missingBodyReplacementJsonExit);
+        var missingBodyReplacementMarkdownReader = CreateKnownSixProvenanceLimitsReader();
+        var missingBodyReplacementMarkdown = RunStatusOutput(host, missingBodyReplacementMarkdownReader, "markdown", out var missingBodyReplacementMarkdownExit);
+        Assert.Equal(0, missingBodyReplacementMarkdownExit);
+
+        Assert.Equal(NormalizeStatusObservedAt(missingBodyBaselineJson), NormalizeStatusObservedAt(missingBodyReplacementJson));
+        Assert.Equal(NormalizeMarkdownObservedAt(missingBodyBaselineMarkdown), NormalizeMarkdownObservedAt(missingBodyReplacementMarkdown));
+        Assert.Equal(missingBodyBaselineJsonReader.ClaimReads, missingBodyReplacementJsonReader.ClaimReads);
+        Assert.Equal(missingBodyBaselineJsonReader.GitHubReads, missingBodyReplacementJsonReader.GitHubReads);
+        Assert.Equal(missingBodyBaselineMarkdownReader.ClaimReads, missingBodyReplacementMarkdownReader.ClaimReads);
+        Assert.Equal(missingBodyBaselineMarkdownReader.GitHubReads, missingBodyReplacementMarkdownReader.GitHubReads);
+        using var missingBodyReplacementReport = JsonDocument.Parse(missingBodyReplacementJson);
+        var missingBodyReplacementFact = FindBugSource(missingBodyReplacementReport.RootElement);
+        Assert.Equal("ruling-reference-unsupported", missingBodyReplacementFact.GetProperty("cause").GetString());
+        Assert.False(missingBodyReplacementFact.TryGetProperty("scope_sources", out _));
+        Assert.DoesNotContain("scope_sources:", missingBodyReplacementMarkdown, StringComparison.Ordinal);
+        Assert.DoesNotContain("provenance:", missingBodyReplacementMarkdown, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -1491,6 +1665,70 @@ public sealed class UnitStatusCommandG855Tests
         {
             Assert.Equal(originalBytes, File.ReadAllBytes(sourcePath));
         }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void ActualPacketYamlSymlinkFailsClosedWithCapturedDeclaration(string format)
+    {
+        var physicalTemp = OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath();
+        using var host = new TempHost(Path.Combine(physicalTemp, "g864-status-packet-symlink-" + Guid.NewGuid().ToString("N")));
+        host.WriteMode(TeamMode.SoloConductor);
+        host.WritePacketAndPublishArtifact();
+        var sha256 = WriteActualG864Ruling(host);
+        WriteG864SourcePacket(host, sha256);
+
+        var packetPath = Path.Combine(host.Root, ".intent-cli", "issues", "G855", "packet.yaml");
+        var packetBytes = File.ReadAllBytes(packetPath);
+        var outsidePath = Path.Combine(physicalTemp, "g864-status-packet-sentinel-" + Guid.NewGuid().ToString("N") + ".yaml");
+        File.WriteAllBytes(outsidePath, packetBytes);
+        File.Delete(packetPath);
+        File.CreateSymbolicLink(packetPath, outsidePath);
+        Assert.Equal(Encoding.UTF8.GetString(packetBytes), File.ReadAllText(packetPath));
+        Assert.Contains("scope_sources:", File.ReadAllText(packetPath), StringComparison.Ordinal);
+
+        const string relativePacketPath = ".intent-cli/issues/G855/packet.yaml";
+        var before = SnapshotFiles(host.Root, relativePacketPath);
+        var outsideBefore = File.ReadAllBytes(outsidePath);
+        var output = RunStatusOutput(host, CreateKnownSixProvenanceLimitsReader(), format, out var exit);
+        Assert.Equal(1, exit);
+        Assert.Equal(before, SnapshotFiles(host.Root, relativePacketPath));
+        Assert.Equal(outsideBefore, File.ReadAllBytes(outsidePath));
+        Assert.True(File.Exists(packetPath));
+        Assert.Equal(outsidePath, new FileInfo(packetPath).LinkTarget);
+
+        if (format == "json")
+        {
+            using var report = JsonDocument.Parse(output);
+            var fact = FindBugSource(report.RootElement);
+            Assert.Equal("unavailable", fact.GetProperty("state").GetString());
+            AssertFactUnavailableClass(fact, "read-failure");
+            Assert.Equal("scope-sources-packet-unavailable", fact.GetProperty("cause").GetString());
+            var source = fact.GetProperty("scope_sources");
+            Assert.Equal("scope-sources-packet-unavailable", source.GetProperty("cause").GetString());
+            Assert.Equal(JsonValueKind.Null, source.GetProperty("provenance").ValueKind);
+            Assert.Equal(JsonValueKind.Null, source.GetProperty("expected_provenance_block").ValueKind);
+            Assert.Contains(fact.GetProperty("evidence").EnumerateArray(), evidence =>
+                evidence.GetProperty("path").GetString() == relativePacketPath);
+            var diagnostic = Assert.Single(source.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal("packet-read-failed", diagnostic.GetProperty("cause").GetString());
+            Assert.Equal(relativePacketPath, diagnostic.GetProperty("path").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(diagnostic.GetProperty("detail").GetString()));
+            AssertKnownSixProvenanceLimits(report.RootElement, expectedObservationExitCode: 1);
+        }
+        else
+        {
+            Assert.Contains("subcheck `bug-chain-or-ruling`: **unavailable**", output, StringComparison.Ordinal);
+            AssertMarkdownFactUnavailableClass(output, "bug-chain-or-ruling", "read-failure");
+            Assert.Contains("cause: `scope-sources-packet-unavailable`", output, StringComparison.Ordinal);
+            Assert.Contains("packet-read-failed", output, StringComparison.Ordinal);
+            Assert.Contains("path=`" + relativePacketPath + "`", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("provenance: reference=", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("expected_provenance_block", output, StringComparison.Ordinal);
+            AssertKnownSixProvenanceLimitsInMarkdown(output);
+        }
+        File.Delete(outsidePath);
     }
 
     [Fact]
@@ -1851,7 +2089,8 @@ public sealed class UnitStatusCommandG855Tests
             ("resolved-team-mismatch", "unavailable", "scope-sources-identity-mismatch", "identity-conflict"),
             ("resolved-team-mismatch-missing", "unavailable", "scope-sources-identity-mismatch", "identity-conflict"),
             ("wrong-digest", "unavailable", "scope-sources-digest-mismatch", "identity-conflict"),
-            ("wrong-public-block", "missing", "scope-sources-provenance-mismatch", null),
+            ("missing-public-block", "missing", "scope-sources-provenance-mismatch", null),
+            ("wrong-public-block-digest", "missing", "scope-sources-provenance-mismatch", null),
         };
         foreach (var item in cases)
         foreach (var format in new[] { "json", "markdown" })
@@ -1899,7 +2138,8 @@ public sealed class UnitStatusCommandG855Tests
             case "wrong-digest":
                 writerSha = WriteActualG864Ruling(host, id);
                 break;
-            case "wrong-public-block":
+            case "missing-public-block":
+            case "wrong-public-block-digest":
                 writerSha = WriteActualG864Ruling(host, id);
                 break;
             default:
@@ -1908,7 +2148,13 @@ public sealed class UnitStatusCommandG855Tests
         var pinnedSha = scenario is "missing" or "resolved-team-mismatch-missing" ? new string('0', 64)
             : scenario == "wrong-digest" ? new string('0', 64)
             : writerSha!;
-        var body = scenario == "wrong-public-block" ? "# G855 request\n\nwrong block\n" : null;
+        var body = scenario switch
+        {
+            "missing-public-block" => "# G855 request\n\nwrong block\n",
+            "wrong-public-block-digest" => "# G855 request\n\n"
+                + G864ExpectedPublicBlock(new string('0', 64)) + "\n",
+            _ => null,
+        };
         WriteG864SourcePacket(host, pinnedSha, id, sourceDomain, sourceTeam, sourceRepo, body: body);
 
         var before = SnapshotFiles(host.Root);
@@ -1926,11 +2172,13 @@ public sealed class UnitStatusCommandG855Tests
             var source = fact.GetProperty("scope_sources");
             Assert.Equal(expectedCause, source.GetProperty("cause").GetString());
             AssertKnownSixProvenanceLimits(root, expectedState == "unavailable" ? 1 : 0);
-            if (scenario == "wrong-public-block")
+            if (scenario is "missing-public-block" or "wrong-public-block-digest")
             {
                 Assert.Equal("missing", fact.GetProperty("state").GetString());
-                Assert.Equal(writerSha, Assert.Single(source.GetProperty("provenance").EnumerateArray()).GetProperty("sha256").GetString());
-                Assert.Contains("### Ruling scope provenance", source.GetProperty("expected_provenance_block").GetString(), StringComparison.Ordinal);
+                var provenance = Assert.Single(source.GetProperty("provenance").EnumerateArray());
+                Assert.Equal(writerSha, provenance.GetProperty("sha256").GetString());
+                Assert.Equal(".intent-cli/rulings/intent-cli/intent-cli-dev/" + id + ".json", provenance.GetProperty("path").GetString());
+                Assert.Equal(G864ExpectedPublicBlock(writerSha!), source.GetProperty("expected_provenance_block").GetString());
             }
             else if (expectedState == "unavailable")
             {
@@ -1950,10 +2198,11 @@ public sealed class UnitStatusCommandG855Tests
             Assert.Contains("authority_verification: `supplied-not-authenticated`", output, StringComparison.Ordinal);
             Assert.Contains("publication: `not-verified`", output, StringComparison.Ordinal);
             AssertKnownSixProvenanceLimitsInMarkdown(output);
-            if (scenario == "wrong-public-block")
+            if (scenario is "missing-public-block" or "wrong-public-block-digest")
             {
-                Assert.Contains("expected_provenance_block:", output, StringComparison.Ordinal);
-                Assert.Contains("sha256=" + writerSha, output, StringComparison.Ordinal);
+                foreach (var line in G864ExpectedPublicBlock(writerSha!).Split('\n'))
+                    Assert.Contains("      " + line, output, StringComparison.Ordinal);
+                Assert.Contains("path=`.intent-cli/rulings/intent-cli/intent-cli-dev/" + id + ".json`; sha256=`" + writerSha + "`", output, StringComparison.Ordinal);
             }
             else if (expectedState == "unavailable")
             {

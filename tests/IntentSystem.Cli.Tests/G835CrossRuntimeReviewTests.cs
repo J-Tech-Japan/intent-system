@@ -1397,6 +1397,8 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             Assert.Contains("packet validate-sources", orchestration, StringComparison.Ordinal);
             Assert.Contains("supplied-not-authenticated", orchestration, StringComparison.Ordinal);
             Assert.Contains("#1867", orchestration, StringComparison.Ordinal);
+            Assert.Contains(language == "en" ? "legacy scalar `ruling_artifact` remains unsupported" : "旧 scalar field `ruling_artifact` は未対応", orchestration, StringComparison.Ordinal);
+            Assert.Contains(language == "en" ? "takes precedence" : "legacy source alias より優先されます", orchestration, StringComparison.Ordinal);
             if (language == "en")
             {
                 Assert.Contains("`unit status` separately reports pinned local", orchestration, StringComparison.Ordinal);
@@ -1411,6 +1413,8 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             var commandReference = File.ReadAllText(Path.Combine(repoRoot, "docs", language, "08-command-reference.md"));
             Assert.Contains("G863", commandReference, StringComparison.Ordinal);
             Assert.Contains("packet validate-sources", commandReference, StringComparison.Ordinal);
+            Assert.Contains(language == "en" ? "older scalar `ruling_artifact` field remains unsupported" : "旧 scalar field `ruling_artifact` は引き続き未対応", commandReference, StringComparison.Ordinal);
+            Assert.Contains(language == "en" ? "interpreted as a ruling ID or filesystem path" : "ruling ID や filesystem path として推測・解釈しません", commandReference, StringComparison.Ordinal);
             if (language == "en")
             {
                 Assert.Contains("does not include the artifact path", commandReference, StringComparison.Ordinal);
@@ -1428,6 +1432,8 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             Assert.Contains("G863", ledger, StringComparison.Ordinal);
             Assert.Contains("scope_source_digests", ledger, StringComparison.Ordinal);
             Assert.Contains("packet validate-sources", ledger, StringComparison.Ordinal);
+            Assert.Contains(language == "en" ? "The legacy scalar `ruling_artifact` remains unsupported" : "旧 scalar `ruling_artifact` は未対応", ledger, StringComparison.Ordinal);
+            Assert.Contains(language == "en" ? "a ruling ID or path" : "ID や path として推測しない", ledger, StringComparison.Ordinal);
             var sourceRow = Assert.Single(ledger.Split('\n'), line => line.StartsWith("| `packet validate-sources` |", StringComparison.Ordinal));
             Assert.Contains("G863", sourceRow, StringComparison.Ordinal);
             Assert.Contains("preview-through-1.x", sourceRow, StringComparison.Ordinal);

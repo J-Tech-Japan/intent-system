@@ -644,10 +644,12 @@ internal static class UnitStatusCommand
         string relativePath, CrossRuntimeReviewFileReadFailure failure, string error)
     {
         var detail = $"{failure}: {error}";
+        var normalizedRelativePath = relativePath.Replace('\\', '/');
+        var normalizedPacketPath = Path.Combine(".intent-cli", "issues", unit, "packet.yaml").Replace('\\', '/');
         var source = new PacketScopeSources.Result(unit, "unavailable", "scope-sources-packet-unavailable", detail,
             RulingArtifact.FormatTimestamp(observedAt), null, null,
-            [new("packet-read-failed", relativePath, detail)], IsDeclared: true);
-        facts.Add(SourceFact(source, unit, Path.Combine(".intent-cli", "issues", unit, "packet.yaml"),
+            [new("packet-read-failed", normalizedRelativePath, detail)], IsDeclared: true);
+        facts.Add(SourceFact(source, unit, normalizedPacketPath,
             identityConflict: false, applicabilityUnresolved: false));
     }
 
