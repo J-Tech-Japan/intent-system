@@ -826,7 +826,7 @@ public sealed class PacketVerificationContractTests
     [InlineData("markdown")]
     public void ActualCommandRejectsUnsafeOrMissingFilesystemMembersWithoutChangingThem(string format)
     {
-        var cases = new[] { "missing-root-segment", "intent-cli-file", "issues-file", "unit-file", "leaf-directory", "leaf-symlink" };
+        var cases = new[] { "missing-root-segment", "root-file", "intent-cli-file", "issues-file", "unit-file", "leaf-directory", "leaf-symlink" };
         foreach (var scenario in cases)
         {
             using var workspace = new TemporaryWorkspace();
@@ -834,9 +834,14 @@ public sealed class PacketVerificationContractTests
             var external = Path.Combine(workspace.Root, "outside-target");
             var outsideBytes = Encoding.UTF8.GetBytes(CompletePacket);
             File.WriteAllBytes(external, outsideBytes);
+            var commandRoot = workspace.Root;
             switch (scenario)
             {
                 case "missing-root-segment":
+                    break;
+                case "root-file":
+                    commandRoot = Path.Combine(workspace.Root, "selected-root-file");
+                    File.WriteAllText(commandRoot, "root sentinel");
                     break;
                 case "intent-cli-file":
                     File.WriteAllText(Path.Combine(workspace.Root, ".intent-cli"), "sentinel");
@@ -859,10 +864,12 @@ public sealed class PacketVerificationContractTests
                     break;
             }
             var before = workspace.SnapshotTree();
-            var (exit, output) = Run(workspace.Root, format);
+            var (exit, output) = Run(commandRoot, format);
             Assert.Equal(1, exit);
             using var document = JsonDocument.Parse(StructuredJson(output, format));
             AssertUnavailable(document.RootElement, "packet-read-failure", PacketRelativePath, null);
+            if (scenario == "root-file")
+                Assert.Equal(".: not-directory: path is not a directory", document.RootElement.GetProperty("diagnostics")[0].GetProperty("detail").GetString());
             Assert.Equal(before, workspace.SnapshotTree());
             Assert.Equal(outsideBytes, File.ReadAllBytes(external));
         }
@@ -886,6 +893,9 @@ public sealed class PacketVerificationContractTests
             string commandRoot;
             if (segment == "root")
             {
+                var selectedPacket = Path.Combine(selectedRoot, ".intent-cli", "issues", Unit, "packet.yaml");
+                Directory.CreateDirectory(Path.GetDirectoryName(selectedPacket)!);
+                File.WriteAllBytes(selectedPacket, bytes);
                 commandRoot = Path.Combine(workspace.Root, "root-link");
                 CreateDirectorySymlinkOrSkip(commandRoot, selectedRoot);
             }
@@ -901,7 +911,7 @@ public sealed class PacketVerificationContractTests
                 Directory.CreateDirectory(Path.GetDirectoryName(linkPath)!);
                 var target = segment switch
                 {
-                    ".intent-cli" => outside,
+                    ".intent-cli" => Path.Combine(outside, ".intent-cli"),
                     "issues" => Path.Combine(outside, ".intent-cli", "issues"),
                     _ => Path.Combine(outside, ".intent-cli", "issues", Unit),
                 };
@@ -912,6 +922,17 @@ public sealed class PacketVerificationContractTests
             Assert.Equal(1, exit);
             using var document = JsonDocument.Parse(StructuredJson(output, format));
             AssertUnavailable(document.RootElement, "packet-read-failure", PacketRelativePath, null);
+            var expectedSegment = segment switch
+            {
+                "root" => ".",
+                ".intent-cli" => ".intent-cli",
+                "issues" => ".intent-cli/issues",
+                _ => $".intent-cli/issues/{Unit}",
+            };
+            Assert.Equal($"{expectedSegment}: unsafe-path: directory is a symlink or reparse point",
+                document.RootElement.GetProperty("diagnostics")[0].GetProperty("detail").GetString());
+            Assert.Contains($"{expectedSegment}: unsafe-path: directory is a symlink or reparse point",
+                document.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
             Assert.Equal(before, workspace.SnapshotTree());
             Assert.Equal(bytes, File.ReadAllBytes(outsidePacket));
         }
