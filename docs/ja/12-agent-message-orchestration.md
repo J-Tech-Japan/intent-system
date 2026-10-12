@@ -4390,8 +4390,8 @@ local-required proof を必要とします。
 `intent-cli packet validate-verification --execution-unit <unit> --format json|markdown` は config-independent な
 packet-local read です。上限は criteria 128、lane 64、proof 256、ID 64 文字、criterion/command は UTF-16
 16,384 code unit、packet 1 MiB、YAML collection depth 32 です。complete は宣言構造の coverage だけを示し、
-execution は `not-observed` のままです。記載された command を実行せず、evidence、publication、authority を
-確立せず、後続手順の gate にもなりません。未知の deferral/evidence-pointer/authority field は未対応です。
+execution は `not-observed` のままです。記載された command を実行せず、evidence、publication、operator 権限を
+確立せず、後続手順の gate にもなりません。未知の deferral/evidence-pointer/権限 field は未対応です。
 source #1866 で未実装の evidence binding、deferral、design prompt integration、worker enforcement は含まず、
 #1866/#1867/#1857 は open のままです。完全な schema example は
 [packet command reference](08-command-reference.md) を参照してください。

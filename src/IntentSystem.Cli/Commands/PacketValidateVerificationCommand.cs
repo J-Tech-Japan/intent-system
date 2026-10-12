@@ -125,6 +125,11 @@ internal static class PacketValidateVerificationCommand
                 detail = "path is not a directory";
                 return false;
             }
+            // Checking only the directory bit lets search-only directories pass
+            // even though their contents cannot be safely inspected. Probe a
+            // single entry so this remains bounded and performs no packet read.
+            using (var entries = Directory.EnumerateFileSystemEntries(path).GetEnumerator())
+                _ = entries.MoveNext();
             return true;
         }
         catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
@@ -165,7 +170,15 @@ internal static class PacketValidateVerificationCommand
             return;
         }
 
-        writer.WriteLine($"# Packet verification contract: {result.ExecutionUnit}");
+        if (RulingArtifact.TryIdentifier(result.ExecutionUnit, out _))
+            writer.WriteLine($"# Packet verification contract: {result.ExecutionUnit}");
+        else
+        {
+            writer.WriteLine("# Packet verification contract");
+            writer.WriteLine();
+            writer.WriteLine("- Requested execution unit:");
+            WriteFencedValue(writer, "text", result.ExecutionUnit);
+        }
         writer.WriteLine();
         writer.WriteLine($"- State: {result.State}");
         writer.WriteLine($"- Cause: {result.Cause}");
@@ -201,4 +214,5 @@ internal static class PacketValidateVerificationCommand
         }
         return longest;
     }
+
 }

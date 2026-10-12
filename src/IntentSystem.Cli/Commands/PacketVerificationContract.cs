@@ -76,12 +76,12 @@ internal static class PacketVerificationContract
         var scan = ScanYaml(yaml);
         if (scan.DepthExceeded)
             return UnavailableWithBytes(executionUnit, packetPath, sha256, "resource-limit", $"packet YAML exceeds collection depth {MaximumDepth}");
-        if (scan.DuplicateParticipatingKey)
-            return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "packet contains a duplicate participating mapping key");
         if (scan.ParseError is not null)
             return UnavailableWithBytes(executionUnit, packetPath, sha256, "packet-unparseable", scan.ParseError);
         if (scan.DocumentCount != 1)
             return UnavailableWithBytes(executionUnit, packetPath, sha256, "packet-unparseable", "packet.yaml must contain exactly one YAML document");
+        if (scan.DuplicateParticipatingKey)
+            return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "packet contains a duplicate participating mapping key");
 
         YamlMappingNode root;
         try
@@ -117,12 +117,14 @@ internal static class PacketVerificationContract
             return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "verification_contract must appear only at the packet root");
 
         if (HasExplicitTag(root)
+            || scan.ExplicitTagPaths.Any(path => path.Length == 0 || IsContractPath(path))
             || HasExplicitTag(contractPair.Value)
             || HasExplicitTag(contractPair.Key)
             || scan.AliasPaths.Any(path => IsContractPath(path)))
             return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "verification_contract and its participating nodes must not use aliases or explicit tags");
 
-        if (identityEntry is null || identityPair.Value is not YamlMappingNode identity || HasExplicitTag(identityPair.Key) || HasExplicitTag(identity))
+        if (identityEntry is null || identityPair.Value is not YamlMappingNode identity || HasExplicitTag(identityPair.Key) || HasExplicitTag(identity)
+            || scan.ExplicitTagPaths.Contains("/implementation_issue_packet"))
             return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-identity", "implementation_issue_packet must be an untagged mapping with source_execution_unit and acceptance_criteria");
 
         var identityEntries = identity.Children.ToArray();
@@ -139,8 +141,12 @@ internal static class PacketVerificationContract
         var unitPair = unitEntry.Value;
         var actualCriteriaPair = actualCriteriaEntry.Value;
         if (HasExplicitTag(unitPair.Key) || HasExplicitTag(unitPair.Value)
-            || HasExplicitTag(actualCriteriaPair.Key) || HasExplicitTag(actualCriteriaPair.Value))
-            return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-identity", "source identity and actual acceptance criteria must not use explicit tags");
+            || scan.ExplicitTagPaths.Contains("/implementation_issue_packet/source_execution_unit"))
+            return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-identity", "source_execution_unit must not use an explicit tag");
+        if (HasExplicitTag(actualCriteriaPair.Key) || HasExplicitTag(actualCriteriaPair.Value)
+            || scan.ExplicitTagPaths.Any(path => path == "/implementation_issue_packet/acceptance_criteria"
+                || path.StartsWith("/implementation_issue_packet/acceptance_criteria/", StringComparison.Ordinal)))
+            return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "actual acceptance criteria must not use explicit tags");
 
         if (!TryText(unitPair.Value, out var declaredUnit) || !RulingArtifact.TryIdentifier(declaredUnit, out _))
             return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-identity", "source_execution_unit must be a canonical textual identifier");
@@ -289,7 +295,7 @@ internal static class PacketVerificationContract
             packetPath, sha256, "not-observed", [], [], [], [], [], [], diagnostics);
 
     private sealed record ScanResult(int DocumentCount, bool DepthExceeded, bool DuplicateParticipatingKey,
-        HashSet<string> AliasPaths, string? ParseError);
+        HashSet<string> AliasPaths, HashSet<string> ExplicitTagPaths, string? ParseError);
 
     private sealed class EventFrame(bool mapping, string path)
     {
@@ -306,6 +312,7 @@ internal static class PacketVerificationContract
         var stack = new Stack<EventFrame>();
         var anchors = new Dictionary<string, string>(StringComparer.Ordinal);
         var aliases = new HashSet<string>(StringComparer.Ordinal);
+        var explicitTags = new HashSet<string>(StringComparer.Ordinal);
         var documents = 0;
         var collectionDepth = 0;
         var tooDeep = false;
@@ -323,16 +330,18 @@ internal static class PacketVerificationContract
                     case MappingStart:
                     {
                         var path = ConsumeNode(stack, null);
+                        if (!((MappingStart)parser.Current).IsImplicit && IsExplicitTagPathRelevant(path)) explicitTags.Add(path);
                         collectionDepth++;
-                        if (collectionDepth > MaximumDepth) { tooDeep = true; return new(documents, true, duplicate, aliases, null); }
+                        if (collectionDepth > MaximumDepth) { tooDeep = true; return new(documents, true, duplicate, aliases, explicitTags, null); }
                         stack.Push(new EventFrame(true, path));
                         break;
                     }
                     case SequenceStart:
                     {
                         var path = ConsumeNode(stack, null);
+                        if (!((SequenceStart)parser.Current).IsImplicit && IsExplicitTagPathRelevant(path)) explicitTags.Add(path);
                         collectionDepth++;
-                        if (collectionDepth > MaximumDepth) { tooDeep = true; return new(documents, true, duplicate, aliases, null); }
+                        if (collectionDepth > MaximumDepth) { tooDeep = true; return new(documents, true, duplicate, aliases, explicitTags, null); }
                         stack.Push(new EventFrame(false, path));
                         break;
                     }
@@ -342,6 +351,16 @@ internal static class PacketVerificationContract
                         if (anchor.Length > 0 && scalar.Value is not null) anchors[anchor] = scalar.Value;
                         var keyPosition = stack.Count > 0 && stack.Peek().IsMapping && stack.Peek().ExpectingKey;
                         var key = keyPosition ? scalar.Value : null;
+                        var scalarPath = keyPosition && key is not null
+                            ? CurrentMapPath(stack) + "/" + EscapePathSegment(key)
+                            : CurrentChildPath(stack);
+                        // The YAML non-specific `!` tag may retain implicit flags,
+                        // so inspect the parser event's resolved tag as well as
+                        // its style-specific implicit indicators.
+                        var hasExplicitTag = scalar.Tag.ToString() != "?"
+                            || (!scalar.IsPlainImplicit && !scalar.IsQuotedImplicit);
+                        if (hasExplicitTag && IsExplicitTagPathRelevant(scalarPath))
+                            explicitTags.Add(scalarPath);
                         if (keyPosition && key is not null)
                         {
                             var mapPath = stack.Peek().Path;
@@ -374,13 +393,21 @@ internal static class PacketVerificationContract
                         break;
                 }
             }
-            return new(documents, tooDeep, duplicate, aliases, null);
+            return new(documents, tooDeep, duplicate, aliases, explicitTags, null);
         }
         catch (Exception exception) when (exception is YamlException or InvalidOperationException or ArgumentException)
         {
-            return new(documents, tooDeep, duplicate, aliases, exception.Message);
+            return new(documents, tooDeep, duplicate, aliases, explicitTags, exception.Message);
         }
     }
+
+    private static bool IsExplicitTagPathRelevant(string path) =>
+        path.Length == 0
+        || IsContractPath(path)
+        || path == "/implementation_issue_packet"
+        || path == "/implementation_issue_packet/source_execution_unit"
+        || path == "/implementation_issue_packet/acceptance_criteria"
+        || path.StartsWith("/implementation_issue_packet/acceptance_criteria/", StringComparison.Ordinal);
 
     private static bool IsDuplicateRelevantKeyPath(string path, string key) =>
         (path.Length == 0 && key is "verification_contract" or "implementation_issue_packet")

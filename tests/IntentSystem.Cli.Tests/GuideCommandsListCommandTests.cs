@@ -83,6 +83,7 @@ public sealed class GuideCommandsListCommandTests
     public void VerificationValidatorIsReachableFromAllThreeGuideRoutesInBothFormats()
     {
         const string command = "intent-cli packet validate-verification --execution-unit <unit> --format json";
+        const string unimplemented = "#1866 evidence binding, deferral, design prompt integration, and worker enforcement remain unimplemented.";
         foreach (var format in new[] { "json", "markdown" })
         {
             using var catalogWriter = new StringWriter();
@@ -101,6 +102,7 @@ public sealed class GuideCommandsListCommandTests
             Assert.Contains("structural coverage", packetPurpose, StringComparison.Ordinal);
             Assert.Contains("never runs commands", packetPurpose, StringComparison.Ordinal);
             Assert.Contains("not a gate", packetPurpose, StringComparison.Ordinal);
+            Assert.Contains(unimplemented, packetPurpose, StringComparison.Ordinal);
 
             using var soloWriter = new StringWriter();
             Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", format], CreateContext(), soloWriter));
@@ -119,6 +121,7 @@ public sealed class GuideCommandsListCommandTests
             Assert.Contains("structural coverage", soloInstruction, StringComparison.Ordinal);
             Assert.Contains("never runs commands", soloInstruction, StringComparison.Ordinal);
             Assert.Contains("does not gate later steps", soloInstruction, StringComparison.Ordinal);
+            Assert.Contains(unimplemented, soloInstruction, StringComparison.Ordinal);
 
             using var publishWriter = new StringWriter();
             Assert.Equal(0, CommandRouter.Execute(["guide", "workflow", "task", "issue-publish", "--format", format], CreateContext(), publishWriter));
@@ -134,6 +137,7 @@ public sealed class GuideCommandsListCommandTests
             Assert.Contains("structural coverage", publishGuidance, StringComparison.Ordinal);
             Assert.Contains("never runs commands", publishGuidance, StringComparison.Ordinal);
             Assert.Contains("not a gate", publishGuidance, StringComparison.Ordinal);
+            Assert.Contains(unimplemented, publishGuidance, StringComparison.Ordinal);
         }
     }
 

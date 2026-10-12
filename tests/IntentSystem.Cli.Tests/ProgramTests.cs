@@ -223,8 +223,10 @@ public sealed class ProgramTests
         }
     }
 
-    [Fact]
-    public void Main_PacketValidateVerificationIsReadOnlyFromFreshCloneWithoutConfigOrReachableOrigin()
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_PacketValidateVerificationIsReadOnlyFromFreshCloneWithoutConfigOrReachableOrigin(string format)
     {
         lock (ProcessStateLock)
         {
@@ -273,10 +275,11 @@ public sealed class ProgramTests
             using var console = new ConsoleScope();
             using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
 
-            var exitCode = Program.Main(["packet", "validate-verification", "--execution-unit", "G865", "--format", "json"]);
+            var exitCode = Program.Main(["packet", "validate-verification", "--execution-unit", "G865", "--format", format]);
 
             Assert.Equal(0, exitCode);
-            using var result = JsonDocument.Parse(console.Out.ToString());
+            var rendered = console.Out.ToString();
+            using var result = JsonDocument.Parse(VerificationStructuredJson(rendered, format));
             Assert.Equal("complete", result.RootElement.GetProperty("state").GetString());
             Assert.Equal("not-observed", result.RootElement.GetProperty("execution").GetString());
             Assert.Equal(".intent-cli/issues/G865/packet.yaml", result.RootElement.GetProperty("packet_path").GetString());
@@ -287,6 +290,38 @@ public sealed class ProgramTests
             Assert.Equal(headBefore, RunGit(clone, "rev-parse", "HEAD"));
             Assert.Equal(refsBefore, RunGit(clone, "show-ref", "--head"));
             Assert.Equal(originRefsBefore, RunGit(bare, "show-ref", "--head"));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_PacketValidateVerificationReportsMissingPacketWithoutCreatingHostState(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var repo = tempDirectory.CreateDirectory("repo");
+            RunGit(repo, "init", "--quiet", "--initial-branch=main");
+            var nestedCwd = Directory.CreateDirectory(Path.Combine(repo, "src", "missing")).FullName;
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli")));
+            var before = SnapshotTree(repo);
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+
+            var exitCode = Program.Main(["packet", "validate-verification", "--execution-unit", "G865", "--format", format]);
+
+            Assert.Equal(1, exitCode);
+            var rendered = console.Out.ToString();
+            using var result = JsonDocument.Parse(VerificationStructuredJson(rendered, format));
+            Assert.Equal("unavailable", result.RootElement.GetProperty("state").GetString());
+            Assert.Equal("verification-contract-unavailable", result.RootElement.GetProperty("cause").GetString());
+            Assert.Equal("packet-read-failure", result.RootElement.GetProperty("diagnostics")[0].GetProperty("cause").GetString());
+            Assert.Equal(".intent-cli/issues/G865/packet.yaml", result.RootElement.GetProperty("packet_path").GetString());
+            Assert.Equal(JsonValueKind.Null, result.RootElement.GetProperty("packet_sha256").ValueKind);
+            Assert.Equal(before, SnapshotTree(repo));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli")));
             Assert.Equal(string.Empty, console.Error.ToString());
         }
     }
@@ -576,6 +611,20 @@ public sealed class ProgramTests
         Assert.Equal(0, process.ExitCode);
         Assert.Equal(string.Empty, stderr);
         return stdout.Trim();
+    }
+
+    private static string VerificationStructuredJson(string output, string format)
+    {
+        if (format == "json") return output;
+        const string heading = "## Structured result (same facts as JSON)";
+        var marker = output.IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(marker >= 0, "Markdown output must include its structured result section.");
+        var fenceStart = output.IndexOf("```json\n", marker, StringComparison.Ordinal);
+        Assert.True(fenceStart >= 0, "Markdown output must include the JSON result fence.");
+        var start = fenceStart + "```json\n".Length;
+        var end = output.IndexOf("\n```", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Markdown JSON result fence must close.");
+        return output[start..end];
     }
 
     private static string[] SnapshotTree(string root)

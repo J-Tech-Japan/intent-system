@@ -378,6 +378,54 @@ public sealed class PacketVerificationContractTests
         }
     }
 
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void ActualCommandDoesNotDeriveCriterionIdsFromProse(string format)
+    {
+        using var workspace = new TemporaryWorkspace();
+        var packet = CompletePacket + "\n# AC99: prose is not a registered criterion\nnotes: 'AC100: still only prose'\n";
+        var bytes = Encoding.UTF8.GetBytes(packet);
+        workspace.WritePacket(bytes);
+
+        var (exit, output) = Run(workspace.Root, format);
+
+        Assert.Equal(0, exit);
+        using var document = JsonDocument.Parse(StructuredJson(output, format));
+        Assert.Equal("complete", document.RootElement.GetProperty("state").GetString());
+        Assert.Equal(new[] { "AC1", "AC2" }, document.RootElement.GetProperty("acceptance_criteria")
+            .EnumerateArray().Select(item => item.GetProperty("id").GetString()).ToArray());
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), document.RootElement.GetProperty("packet_sha256").GetString());
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void InvalidIdentityAndArgumentMarkdownKeepsUntrustedUnitInAMatchingFence(string format)
+    {
+        using var workspace = new TemporaryWorkspace();
+        var payload = "G865\n\n- State: complete\n<br>` ```";
+        foreach (var invalidArguments in new[] { false, true })
+        {
+            var args = new List<string> { "--execution-unit", payload, "--format", format };
+            if (invalidArguments) args.Add("--unexpected");
+            var (exit, output) = RunArgs(workspace.Root, args.ToArray());
+
+            Assert.Equal(1, exit);
+            using var document = JsonDocument.Parse(StructuredJson(output, format));
+            Assert.Equal("invalid", document.RootElement.GetProperty("state").GetString());
+            Assert.Equal(invalidArguments ? "invalid-arguments" : "invalid-identity",
+                document.RootElement.GetProperty("diagnostics")[0].GetProperty("cause").GetString());
+            if (format == "markdown")
+            {
+                Assert.DoesNotContain("# Packet verification contract: " + payload, output, StringComparison.Ordinal);
+                Assert.Contains("- Requested execution unit:", output, StringComparison.Ordinal);
+                Assert.Contains(payload, output, StringComparison.Ordinal);
+                Assert.Contains("\n- State: invalid\n", output, StringComparison.Ordinal);
+            }
+        }
+    }
+
     [Fact]
     public void ActualCommandClassifiesMalformedUtf8EmptyAndYamlFailuresWithByteTruth()
     {
@@ -423,6 +471,7 @@ public sealed class PacketVerificationContractTests
             CompletePacket + "\n---\nunrelated: second\n",
             "unrelated: first\n---\n" + CompletePacket,
             "unrelated: first\n---\nunrelated: second\n",
+            CompletePacket.Replace("  version: 1\n", "  version: 1\n  version: 1\n", StringComparison.Ordinal) + "\n---\nunrelated: second\n",
         };
         foreach (var yaml in rows)
         foreach (var format in new[] { "json", "markdown" })
@@ -442,6 +491,24 @@ public sealed class PacketVerificationContractTests
         }
     }
 
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void ActualCommandReportsParseFailureBeforeDuplicateKeySchema(string format)
+    {
+        using var workspace = new TemporaryWorkspace();
+        var packet = CompletePacket.Replace("  version: 1\n", "  version: 1\n  version: 1\n", StringComparison.Ordinal) + "\nbroken: [\n";
+        var bytes = Encoding.UTF8.GetBytes(packet);
+        workspace.WritePacket(bytes);
+
+        var (exit, output) = Run(workspace.Root, format);
+
+        Assert.Equal(1, exit);
+        using var document = JsonDocument.Parse(StructuredJson(output, format));
+        AssertUnavailable(document.RootElement, "packet-unparseable", PacketRelativePath,
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+    }
+
     [Fact]
     public void ActualCommandRejectsParticipatingTagsAliasesAndDuplicateYamlKeys()
     {
@@ -451,14 +518,23 @@ public sealed class PacketVerificationContractTests
             ("tagged-contract-version", CompletePacket.Replace("version: 1", "version: !!str 1", StringComparison.Ordinal), "invalid-schema"),
             ("tagged-actual-criterion", CompletePacket.Replace("- Preserve marker identity", "- !!str Preserve marker identity", StringComparison.Ordinal), "invalid-schema"),
             ("tagged-proof-command", CompletePacket.Replace("command: dotnet test", "command: !!str dotnet test", StringComparison.Ordinal), "invalid-schema"),
+            ("explicit-nonspecific-version-tag", CompletePacket.Replace("version: 1", "version: ! 1", StringComparison.Ordinal), "invalid-schema"),
+            ("explicit-nonspecific-proof-value-tag", CompletePacket.Replace("command: dotnet test", "command: ! dotnet test", StringComparison.Ordinal), "invalid-schema"),
+            ("explicit-nonspecific-unit-tag", CompletePacket.Replace("source_execution_unit: G865", "source_execution_unit: ! G865", StringComparison.Ordinal), "invalid-identity"),
+            ("explicit-nonspecific-criteria-sequence-tag", CompletePacket.Replace("  acceptance_criteria:\n    - Preserve marker identity", "  acceptance_criteria: !\n    - Preserve marker identity", StringComparison.Ordinal), "invalid-schema"),
+            ("alias-contract-scalar", "version_alias: &version 1\n" + CompletePacket.Replace("version: 1", "version: *version", StringComparison.Ordinal), "invalid-schema"),
+            ("alias-registry-id", "criterion_alias: &criterion AC1\n" + CompletePacket.Replace("{id: AC1, criterion_index: 1}", "{id: *criterion, criterion_index: 1}", StringComparison.Ordinal), "invalid-schema"),
+            ("alias-lane-id", "lane_alias: &lane mutation\n" + CompletePacket.Replace("id: mutation, weight: heavy", "id: *lane, weight: heavy", StringComparison.Ordinal), "invalid-schema"),
+            ("alias-affected-lane", "lane_alias: &lane mutation\n" + CompletePacket.Replace("affected_lanes: [mutation, unit]", "affected_lanes: [*lane, unit]", StringComparison.Ordinal), "invalid-schema"),
+            ("alias-proof-criterion-reference", "criterion_alias: &criterion AC1\n" + CompletePacket.Replace("acceptance_criteria: [AC1]", "acceptance_criteria: [*criterion]", StringComparison.Ordinal), "invalid-schema"),
             ("aliased-unit", "unit_alias: &source_unit G865\n" + CompletePacket.Replace("source_execution_unit: G865", "source_execution_unit: *source_unit", StringComparison.Ordinal), "invalid-identity"),
             ("aliased-actual-criterion", CompletePacket.Replace("- Preserve marker identity", "- &actual_text Preserve marker identity", StringComparison.Ordinal)
                 .Replace("- Preserve legacy output", "- *actual_text", StringComparison.Ordinal), "invalid-schema"),
             ("aliased-proof-command", "command_alias: &test_command dotnet test\n" + CompletePacket.Replace("command: dotnet test", "command: *test_command", StringComparison.Ordinal), "invalid-schema"),
-            ("duplicate-root-contract-key", CompletePacket.Replace("verification_contract:\n", "verification_contract:\nverification_contract: {}\n", StringComparison.Ordinal), "invalid-schema"),
-            ("duplicate-root-identity-key", CompletePacket.Replace("implementation_issue_packet:\n", "implementation_issue_packet:\nimplementation_issue_packet: {}\n", StringComparison.Ordinal), "invalid-schema"),
+            ("duplicate-root-contract-key", CompletePacket + "\nverification_contract: {}\n", "invalid-schema"),
+            ("duplicate-root-identity-key", CompletePacket + "\nimplementation_issue_packet: {}\n", "invalid-schema"),
             ("duplicate-source-unit-key", CompletePacket.Replace("  source_execution_unit: G865\n", "  source_execution_unit: G865\n  source_execution_unit: G865\n", StringComparison.Ordinal), "invalid-schema"),
-            ("duplicate-actual-criteria-key", CompletePacket.Replace("  acceptance_criteria:\n", "  acceptance_criteria:\n  acceptance_criteria: []\n", StringComparison.Ordinal), "invalid-schema"),
+            ("duplicate-actual-criteria-key", CompletePacket.Replace("  acceptance_criteria:\n    - Preserve marker identity\n    - Preserve legacy output\n", "  acceptance_criteria: [Preserve marker identity]\n  acceptance_criteria: [Preserve legacy output]\n", StringComparison.Ordinal), "invalid-schema"),
             ("duplicate-contract-version-key", CompletePacket.Replace("  version: 1\n", "  version: 1\n  version: 1\n", StringComparison.Ordinal), "invalid-schema"),
             ("duplicate-registry-id-key", CompletePacket.Replace("{id: AC1, criterion_index: 1}", "{id: AC1, id: AC1, criterion_index: 1}", StringComparison.Ordinal), "invalid-schema"),
             ("duplicate-lane-weight-key", CompletePacket.Replace("{id: mutation, weight: heavy}", "{id: mutation, weight: heavy, weight: heavy}", StringComparison.Ordinal), "invalid-schema"),
@@ -475,7 +551,7 @@ public sealed class PacketVerificationContractTests
             Assert.True(exit == 1, $"{name}/{format} should refuse.\n{output}");
             using var document = JsonDocument.Parse(StructuredJson(output, format));
             var result = document.RootElement;
-            Assert.Equal("invalid", result.GetProperty("state").GetString());
+            Assert.True(result.GetProperty("state").GetString() == "invalid", $"{name}/{format} expected invalid.\n{output}");
             Assert.Equal(expectedDiagnostic, result.GetProperty("diagnostics")[0].GetProperty("cause").GetString());
             Assert.Empty(result.GetProperty("acceptance_criteria").EnumerateArray());
             Assert.Empty(result.GetProperty("lanes").EnumerateArray());
@@ -872,6 +948,43 @@ public sealed class PacketVerificationContractTests
     [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
+    public void ActualCommandRefusesSearchOnlyUnitDirectoryBeforeReadingPacket(string format)
+    {
+        if (OperatingSystem.IsWindows()) throw Xunit.Sdk.SkipException.ForSkip("The reached directory permission fixture requires Unix file modes.");
+        using var workspace = new TemporaryWorkspace();
+        var bytes = Encoding.UTF8.GetBytes(CompletePacket);
+        workspace.WritePacket(bytes);
+        var packetPath = Path.Combine(workspace.Root, ".intent-cli", "issues", Unit, "packet.yaml");
+        var unitDirectory = Path.GetDirectoryName(packetPath)!;
+        var original = File.GetUnixFileMode(unitDirectory);
+        File.SetUnixFileMode(unitDirectory, UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+        try
+        {
+            if (!File.ReadAllBytes(packetPath).SequenceEqual(bytes))
+                throw new InvalidOperationException("The packet leaf should remain readable when only directory read bits are removed.");
+            var denied = Record.Exception(() =>
+            {
+                using var entries = Directory.EnumerateFileSystemEntries(unitDirectory).GetEnumerator();
+                _ = entries.MoveNext();
+            });
+            if (denied is not UnauthorizedAccessException)
+                throw Xunit.Sdk.SkipException.ForSkip("This test identity can still enumerate a search-only unit directory.");
+
+            var (exit, output) = Run(workspace.Root, format);
+            Assert.Equal(1, exit);
+            using var document = JsonDocument.Parse(StructuredJson(output, format));
+            AssertUnavailable(document.RootElement, "packet-read-failure", PacketRelativePath, null);
+            Assert.Contains($".intent-cli/issues/{Unit}: read-error", document.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(unitDirectory, original);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
     public void ActualCommandRejectsFifoLeafBeforeOpeningItWhereSupported(string format)
     {
         if (OperatingSystem.IsWindows()) throw Xunit.Sdk.SkipException.ForSkip("FIFO creation is Unix-specific.");
@@ -924,12 +1037,21 @@ public sealed class PacketVerificationContractTests
             new("contract-missing-proofs", MissingProofsField()),
             new("contract-version-bool", Replace("version: 1", "version: true")),
             new("contract-version-invalid", Replace("version: 1", "version: 1.0")),
+            new("contract-version-explicit-bang", Replace("version: 1", "version: ! 1")),
+            new("contract-map-explicit-bang", Replace("verification_contract:\n", "verification_contract: !\n")),
+            new("contract-key-explicit-bang", Replace("verification_contract:", "! verification_contract:")),
+            new("root-map-explicit-bang", "!\n" + CompletePacket),
             new("registry-item-null", Replace("- {id: AC1, criterion_index: 1}", "- null")),
             new("registry-item-scalar", Replace("- {id: AC1, criterion_index: 1}", "- AC1")),
             new("registry-item-sequence", Replace("- {id: AC1, criterion_index: 1}", "- [AC1, 1]")),
             new("registry-missing-id", Replace("{id: AC1, criterion_index: 1}", "{criterion_index: 1}")),
             new("registry-missing-index", Replace("{id: AC1, criterion_index: 1}", "{id: AC1}")),
             new("registry-unknown-key", Replace("{id: AC1, criterion_index: 1}", "{id: AC1, criterion_index: 1, extra: no}")),
+            new("registry-item-explicit-bang", Replace("- {id: AC1, criterion_index: 1}", "- ! {id: AC1, criterion_index: 1}")),
+            new("registry-id-explicit-bang", Replace("id: AC1", "id: ! AC1")),
+            new("registry-id-null", Replace("id: AC1", "id: null")),
+            new("registry-id-map", Replace("id: AC1", "id: {value: AC1}")),
+            new("registry-id-sequence", Replace("id: AC1", "id: [AC1]")),
             new("registry-empty-id", Replace("id: AC1", "id: ''")),
             new("registry-whitespace-id", Replace("id: AC1", "id: '  '")),
             new("registry-case-alias-id", Replace("id: AC2, criterion_index: 2", "id: ac1, criterion_index: 2")
@@ -945,6 +1067,9 @@ public sealed class PacketVerificationContractTests
             new("registry-index-missing-actual-binding", Replace("    - {id: AC2, criterion_index: 2}\n", string.Empty)),
             new("actual-criteria-scalar", Replace("acceptance_criteria:\n    - Preserve marker identity\n    - Preserve legacy output", "acceptance_criteria: Preserve marker identity")),
             new("actual-criteria-map-item", Replace("- Preserve marker identity", "- {text: Preserve marker identity}")),
+            new("actual-criteria-key-explicit-bang", Replace("  acceptance_criteria:\n    - Preserve marker identity", "  ! acceptance_criteria:\n    - Preserve marker identity")),
+            new("actual-criteria-sequence-explicit-bang", Replace("  acceptance_criteria:\n    - Preserve marker identity", "  acceptance_criteria: !\n    - Preserve marker identity")),
+            new("actual-criteria-item-explicit-bang", Replace("- Preserve marker identity", "- ! Preserve marker identity")),
             new("actual-criteria-empty", Replace("- Preserve marker identity", "- ''")),
             new("lane-map-null", Replace("- {id: mutation, weight: heavy}", "- null")),
             new("lane-item-scalar", Replace("- {id: mutation, weight: heavy}", "- mutation")),
@@ -954,11 +1079,20 @@ public sealed class PacketVerificationContractTests
             new("lane-missing-id", Replace("{id: mutation, weight: heavy}", "{weight: heavy}")),
             new("lane-empty-id", Replace("id: mutation, weight: heavy", "id: '', weight: heavy")),
             new("lane-whitespace-id", Replace("id: mutation, weight: heavy", "id: '  ', weight: heavy")),
+            new("lane-id-null", Replace("id: mutation, weight: heavy", "id: null, weight: heavy")),
+            new("lane-id-map", Replace("id: mutation, weight: heavy", "id: {value: mutation}, weight: heavy")),
+            new("lane-id-sequence", Replace("id: mutation, weight: heavy", "id: [mutation], weight: heavy")),
             new("lane-duplicate-id-key", Replace("{id: mutation, weight: heavy}", "{id: mutation, id: mutation, weight: heavy}")),
             new("lane-case-alias-id", Replace("id: unit, weight: ordinary", "id: Mutation, weight: ordinary")
                 .Replace("affected_lanes: [mutation, unit]", "affected_lanes: [mutation, Mutation]", StringComparison.Ordinal),
                 DetailContains: "lane IDs must be unique canonical identifiers"),
             new("lane-invalid-weight", Replace("weight: heavy", "weight: heavyweight")),
+            new("lane-weight-null", Replace("weight: heavy", "weight: null")),
+            new("lane-weight-map", Replace("weight: heavy", "weight: {kind: heavy}")),
+            new("lane-weight-sequence", Replace("weight: heavy", "weight: [heavy]")),
+            new("lane-weight-explicit-bang", Replace("weight: heavy", "weight: ! heavy")),
+            new("lane-entry-explicit-bang", Replace("- {id: mutation, weight: heavy}", "- ! {id: mutation, weight: heavy}")),
+            new("lane-id-explicit-bang", Replace("id: mutation, weight: heavy", "id: ! mutation, weight: heavy")),
             new("affected-empty", Replace("affected_lanes: [mutation, unit]", "affected_lanes: []")),
             new("affected-null", Replace("affected_lanes: [mutation, unit]", "affected_lanes: null")),
             new("affected-map", Replace("affected_lanes: [mutation, unit]", "affected_lanes: {lane: mutation}")),
@@ -972,6 +1106,7 @@ public sealed class PacketVerificationContractTests
                 .Replace("evidence: local-required", "evidence: hosted-required", StringComparison.Ordinal)),
             new("affected-unknown", Replace("affected_lanes: [mutation, unit]", "affected_lanes: [missing]")),
             new("affected-duplicate-key", Replace("  affected_lanes: [mutation, unit]\n", "  affected_lanes: [mutation, unit]\n  affected_lanes: [mutation, unit]\n")),
+            new("affected-explicit-bang", Replace("affected_lanes: [mutation, unit]", "affected_lanes: ! [mutation, unit]")),
             new("proof-item-null", Replace("    - id: P1\n      acceptance_criteria: [AC1]\n      lane: mutation\n      command: npm run test:mutation\n      evidence: local-required", "    - null")),
             new("proof-item-scalar", Replace("    - id: P1\n      acceptance_criteria: [AC1]\n      lane: mutation\n      command: npm run test:mutation\n      evidence: local-required", "    - P1")),
             new("proof-item-sequence", Replace("    - id: P1\n      acceptance_criteria: [AC1]\n      lane: mutation\n      command: npm run test:mutation\n      evidence: local-required", "    - [P1, AC1]")),
@@ -987,7 +1122,18 @@ public sealed class PacketVerificationContractTests
             new("proof-case-alias-id", Replace("id: P2", "id: p1")),
             new("proof-duplicate-id-key", Replace("    - id: P1\n", "    - id: P1\n      id: P1\n")),
             new("proof-empty-command", Replace("command: dotnet test", "command: '  '")),
+            new("proof-command-explicit-bang", Replace("command: dotnet test", "command: ! dotnet test")),
+            new("proof-entry-explicit-bang", Replace("    - id: P1", "    - ! id: P1")),
+            new("proof-reference-explicit-bang", Replace("acceptance_criteria: [AC1]", "acceptance_criteria: ! [AC1]")),
+            new("proof-id-explicit-bang", Replace("id: P1", "id: ! P1")),
+            new("proof-id-null", Replace("id: P1", "id: null")),
+            new("proof-id-map", Replace("id: P1", "id: {value: P1}")),
+            new("proof-id-sequence", Replace("id: P1", "id: [P1]")),
             new("proof-empty-evidence", Replace("evidence: hosted-required", "evidence: ' '")),
+            new("proof-evidence-null", Replace("evidence: hosted-required", "evidence: null")),
+            new("proof-evidence-map", Replace("evidence: hosted-required", "evidence: {kind: hosted-required}")),
+            new("proof-evidence-sequence", Replace("evidence: hosted-required", "evidence: [hosted-required]")),
+            new("proof-evidence-explicit-bang", Replace("evidence: hosted-required", "evidence: ! hosted-required")),
             new("proof-unknown-evidence", Replace("evidence: hosted-required", "evidence: passed")),
             new("proof-unknown-ac", Replace("acceptance_criteria: [AC2]", "acceptance_criteria: [AC9]")),
             new("proof-case-mismatched-ac", Replace("acceptance_criteria: [AC2]", "acceptance_criteria: [ac2]")),
@@ -999,6 +1145,10 @@ public sealed class PacketVerificationContractTests
             new("proof-ac-member-map", Replace("acceptance_criteria: [AC2]", "acceptance_criteria: [{id: AC2}]")),
             new("proof-unregistered-lane", Replace("lane: unit", "lane: unknown")),
             new("proof-lane-case-mismatch", Replace("lane: unit", "lane: Unit")),
+            new("proof-lane-null", Replace("lane: unit", "lane: null")),
+            new("proof-lane-map", Replace("lane: unit", "lane: {id: unit}")),
+            new("proof-lane-sequence", Replace("lane: unit", "lane: [unit]")),
+            new("proof-lane-explicit-bang", Replace("lane: unit", "lane: ! unit")),
             new("proof-duplicate-lane-key", Replace("      lane: mutation\n", "      lane: mutation\n      lane: mutation\n")),
             new("proof-unaffected-lane", Replace("affected_lanes: [mutation, unit]", "affected_lanes: [mutation]")),
             new("nested-contract-only", ReplaceContract(string.Empty).Replace(
@@ -1010,6 +1160,11 @@ public sealed class PacketVerificationContractTests
             new("unsupported-evidence-pointer", Replace("  version: 1\n", "  version: 1\n  evidence_pointer: .artifacts/proof\n")),
             new("unsupported-authority", Replace("  version: 1\n", "  version: 1\n  authority: approved\n")),
             new("duplicate-contract-key", Replace("  version: 1\n", "  version: 1\n  version: 1\n")),
+            new("unit-explicit-bang", Replace("source_execution_unit: G865", "source_execution_unit: ! G865"), "invalid-identity"),
+            new("unit-key-explicit-bang", Replace("source_execution_unit:", "! source_execution_unit:"), "invalid-identity"),
+            new("criteria-key-explicit-bang", Replace("  acceptance_criteria:\n    - Preserve marker identity", "  ! acceptance_criteria:\n    - Preserve marker identity")),
+            new("identity-map-explicit-bang", Replace("implementation_issue_packet:\n", "implementation_issue_packet: !\n"), "invalid-identity"),
+            new("acceptance-sequence-tag-invalid-schema", Replace("  acceptance_criteria:\n    - Preserve marker identity", "  acceptance_criteria: !!str\n    - Preserve marker identity")),
         ];
 
         string MissingProofsField()
