@@ -866,6 +866,54 @@ source を検証に利用します。`unit status` も pinned local ruling sourc
 publication を確認せず、gate にも使いません。queue/worker decision、`issue create`、`issue publish-reviewed`、他の publish や sync-body route
 はこの integration の対象外です。source #1867 と parent #1857 は open のままです。
 
+### packet verification contract（G865 — preview-through-1.x）
+
+`intent-cli packet validate-verification --execution-unit G123 --format json|markdown`
+は `.intent-cli/issues/G123/packet.yaml` だけを読みます。nested checkout から
+`config.toml` なしで実行できます。Git、command、test、provider を実行せず、evidence、publication、authority
+も検証しません。`complete` は宣言された criterion と lane の構造が覆われた意味だけです。未充足は
+`incomplete`、参加 schema の不正は `invalid`、読取不能または上限超過は `unavailable` です。execution は常に
+`not-observed` です。この任意の report は gate ではありません。
+
+任意の root-level `verification_contract` は、ID を実際の順序付き acceptance criteria に結び付けます。
+field を省略すると `not-declared` です。存在して空または null の contract は `invalid` です。これは G863 の
+従来の source declaration とは別です。形は次のとおりです。
+
+```yaml
+implementation_issue_packet:
+  source_execution_unit: G123
+  acceptance_criteria:
+    - Preserve marker identity
+    - Preserve legacy output
+verification_contract:
+  version: 1
+  acceptance_criteria:
+    - {id: AC1, criterion_index: 1}
+    - {id: AC2, criterion_index: 2}
+  lanes:
+    - {id: mutation, weight: heavy}
+    - {id: unit, weight: ordinary}
+  affected_lanes: [mutation, unit]
+  proofs:
+    - {id: P1, acceptance_criteria: [AC1], lane: mutation, command: "npm run test:mutation", evidence: local-required}
+    - {id: P2, acceptance_criteria: [AC2], lane: unit, command: "dotnet test", evidence: hosted-required}
+```
+
+contract の key は `version`、`acceptance_criteria`、`lanes`、`affected_lanes`、`proofs` だけです。
+criterion、lane、proof ID は各 namespace 内で一意で、reference は大文字小文字を区別する exact ID です。
+weight は `ordinary` または `heavy`、evidence は要求を表す `local-required` または
+`hosted-required` です。各 actual criterion に registry と proof が必要です。各 affected lane に proof が必要で、
+affected な heavy lane はさらに local-required proof を必要とします。同じ lane に local と hosted の両方を
+要求できます。proof の空配列は有効ですが incomplete です。deferral、evidence pointer、authority claim、未知の
+contract key は未対応です。
+
+上限は包含です。actual criteria と registry は各128件、lane 64件、proof 256件、ID は
+`[A-Za-z][A-Za-z0-9_-]{0,63}`、criterion と command は UTF-16 code unit で 16,384、packet は 1 MiB、YAML collection depth は 32 です。
+schema 件数の超過は invalid、byte/depth 超過は unavailable です。SHA-256 は BOM を含む実際に読んだ bytes に対する値で、zero-byte または
+事前のサイズ拒否には hash がありません。別途、G863 source declaration が absent/empty の場合は既存動作を保ちます。この任意の
+report は source #1866 の未実装である evidence binding、deferral、design prompt、worker enforcement ではありません。
+#1866 と関連する #1867/#1857 は open のままです。
+
 ### 貼り付け evidence gate（G785）
 
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`

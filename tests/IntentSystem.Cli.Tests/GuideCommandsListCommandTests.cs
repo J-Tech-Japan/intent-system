@@ -80,6 +80,64 @@ public sealed class GuideCommandsListCommandTests
     }
 
     [Fact]
+    public void VerificationValidatorIsReachableFromAllThreeGuideRoutesInBothFormats()
+    {
+        const string command = "intent-cli packet validate-verification --execution-unit <unit> --format json";
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var catalogWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "commands", "list", "--format", format], CreateContext(), catalogWriter));
+            var catalogText = catalogWriter.ToString();
+            string packetPurpose;
+            if (format == "json")
+            {
+                using var catalog = JsonDocument.Parse(catalogText);
+                packetPurpose = catalog.RootElement.GetProperty("groups").EnumerateArray()
+                    .Single(group => group.GetProperty("name").GetString() == "packet")
+                    .GetProperty("purpose").GetString()!;
+            }
+            else packetPurpose = catalogText;
+            Assert.Contains("packet validate-verification", packetPurpose, StringComparison.Ordinal);
+            Assert.Contains("structural coverage", packetPurpose, StringComparison.Ordinal);
+            Assert.Contains("never runs commands", packetPurpose, StringComparison.Ordinal);
+            Assert.Contains("not a gate", packetPurpose, StringComparison.Ordinal);
+
+            using var soloWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", format], CreateContext(), soloWriter));
+            var soloText = soloWriter.ToString();
+            string soloInstruction;
+            if (format == "json")
+            {
+                using var solo = JsonDocument.Parse(soloText);
+                var step = solo.RootElement.GetProperty("loop").EnumerateArray()
+                    .Single(item => item.GetProperty("id").GetString() == "packet-draft-and-validate");
+                soloInstruction = step.GetProperty("instruction").GetString()!;
+                Assert.Contains(step.GetProperty("commands").EnumerateArray(), item => item.GetProperty("command").GetString() == command);
+            }
+            else soloInstruction = soloText;
+            Assert.Contains("packet validate-verification", soloInstruction, StringComparison.Ordinal);
+            Assert.Contains("structural coverage", soloInstruction, StringComparison.Ordinal);
+            Assert.Contains("never runs commands", soloInstruction, StringComparison.Ordinal);
+            Assert.Contains("does not gate later steps", soloInstruction, StringComparison.Ordinal);
+
+            using var publishWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "workflow", "task", "issue-publish", "--format", format], CreateContext(), publishWriter));
+            var publishText = publishWriter.ToString();
+            string publishGuidance;
+            if (format == "json")
+            {
+                using var publish = JsonDocument.Parse(publishText);
+                publishGuidance = string.Join(" ", publish.RootElement.GetProperty("invariants").EnumerateArray().Select(item => item.GetString()));
+            }
+            else publishGuidance = publishText;
+            Assert.Contains(command, publishGuidance, StringComparison.Ordinal);
+            Assert.Contains("structural coverage", publishGuidance, StringComparison.Ordinal);
+            Assert.Contains("never runs commands", publishGuidance, StringComparison.Ordinal);
+            Assert.Contains("not a gate", publishGuidance, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void SoloConductorGuideRouteAndCommandCatalogExposeTheRulingReadFlow()
     {
         using var catalogWriter = new StringWriter();
