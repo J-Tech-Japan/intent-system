@@ -1087,6 +1087,8 @@ src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingArtifactStore	1
 src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingDiagnostic	4
 src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingEvaluation	1
 src/IntentSystem.Cli/Commands/PacketValidateSourcesCommand.cs	RulingArtifact	4
+src/IntentSystem.Cli/Commands/PacketValidateVerificationCommand.cs	RulingArtifact	2
+src/IntentSystem.Cli/Commands/PacketVerificationContract.cs	RulingArtifact	1
 src/IntentSystem.Cli/Commands/PrClosingReferenceAnalyzer.cs	Classifications	1
 src/IntentSystem.Cli/Commands/PromptAdjudication.cs	NotifyPromptAudit	1
 src/IntentSystem.Cli/Commands/PublishDurableArtifactAnalyzer.cs	IssuePublishFlowCommand	4

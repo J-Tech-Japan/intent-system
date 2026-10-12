@@ -5087,3 +5087,25 @@ operator, verify publication, or contribute to a gate. Worker decisions, queue
 operations, `issue create`, `issue publish-reviewed`, sync-body, and other
 consumers remain outside the source gate. Source #1867 and parent #1857 remain
 open for broader follow-up work.
+
+## Packet verification map (G865)
+
+The optional root `verification_contract` records `version`, an
+`acceptance_criteria` registry (`id` plus 1-based `criterion_index`), registered
+`lanes` (`id` and `ordinary|heavy` weight), explicit `affected_lanes`, and
+`proofs` (`id`, exact criterion IDs, lane, literal command, and
+`local-required|hosted-required`). For example, a proof may say
+`{id: P1, acceptance_criteria: [AC1], lane: unit, command: "dotnet test", evidence: hosted-required}`.
+The validator preserves actual criterion text and checks structural coverage;
+affected heavy lanes additionally require a local-required proof.
+
+`intent-cli packet validate-verification --execution-unit <unit> --format json|markdown`
+is a config-independent, packet-local read. Bounds are 128 criteria, 64 lanes,
+256 proofs, 64-character IDs, 16,384 UTF-16 units per criterion/command, 1 MiB
+of packet bytes, and YAML collection depth 32. Complete means declared structure
+only; execution stays `not-observed`. It never runs the listed command, checks
+evidence, establishes publication or authority, or gates a later step. Unknown
+deferral/evidence-pointer/authority fields are unsupported. Evidence binding,
+deferral, design-prompt integration, and worker enforcement remain unimplemented
+under source #1866; #1866, #1867, and #1857 remain open. See the
+[packet command reference](08-command-reference.md) for the full schema example.

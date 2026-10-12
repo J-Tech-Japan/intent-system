@@ -1054,6 +1054,62 @@ decisions, `issue create`, `issue publish-reviewed`, and other publish or
 sync-body routes remain outside this integration; source #1867 and parent #1857
 remain open.
 
+### Packet verification contract (G865 — preview-through-1.x)
+
+`intent-cli packet validate-verification --execution-unit G123 --format json|markdown`
+reads only `.intent-cli/issues/G123/packet.yaml`. It is available from a nested
+checkout without `config.toml`; it does not run Git, commands, tests, or providers,
+and does not verify evidence, publication, or authority. `complete` means only
+that the declared structure covers its declared criteria and lanes. Missing
+coverage is `incomplete`; malformed participating schema is `invalid`; unreadable
+or over-limit input is `unavailable`. The result always says execution is
+`not-observed`. This optional report is not a gate.
+
+The optional root-level `verification_contract` binds IDs to the actual ordered
+criterion text. Omitting the field returns `not-declared`; a present empty or
+null contract is `invalid`. This is separate from G863's legacy source
+declarations. Its exact shape is:
+
+```yaml
+implementation_issue_packet:
+  source_execution_unit: G123
+  acceptance_criteria:
+    - Preserve marker identity
+    - Preserve legacy output
+verification_contract:
+  version: 1
+  acceptance_criteria:
+    - {id: AC1, criterion_index: 1}
+    - {id: AC2, criterion_index: 2}
+  lanes:
+    - {id: mutation, weight: heavy}
+    - {id: unit, weight: ordinary}
+  affected_lanes: [mutation, unit]
+  proofs:
+    - {id: P1, acceptance_criteria: [AC1], lane: mutation, command: "npm run test:mutation", evidence: local-required}
+    - {id: P2, acceptance_criteria: [AC2], lane: unit, command: "dotnet test", evidence: hosted-required}
+```
+
+The contract has exactly `version`, `acceptance_criteria`, `lanes`,
+`affected_lanes`, and `proofs`. Criterion, lane, and proof IDs are unique within
+their own namespaces and references are exact, case-sensitive IDs. A lane weight
+is `ordinary` or `heavy`; evidence is `local-required` or `hosted-required` and
+describes a requirement, not a result. Every actual criterion needs one registry
+entry and proof; every affected lane needs proof; an affected heavy lane also
+needs a local-required proof. A lane can require both local and hosted proofs.
+An empty proof list is valid but incomplete. Deferrals, evidence pointers,
+authority claims, and other unknown contract keys are unsupported.
+
+Limits are inclusive: 128 actual criteria and registry entries; 64 lanes; 256
+proofs; IDs match `[A-Za-z][A-Za-z0-9_-]{0,63}`; 16,384 UTF-16 code units per
+criterion or command; 1 MiB of packet bytes; and YAML collection depth 32. A one-over schema count is
+invalid; byte/depth excess is unavailable. The SHA-256 is over the exact bytes
+read, including a BOM; zero-byte and pre-read size refusals have no hash.
+Separately, absent or explicit empty G863 source declarations retain existing
+packet behavior. This
+optional report is not the deferred evidence-binding, deferral, design-prompt, or
+worker-enforcement work in source #1866; #1866 and related #1867/#1857 remain open.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by

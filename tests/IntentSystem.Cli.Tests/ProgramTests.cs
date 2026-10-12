@@ -159,6 +159,174 @@ public sealed class ProgramTests
     }
 
     [Fact]
+    public void Main_PacketValidateVerification_UsesNestedRepoRootWithoutConfig()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var repoRoot = tempDirectory.CreateDirectory("repo");
+            tempDirectory.CreateFile(Path.Combine("repo", ".intent-cli", "issues", "G865", "packet.yaml"), """
+                implementation_issue_packet:
+                  source_execution_unit: G865
+                  acceptance_criteria:
+                    - Preserve output
+                verification_contract:
+                  version: 1
+                  acceptance_criteria:
+                    - {id: AC1, criterion_index: 1}
+                  lanes:
+                    - {id: unit, weight: ordinary}
+                  affected_lanes: [unit]
+                  proofs:
+                    - id: P1
+                      acceptance_criteria: [AC1]
+                      lane: unit
+                      command: dotnet test
+                      evidence: hosted-required
+                """);
+            var nestedCwd = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            Assert.False(File.Exists(Path.Combine(repoRoot, ".intent-cli", "config.toml")));
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+
+            var exitCode = Program.Main(["packet", "validate-verification", "--execution-unit", "G865", "--format", "json"]);
+
+            Assert.Equal(0, exitCode);
+            using var result = JsonDocument.Parse(console.Out.ToString());
+            Assert.Equal("complete", result.RootElement.GetProperty("state").GetString());
+            Assert.Equal(".intent-cli/issues/G865/packet.yaml", result.RootElement.GetProperty("packet_path").GetString());
+            Assert.Equal("not-observed", result.RootElement.GetProperty("execution").GetString());
+            Assert.Contains("Structural coverage only", result.RootElement.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(repoRoot, ".intent-cli", "rulings")));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Fact]
+    public void Main_PacketValidateVerificationHelpWorksWithoutHostConfig()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var childCwd = tempDirectory.CreateDirectory("child");
+            Assert.False(Directory.Exists(Path.Combine(childCwd, ".intent-cli")));
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(childCwd);
+
+            var exitCode = Program.Main(["packet", "validate-verification", "--help"]);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Usage: intent-cli packet validate-verification", console.Out.ToString(), StringComparison.Ordinal);
+            Assert.Contains("never runs commands", console.Out.ToString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(childCwd, ".intent-cli")));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_PacketValidateVerificationIsReadOnlyFromFreshCloneWithoutConfigOrReachableOrigin(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var bare = tempDirectory.CreateDirectory("origin.git");
+            var writerRepo = Path.Combine(tempDirectory.CreateDirectory("repos"), "writer");
+            var clone = Path.Combine(tempDirectory.CreateDirectory("repos"), "fresh-clone");
+            RunGit(tempDirectory.CreateDirectory("."), "init", "--bare", "--quiet", "--initial-branch=main", bare);
+            Directory.CreateDirectory(writerRepo);
+            RunGit(writerRepo, "init", "--quiet", "--initial-branch=main");
+            RunGit(writerRepo, "config", "user.name", "intent-cli-g865-test");
+            RunGit(writerRepo, "config", "user.email", "intent-cli-g865@example.invalid");
+            RunGit(writerRepo, "remote", "add", "origin", bare);
+
+            var packet = """
+                implementation_issue_packet:
+                  source_execution_unit: G865
+                  acceptance_criteria: ["Preserve the exact packet bytes"]
+                verification_contract:
+                  version: 1
+                  acceptance_criteria: [{id: AC1, criterion_index: 1}]
+                  lanes: [{id: unit, weight: ordinary}]
+                  affected_lanes: [unit]
+                  proofs: [{id: P1, acceptance_criteria: [AC1], lane: unit, command: "dotnet test", evidence: hosted-required}]
+                """;
+            var packetRelativePath = Path.Combine(".intent-cli", "issues", "G865", "packet.yaml");
+            var packetPath = Path.Combine(writerRepo, packetRelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+            var packetBytes = Encoding.UTF8.GetBytes(packet);
+            File.WriteAllBytes(packetPath, packetBytes);
+            File.WriteAllText(Path.Combine(writerRepo, "README.md"), "G865 local verification fixture\n");
+            RunGit(writerRepo, "add", "--", packetRelativePath, "README.md");
+            RunGit(writerRepo, "commit", "--quiet", "-m", "publish packet verification fixture");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+            RunGit(tempDirectory.CreateDirectory("."), "clone", "--quiet", bare, clone);
+            Assert.False(File.Exists(Path.Combine(clone, ".intent-cli", "config.toml")));
+            Assert.Equal(packetBytes, File.ReadAllBytes(Path.Combine(clone, packetRelativePath)));
+
+            var nestedCwd = Directory.CreateDirectory(Path.Combine(clone, "src", "feature")).FullName;
+            RunGit(clone, "remote", "set-url", "origin", Path.Combine(tempDirectory.CreateDirectory("."), "unreachable-origin.git"));
+            var filesBefore = SnapshotTree(clone);
+            var indexBefore = File.ReadAllBytes(Path.Combine(clone, ".git", "index"));
+            var headBefore = RunGit(clone, "rev-parse", "HEAD");
+            var refsBefore = RunGit(clone, "show-ref", "--head");
+            var originRefsBefore = RunGit(bare, "show-ref", "--head");
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+
+            var exitCode = Program.Main(["packet", "validate-verification", "--execution-unit", "G865", "--format", format]);
+
+            Assert.Equal(0, exitCode);
+            var rendered = console.Out.ToString();
+            using var result = JsonDocument.Parse(VerificationStructuredJson(rendered, format));
+            Assert.Equal("complete", result.RootElement.GetProperty("state").GetString());
+            Assert.Equal("not-observed", result.RootElement.GetProperty("execution").GetString());
+            Assert.Equal(".intent-cli/issues/G865/packet.yaml", result.RootElement.GetProperty("packet_path").GetString());
+            Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant(),
+                result.RootElement.GetProperty("packet_sha256").GetString());
+            Assert.Equal(filesBefore, SnapshotTree(clone));
+            Assert.Equal(indexBefore, File.ReadAllBytes(Path.Combine(clone, ".git", "index")));
+            Assert.Equal(headBefore, RunGit(clone, "rev-parse", "HEAD"));
+            Assert.Equal(refsBefore, RunGit(clone, "show-ref", "--head"));
+            Assert.Equal(originRefsBefore, RunGit(bare, "show-ref", "--head"));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_PacketValidateVerificationReportsMissingPacketWithoutCreatingHostState(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var repo = tempDirectory.CreateDirectory("repo");
+            RunGit(repo, "init", "--quiet", "--initial-branch=main");
+            var nestedCwd = Directory.CreateDirectory(Path.Combine(repo, "src", "missing")).FullName;
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli")));
+            var before = SnapshotTree(repo);
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+
+            var exitCode = Program.Main(["packet", "validate-verification", "--execution-unit", "G865", "--format", format]);
+
+            Assert.Equal(1, exitCode);
+            var rendered = console.Out.ToString();
+            using var result = JsonDocument.Parse(VerificationStructuredJson(rendered, format));
+            Assert.Equal("unavailable", result.RootElement.GetProperty("state").GetString());
+            Assert.Equal("verification-contract-unavailable", result.RootElement.GetProperty("cause").GetString());
+            Assert.Equal("packet-read-failure", result.RootElement.GetProperty("diagnostics")[0].GetProperty("cause").GetString());
+            Assert.Equal(".intent-cli/issues/G865/packet.yaml", result.RootElement.GetProperty("packet_path").GetString());
+            Assert.Equal(JsonValueKind.Null, result.RootElement.GetProperty("packet_sha256").ValueKind);
+            Assert.Equal(before, SnapshotTree(repo));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli")));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Fact]
     public void Main_PacketValidateSources_RequiresPlainPushAndWorksFromFreshCloneWithoutConfig()
     {
         lock (ProcessStateLock)
@@ -443,6 +611,51 @@ public sealed class ProgramTests
         Assert.Equal(0, process.ExitCode);
         Assert.Equal(string.Empty, stderr);
         return stdout.Trim();
+    }
+
+    private static string VerificationStructuredJson(string output, string format)
+    {
+        if (format == "json") return output;
+        const string heading = "## Structured result (same facts as JSON)";
+        var marker = output.IndexOf(heading, StringComparison.Ordinal);
+        Assert.True(marker >= 0, "Markdown output must include its structured result section.");
+        var fenceStart = output.IndexOf("```json\n", marker, StringComparison.Ordinal);
+        Assert.True(fenceStart >= 0, "Markdown output must include the JSON result fence.");
+        var start = fenceStart + "```json\n".Length;
+        var end = output.IndexOf("\n```", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Markdown JSON result fence must close.");
+        return output[start..end];
+    }
+
+    private static string[] SnapshotTree(string root)
+    {
+        var entries = new List<string>();
+        void Visit(string directory)
+        {
+            foreach (var path in Directory.EnumerateFileSystemEntries(directory).Order(StringComparer.Ordinal))
+            {
+                var relative = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    var info = (attributes & FileAttributes.Directory) != 0 ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path);
+                    entries.Add($"symlink:{relative}:{info.LinkTarget}");
+                }
+                else if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    entries.Add($"directory:{relative}");
+                    Visit(path);
+                }
+                else
+                {
+                    var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+                    entries.Add($"file:{relative}:{hash}");
+                }
+            }
+        }
+
+        Visit(root);
+        return entries.Order(StringComparer.Ordinal).ToArray();
     }
 
     private static void InitializeReadOnlyMetadataRef(string repoRoot)

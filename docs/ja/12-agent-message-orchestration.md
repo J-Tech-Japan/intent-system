@@ -4377,3 +4377,21 @@ source の検証を行うのは packet validation、cross-runtime design review�
 `unit status` は pinned local ruling source を read-only observation として別途表示しますが、operator を認証せず、publication を確認せず、
 gate にも使いません。worker decision、queue、`issue create`、`issue publish-reviewed`、sync-body などは source gate の対象外です。
 source #1867 と parent #1857 は引き続き open です。詳細は [packet command reference](08-command-reference.md) を参照してください。
+
+## packet verification map（G865）
+
+任意の root `verification_contract` は `version`、1-based `criterion_index` と `id` を持つ
+`acceptance_criteria` registry、`ordinary|heavy` weight の `lanes`、明示的な `affected_lanes`、および
+`proofs`（ID、exact criterion ID、lane、文字列 command、`local-required|hosted-required`）を記録します。
+例: `{id: P1, acceptance_criteria: [AC1], lane: unit, command: "dotnet test", evidence: hosted-required}`。
+validator は実際の criterion text を保持し、構造 coverage を検査します。affected heavy lane は追加で
+local-required proof を必要とします。
+
+`intent-cli packet validate-verification --execution-unit <unit> --format json|markdown` は config-independent な
+packet-local read です。上限は criteria 128、lane 64、proof 256、ID 64 文字、criterion/command は UTF-16
+16,384 code unit、packet 1 MiB、YAML collection depth 32 です。complete は宣言構造の coverage だけを示し、
+execution は `not-observed` のままです。記載された command を実行せず、evidence、publication、operator 権限を
+確立せず、後続手順の gate にもなりません。未知の deferral/evidence-pointer/権限 field は未対応です。
+source #1866 で未実装の evidence binding、deferral、design prompt integration、worker enforcement は含まず、
+#1866/#1867/#1857 は open のままです。完全な schema example は
+[packet command reference](08-command-reference.md) を参照してください。

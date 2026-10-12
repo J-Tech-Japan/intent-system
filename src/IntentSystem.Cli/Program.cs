@@ -46,6 +46,17 @@ internal static class Program
                 return PrivatePreviewExpiryGate.ExpiredExitCode;
             }
 
+            // G865: optional packet verification-contract reporting is local,
+            // read-only, and available without host metadata or bootstrap identity.
+            if (args.Length >= 2
+                && string.Equals(args[0], "packet", StringComparison.Ordinal)
+                && string.Equals(args[1], "validate-verification", StringComparison.Ordinal))
+            {
+                var verificationCwd = Directory.GetCurrentDirectory();
+                var verificationRoot = RepoRootResolver.Resolve(verificationCwd) ?? verificationCwd;
+                return PacketValidateVerificationCommand.Execute(verificationRoot, args[2..], Console.Out);
+            }
+
             // G863: packet ruling-source validation is a bounded read-only
             // packet-local operation. It deliberately resolves only the repo
             // root and never loads host config or creates bootstrap identity.
