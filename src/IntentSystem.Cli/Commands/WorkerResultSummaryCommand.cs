@@ -61,6 +61,7 @@ internal static class WorkerResultSummaryCommand
                 out var prDraft,
                 out var prBody,
                 out var format,
+                out var verificationOptions,
                 out var error))
         {
             writer.WriteLine(error);
@@ -154,6 +155,12 @@ internal static class WorkerResultSummaryCommand
             }
         }
 
+        if (verificationOptions is not null)
+        {
+            var verification = VerificationEvidenceCoverage.Evaluate(context.RepoRoot, verificationOptions);
+            result = result with { VerificationCoverage = verification };
+        }
+
         if (string.Equals(format, FormatJson, StringComparison.Ordinal))
         {
             writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
@@ -225,6 +232,12 @@ internal static class WorkerResultSummaryCommand
             writer.WriteLine();
         }
 
+        if (result.VerificationCoverage is not null)
+        {
+            writer.WriteLine();
+            VerificationEvidenceCoverage.WriteMarkdown(writer, result.VerificationCoverage);
+        }
+
         writer.WriteLine(result.Summary);
     }
 
@@ -238,6 +251,7 @@ internal static class WorkerResultSummaryCommand
         out bool? prDraft,
         out string? prBody,
         out string format,
+        out VerificationEvidenceCoverage.Options? verificationOptions,
         out string error)
     {
         kind = null;
@@ -248,7 +262,14 @@ internal static class WorkerResultSummaryCommand
         prDraft = null;
         prBody = null;
         format = FormatText;
+        verificationOptions = null;
         error = string.Empty;
+
+        var verificationMarker = false;
+        var verificationMarkerPresent = HasVerificationReportMarker(args);
+        var verificationArgs = new List<string>();
+        var verificationSeen = new HashSet<string>(StringComparer.Ordinal);
+        var optInSingletons = new HashSet<string>(StringComparer.Ordinal);
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -266,6 +287,11 @@ internal static class WorkerResultSummaryCommand
                     break;
 
                 case "--repo":
+                    if (verificationMarkerPresent && !optInSingletons.Add("--repo"))
+                    {
+                        error = "Duplicate argument '--repo'.";
+                        return false;
+                    }
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
                         error = "--repo requires a value (e.g. owner/repo).";
@@ -324,13 +350,28 @@ internal static class WorkerResultSummaryCommand
                     break;
 
                 case "--format":
+                    if (verificationMarkerPresent && !optInSingletons.Add("--format"))
+                    {
+                        error = "Duplicate argument '--format'.";
+                        return false;
+                    }
                     if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
                     {
                         error = "--format requires a value (text or json).";
                         return false;
                     }
                     var requestedFormat = args[index + 1];
-                    if (!string.Equals(requestedFormat, FormatText, StringComparison.Ordinal)
+                    if (verificationMarkerPresent)
+                    {
+                        if (!string.Equals(requestedFormat, FormatText, StringComparison.Ordinal)
+                            && !string.Equals(requestedFormat, FormatJson, StringComparison.Ordinal)
+                            && !string.Equals(requestedFormat, "markdown", StringComparison.Ordinal))
+                        {
+                            error = $"--format must be 'text', 'json', or 'markdown' with --verification-report (got '{requestedFormat}').";
+                            return false;
+                        }
+                    }
+                    else if (!string.Equals(requestedFormat, FormatText, StringComparison.Ordinal)
                         && !string.Equals(requestedFormat, FormatJson, StringComparison.Ordinal))
                     {
                         error = $"--format must be 'text' or 'json' (got '{requestedFormat}').";
@@ -338,6 +379,43 @@ internal static class WorkerResultSummaryCommand
                     }
                     format = requestedFormat;
                     index++;
+                    break;
+
+                case "--verification-report":
+                    if (!verificationSeen.Add("--verification-report"))
+                    {
+                        error = "Duplicate argument '--verification-report'.";
+                        return false;
+                    }
+                    verificationMarker = true;
+                    break;
+
+                case "--verification-unit":
+                case "--verification-domain":
+                case "--verification-team":
+                case "--verification-head-sha":
+                case "--verification-packet-sha256":
+                case "--verification-evidence":
+                    if (index + 1 >= args.Length || string.IsNullOrEmpty(args[index + 1]))
+                    {
+                        error = $"{argument} requires a nonempty value.";
+                        return false;
+                    }
+                    if (argument != "--verification-evidence" && !verificationSeen.Add(argument))
+                    {
+                        error = $"Duplicate argument '{argument}'.";
+                        return false;
+                    }
+                    verificationArgs.Add(argument switch
+                    {
+                        "--verification-unit" => "--execution-unit",
+                        "--verification-domain" => "--domain",
+                        "--verification-team" => "--team",
+                        "--verification-head-sha" => "--head-sha",
+                        "--verification-packet-sha256" => "--packet-sha256",
+                        _ => "--evidence",
+                    });
+                    verificationArgs.Add(args[++index]);
                     break;
 
                 case "--pr-body":
@@ -420,6 +498,49 @@ internal static class WorkerResultSummaryCommand
             return false;
         }
 
+        if (!verificationMarker && verificationArgs.Count > 0)
+        {
+            error = "--verification-* options require --verification-report.";
+            return false;
+        }
+        if (verificationMarker)
+        {
+            var groupArgs = verificationArgs.ToList();
+            groupArgs.Add("--repo");
+            groupArgs.Add(repo!);
+            groupArgs.Add("--format");
+            groupArgs.Add("json");
+            verificationOptions = VerificationEvidenceCoverage.ParseArguments(groupArgs.ToArray());
+            if (verificationOptions.Error is not null)
+            {
+                error = verificationOptions.Error;
+                return false;
+            }
+            if (format == "markdown") format = "text";
+        }
+        else if (format == "markdown")
+        {
+            error = "--format must be 'text' or 'json' (markdown requires --verification-report).";
+            return false;
+        }
+
         return true;
+    }
+
+    private static bool HasVerificationReportMarker(IReadOnlyList<string> args)
+    {
+        var valueFlags = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "--kind", "--repo", "--issue", "--pr", "--outcome", "--format", "--pr-body",
+            "--pr-body-file", "--pr-draft", "--verification-unit", "--verification-domain",
+            "--verification-team", "--verification-head-sha", "--verification-packet-sha256",
+            "--verification-evidence",
+        };
+        for (var index = 0; index < args.Count; index++)
+        {
+            if (args[index] == "--verification-report") return true;
+            if (valueFlags.Contains(args[index]) && index + 1 < args.Count) index++;
+        }
+        return false;
     }
 }

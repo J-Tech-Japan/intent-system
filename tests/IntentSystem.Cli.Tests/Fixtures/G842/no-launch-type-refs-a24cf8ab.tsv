@@ -1304,6 +1304,12 @@ src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenc
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceDiagnostic	3
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceRecord	3
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceStore	5
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	Options	6
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	RulingArtifact	4
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceBinding	1
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceCriterion	2
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceStore	1
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceStoreRead	1
 src/IntentSystem.Cli/Commands/WorkerClaimAnalyzer.cs	ClaimDecision	8
 src/IntentSystem.Cli/Commands/WorkerClaimAnalyzer.cs	ClaimOwnershipVerification	14
 src/IntentSystem.Cli/Commands/WorkerClaimAnalyzer.cs	GhCliGitHubLabelMutator	2
@@ -1404,6 +1410,7 @@ src/IntentSystem.Cli/Commands/WorkerResultSummaryAnalyzer.cs	WorkerResultSummary
 src/IntentSystem.Cli/Commands/WorkerResultSummaryCommand.cs	GhCliGitHubIssueLookup	2
 src/IntentSystem.Cli/Commands/WorkerResultSummaryCommand.cs	IGitHubIssueLookup	1
 src/IntentSystem.Cli/Commands/WorkerResultSummaryCommand.cs	Kinds	2
+src/IntentSystem.Cli/Commands/WorkerResultSummaryCommand.cs	Options	1
 src/IntentSystem.Cli/Commands/WorkerResultSummaryCommand.cs	WorkerResultSummaryAnalyzer	2
 src/IntentSystem.Cli/Commands/WorkerResultSummaryCommand.cs	WorkerResultSummaryCommand	1
 src/IntentSystem.Cli/Commands/WorkerResultSummaryResult.cs	Kinds	3

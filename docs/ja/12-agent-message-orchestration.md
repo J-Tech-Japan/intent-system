@@ -4392,7 +4392,8 @@ packet-local read です。上限は criteria 128、lane 64、proof 256、ID 64 
 16,384 code unit、packet 1 MiB、YAML collection depth 32 です。complete は宣言構造の coverage だけを示し、
 execution は `not-observed` のままです。記載された command を実行せず、evidence、publication、operator 権限を
 確立せず、後続手順の gate にもなりません。未知の deferral/evidence-pointer/権限 field は未対応です。
-source #1866 で未実装の evidence binding、deferral、design prompt integration、worker enforcement は含まず、
+G866/G867 は supplied TRX bytes の local binding と read-only coverage を提供します。hosted evidence、deferral、
+design-prompt integration、worker enforcement は source #1866 の broader な未完了作業で、
 #1866/#1867/#1857 は open のままです。完全な schema example は
 [packet command reference](08-command-reference.md) を参照してください。
 
@@ -4407,3 +4408,16 @@ AC pass を推論せず、publication も検証しません。test を実行せ�
 commit と plain-push の後、fresh clone から `show` と `validate` を実行します。raw TRX bytes は local artifact に
 保存し、出力には表示しません。埋め込まれた TRX にはテスト名、標準出力、マシン上のパスが含まれる場合があります。
 artifact を commit/push するとその内容も公開されます。この command は個人情報の検査を行いません。
+
+## local verification coverage（G867 — preview-through-1.x）
+
+`intent-cli verification evidence coverage --execution-unit <unit> --domain <domain> --team <team> --repo <owner/repo> --head-sha <40-lowerhex> --packet-sha256 <64-lowerhex> [--evidence <proof-id>=<record-id>]...`
+は metadata-free の read-only observation で、呼び出し側が選択した local record を最大16件まで確認します。
+record ID を探索しません。missing、stale、failed、skipped、unavailable は区別されます。
+`hosted-required` row は not-applicable / not-observed で、この command は hosted evidence を取得しません。
+`complete` には `structural_state=complete`（G865 の gap なし）と、すべての local-required proof row が current かつ passing であることが必要です。
+単独の coverage command は complete の場合だけ exit 0、incomplete / unavailable / invalid の場合は exit 1 です。
+complete は構造と local coverage のみを示し、producer や command の認証、acceptance 評価、publication 確認、worker completion gate にはなりません。
+
+任意の `intent-cli worker result-summary --verification-report ...` group は同じ report を追加しますが、lifecycle status、outcome、warnings、推奨 label action、exit は変更しません。有効な summary report は従来の exit code を維持します。
+marker がなければ既存の result-summary output を維持します。coverage report は raw TRX や test name を表示しませんが、G866 local artifact には supplied bytes が残り、test name、stdout、machine path を含む場合があります。

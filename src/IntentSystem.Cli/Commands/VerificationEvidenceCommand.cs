@@ -47,12 +47,12 @@ internal static class VerificationEvidenceCommand
         [property: JsonPropertyName("diagnostics")] IReadOnlyList<VerificationEvidenceDiagnostic> Diagnostics,
         [property: JsonPropertyName("residual_owned_paths")] IReadOnlyList<string> ResidualOwnedPaths);
 
-    private sealed record Options(
+    internal sealed record Options(
         string? Operation, string? Id, string? Unit, string? Domain, string? Team, string? Repo,
         string? HeadSha, string? PacketSha, string? Proof, string? Trx, string? Format,
         bool Write, bool DryRun, string? Error);
 
-    private sealed record PacketContext(
+    internal sealed record PacketContext(
         string RelativePath, string Sha256, string Domain, string Team, string TargetRepo,
         PacketVerificationContract.Result Contract, VerificationEvidenceBinding? Binding);
 
@@ -510,7 +510,7 @@ internal static class VerificationEvidenceCommand
         return 0;
     }
 
-    private static bool TryLoadPacket(string root, Options options, Action<string, string>? beforeOperation,
+    internal static bool TryLoadPacket(string root, Options options, Action<string, string>? beforeOperation,
         out PacketContext? packet, out Output? failure)
     {
         packet = null;
@@ -572,22 +572,31 @@ internal static class VerificationEvidenceCommand
             return false;
         }
 
-        var selectedProof = options.Proof is null ? null : contract.Proofs.FirstOrDefault(proof => proof.Id == options.Proof);
-        VerificationEvidenceBinding? binding = null;
-        if (selectedProof is not null && selectedProof.Evidence == "local-required")
-        {
-            var criteria = selectedProof.AcceptanceCriteria
-                .Select(id => contract.AcceptanceCriteria.First(criterion => criterion.Id == id))
-                .OrderBy(criterion => criterion.Id, StringComparer.Ordinal)
-                .Select(criterion => new VerificationEvidenceCriterion(criterion.Id, criterion.CriterionIndex, criterion.Text))
-                .ToArray();
-            var lane = contract.Lanes.First(item => item.Id == selectedProof.Lane);
-            binding = new(selectedProof.Id, criteria, lane.Id, lane.Weight, lane.Affected,
-                selectedProof.Command, selectedProof.Evidence);
-        }
+        var binding = options.Proof is null ? null : BuildBinding(contract, options.Proof);
         packet = new(relative, sha, domain, team, targetRepo, contract, binding);
         return true;
     }
+
+    /// <summary>Builds the same typed G865-to-G866 binding used by record/show/validate.</summary>
+    internal static VerificationEvidenceBinding? BuildBinding(PacketVerificationContract.Result contract, string proofId)
+    {
+        var selectedProof = contract.Proofs.FirstOrDefault(proof => proof.Id == proofId);
+        if (selectedProof is null || selectedProof.Evidence != "local-required") return null;
+        var criteria = selectedProof.AcceptanceCriteria
+            .Select(id => contract.AcceptanceCriteria.First(criterion => criterion.Id == id))
+            .OrderBy(criterion => criterion.Id, StringComparer.Ordinal)
+            .Select(criterion => new VerificationEvidenceCriterion(criterion.Id, criterion.CriterionIndex, criterion.Text))
+            .ToArray();
+        var lane = contract.Lanes.First(item => item.Id == selectedProof.Lane);
+        return new(selectedProof.Id, criteria, lane.Id, lane.Weight, lane.Affected,
+            selectedProof.Command, selectedProof.Evidence);
+    }
+
+    internal static bool BindingsEqual(VerificationEvidenceBinding? left, VerificationEvidenceBinding? right) =>
+        left is null ? right is null : right is not null
+        && left.ProofId == right.ProofId && left.LaneId == right.LaneId && left.LaneWeight == right.LaneWeight
+        && left.LaneAffected == right.LaneAffected && left.Command == right.Command && left.Evidence == right.Evidence
+        && left.AcceptanceCriteria.SequenceEqual(right.AcceptanceCriteria);
 
     private static bool TryReadIdentity(byte[] bytes, out string domain, out string team, out string targetRepo, out string detail)
     {
@@ -906,7 +915,7 @@ internal static class VerificationEvidenceCommand
         { detail = "directory is not readable for bounded inspection"; return false; }
     }
 
-    private static bool ValidRepo(string? value)
+    internal static bool IsValidRepo(string? value)
     {
         if (string.IsNullOrEmpty(value)) return false;
         var parts = value.Split('/');
@@ -915,21 +924,19 @@ internal static class VerificationEvidenceCommand
                 or >= '0' and <= '9' or '_' or '.' or '-'));
     }
 
+    private static bool ValidRepo(string? value) => IsValidRepo(value);
+
     private static bool ValidProofId(string? value) => value is not null && value.Length is >= 1 and <= 64
         && value[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z'
         && value.All(character => character is >= 'A' and <= 'Z' or >= 'a' and <= 'z'
             or >= '0' and <= '9' or '_' or '-');
 
-    private static bool LowerHex(string? value, int length) => value is not null && value.Length == length
+    internal static bool IsLowerHex(string? value, int length) => value is not null && value.Length == length
         && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
-    private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    private static bool LowerHex(string? value, int length) => IsLowerHex(value, length);
 
-    private static bool BindingsEqual(VerificationEvidenceBinding? left, VerificationEvidenceBinding? right) =>
-        left is null ? right is null : right is not null
-        && left.ProofId == right.ProofId && left.LaneId == right.LaneId && left.LaneWeight == right.LaneWeight
-        && left.LaneAffected == right.LaneAffected && left.Command == right.Command && left.Evidence == right.Evidence
-        && left.AcceptanceCriteria.SequenceEqual(right.AcceptanceCriteria);
+    private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
     private static Output FromPacket(Options options, PacketContext packet, string state, string cause,
         string detail, string disposition, IReadOnlyList<VerificationEvidenceDiagnostic> diagnostics,

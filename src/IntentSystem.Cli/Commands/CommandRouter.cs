@@ -472,7 +472,9 @@ internal static class CommandRouter
             },
             ["verification"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
-                ["evidence"] = VerificationEvidenceCommand.Execute
+                ["evidence"] = (context, args, writer) => args.Length > 0 && args[0] == "coverage"
+                    ? VerificationEvidenceCoverage.Execute(context.RepoRoot, args[1..], writer)
+                    : VerificationEvidenceCommand.Execute(context, args, writer)
             },
             ["closeout"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -741,7 +743,7 @@ internal static class CommandRouter
             ["intent"] = "`intent-cli intent init --domain <name> --target-repo <r> --write` (bootstrap), `intent-cli intent next-slice --dry-run --domain <d> --format json` (plan).",
             ["interview"] = "`intent-cli interview next-question --domain <d> --format json` then `intent-cli interview record-answer ...`.",
             ["packet"] = "`intent-cli packet draft --execution-unit <id> --target-repo <r> --format markdown`.",
-            ["verification"] = "`intent-cli verification evidence record|show|validate ... --format json|markdown` (local supplied-report observation; no execution, producer authentication, acceptance assessment, or publication verification).",
+            ["verification"] = "`intent-cli verification evidence record|show|validate ... --format json|markdown`; `verification evidence coverage --execution-unit <u> --domain <d> --team <t> --repo <r> --head-sha <sha> --packet-sha256 <sha>` (read-only local coverage; no execution, producer authentication, acceptance assessment, or publication verification).",
             ["issue"] = "`intent-cli issue publish-flow <id> --repo <r> --write --format json` then `intent-cli automation issue-publish --write`.",
             ["unit"] = "`intent-cli unit status --execution-unit <unit> --format json` (read-only lifecycle evidence; missing and unavailable facts do not imply merge readiness).",
             ["ruling"] = "`intent-cli ruling record --id <id> --domain <d> --team <t> --from-file <json> --authority-role operator [--write]`, then `ruling show|validate <id> --domain <d> --team <t>`. Local record only; supplied authority is not authenticated or wired into packet/status gates.",

@@ -1106,9 +1106,10 @@ criterion or command; 1 MiB of packet bytes; and YAML collection depth 32. A one
 invalid; byte/depth excess is unavailable. The SHA-256 is over the exact bytes
 read, including a BOM; zero-byte and pre-read size refusals have no hash.
 Separately, absent or explicit empty G863 source declarations retain existing
-packet behavior. This
-optional report is not the deferred evidence-binding, deferral, design-prompt, or
-worker-enforcement work in source #1866; #1866 and related #1867/#1857 remain open.
+packet behavior. G865 validates structure; G866/G867 provide local supplied-TRX
+binding and read-only coverage. Hosted evidence, deferral, design-prompt
+integration, and worker enforcement remain broader open work under #1866;
+#1866 and related #1867/#1857 remain open.
 
 ### Local verification evidence record (G866 — preview-through-1.x)
 
@@ -1142,6 +1143,45 @@ test names, stdout, or machine paths; committing/pushing the artifact publishes
 those bytes, and this command does not scan them for privacy. To make a record visible
 to another clone, commit and plain-push the artifact, then run `show` and
 `validate` from a fresh clone. Recording does not commit or push automatically.
+
+### Local verification coverage (G867 — preview-through-1.x)
+
+`verification evidence coverage` is a metadata-free, read-only observation over
+at most 16 explicitly selected local G866 records. References are caller-supplied
+`proof-id=record-id` pairs; the command does not scan the evidence store or pick
+a latest record. It reports missing, stale, failed, skipped, and unavailable
+rows separately. A packet's `hosted-required` proof is `not-applicable` and
+`not-observed` here; no hosted evidence is fetched. Repeat
+`--evidence <proof-id>=<record-id>` to select records.
+
+```bash
+intent-cli verification evidence coverage --execution-unit G123 \
+  --domain example --team builders --repo owner/repo \
+  --head-sha <40-lowerhex> --packet-sha256 <64-lowerhex> \
+  --evidence P1=E1 --evidence P2=E2 --format json
+intent-cli worker result-summary --kind issue-to-pr --repo owner/repo \
+  --issue <n> --pr <n> --outcome pr-created --verification-report \
+  --verification-unit G123 --verification-domain example --verification-team builders \
+  --verification-head-sha <40-lowerhex> --verification-packet-sha256 <64-lowerhex> \
+  --verification-evidence P1=E1 --format json
+```
+
+The optional `result-summary` group adds the same typed report without changing
+the existing status, outcome, warnings, recommended label actions, or exit
+code. With no `--verification-report` marker, result-summary keeps its prior
+output and markdown remains unsupported. `complete` requires
+`structural_state=complete` with no G865 gaps and every local-required proof row
+current and passing. The standalone coverage command exits 0 only for complete
+and exits 1 for incomplete, unavailable, or invalid states. A valid optional
+result-summary report is advisory and leaves its existing exit code unchanged.
+Coverage is advisory: it does not
+authenticate the producer or command, assess whether an acceptance criterion
+passed, verify publication, or gate worker completion. `complete` means only
+that both the structural contract and local-required proof rows are complete in
+this observation; hosted-required rows remain not observed. Raw TRX bytes and
+test names are not rendered in coverage output, although the stored G866
+artifact contains the supplied bytes and may include test names, stdout, or
+machine paths.
 
 ### Pasted-evidence gate (G785)
 

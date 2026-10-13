@@ -88,6 +88,11 @@ internal sealed record WorkerResultSummaryResult
     /// <summary>G785: required criteria still lacking a named output fence.</summary>
     [JsonPropertyName("evidence_gap")]
     public required IReadOnlyList<WorkerEvidenceCriterion> EvidenceGap { get; init; }
+
+    /// <summary>Optional read-only local verification coverage; absent marker preserves the legacy JSON shape.</summary>
+    [JsonPropertyName("verification_coverage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public VerificationEvidenceCoverage.Report? VerificationCoverage { get; init; }
 }
 
 /// <summary>

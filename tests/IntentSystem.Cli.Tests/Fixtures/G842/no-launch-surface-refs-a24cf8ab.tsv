@@ -124,3 +124,9 @@ src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenc
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceDiagnostic	3
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceRecord	3
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceStore	5
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	Options	6
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	RulingArtifact	4
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceBinding	1
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceCriterion	2
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceStore	1
+src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceStoreRead	1

@@ -5105,8 +5105,9 @@ is a config-independent, packet-local read. Bounds are 128 criteria, 64 lanes,
 of packet bytes, and YAML collection depth 32. Complete means declared structure
 only; execution stays `not-observed`. It never runs the listed command, checks
 evidence, establishes publication or authority, or gates a later step. Unknown
-deferral/evidence-pointer/authority fields are unsupported. Evidence binding,
-deferral, design-prompt integration, and worker enforcement remain unimplemented
+deferral/evidence-pointer/authority fields are unsupported. G866/G867 provide
+local supplied-TRX binding and read-only coverage. Hosted evidence, deferral,
+design-prompt integration, and worker enforcement remain broader open work
 under source #1866; #1866, #1867, and #1857 remain open. See the
 [packet command reference](08-command-reference.md) for the full schema example.
 
@@ -5124,3 +5125,24 @@ to see the record, commit and plain-push it, then use `show` and `validate` from
 a fresh clone. Raw TRX bytes remain in the local artifact and are not printed.
 Embedded TRX may contain test names, stdout, or machine paths; committing/pushing
 the artifact publishes those bytes, and this command does not scan them for privacy.
+
+## Local verification coverage (G867 — preview-through-1.x)
+
+`intent-cli verification evidence coverage --execution-unit <unit> --domain <domain> --team <team> --repo <owner/repo> --head-sha <40-lowerhex> --packet-sha256 <64-lowerhex> [--evidence <proof-id>=<record-id>]...`
+is a metadata-free, read-only observation of at most 16 caller-selected local
+records. It does not discover record IDs. Missing, stale, failed, skipped, and
+unavailable rows stay distinct. Hosted-required rows are not-applicable and
+not-observed; this command never fetches hosted evidence. `complete` requires
+`structural_state=complete` with no G865 gaps and every local-required proof row
+current and passing. The standalone coverage command exits 0 only for complete
+and exits 1 for incomplete, unavailable, or invalid states. A complete report
+means structural and local coverage only: it does not authenticate the producer
+or command, assess acceptance, verify publication, or gate worker completion.
+
+The optional `intent-cli worker result-summary --verification-report ...` group adds the
+same report without changing lifecycle status, outcome, warnings, recommended
+label actions, or exit. A valid summary report therefore leaves its existing
+exit code unchanged. Omitting the marker preserves the existing result-summary
+output. Raw TRX and test names are not rendered by the coverage report;
+the local G866 artifact still contains supplied bytes, which may include test
+names, stdout, or machine paths.
