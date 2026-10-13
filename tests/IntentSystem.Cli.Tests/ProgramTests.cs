@@ -223,6 +223,398 @@ public sealed class ProgramTests
         }
     }
 
+    [Fact]
+    public void Main_VerificationEvidencePreviewHelpAndOrderedFormatWorkWithoutConfig()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var repo = tempDirectory.CreateDirectory("repo");
+            var packet = VerificationEvidenceCommandTests.ValidPacket + "\n";
+            var packetBytes = Encoding.UTF8.GetBytes(packet);
+            var packetPath = Path.Combine(repo, ".intent-cli", "issues", "G866", "packet.yaml");
+            Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+            File.WriteAllBytes(packetPath, packetBytes);
+            var trx = VerificationEvidenceCommandTests.ReadSmallVstest();
+            File.WriteAllBytes(Path.Combine(repo, "capture.trx"), trx);
+            var nestedCwd = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            Assert.False(File.Exists(Path.Combine(repo, ".intent-cli", "config.toml")));
+
+            string InvokeMain(string[] args, out int exit)
+            {
+                using var console = new ConsoleScope();
+                using var currentDirectory = new CurrentDirectoryScope(nestedCwd);
+                exit = Program.Main(args);
+                Assert.Equal(string.Empty, console.Error.ToString());
+                return console.Out.ToString();
+            }
+
+            var recordArgs = new[]
+            {
+                "verification", "evidence", "record", "--id", "E1", "--execution-unit", "G866",
+                "--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
+                "--head-sha", VerificationEvidenceCommandTests.Head, "--packet-sha256",
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant(),
+                "--proof", "P1", "--trx", "capture.trx", "--format", "json"
+            };
+            var previewText = InvokeMain(recordArgs, out var previewExit);
+            using (var preview = JsonDocument.Parse(previewText))
+            {
+                Assert.Equal(0, previewExit);
+                Assert.Equal("planned", preview.RootElement.GetProperty("disposition").GetString());
+                Assert.Equal("not-observed", preview.RootElement.GetProperty("execution").GetString());
+            }
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli", "verification-evidence")));
+
+            var invalidArgs = recordArgs[..^2].Concat(new[] { "--unknown", "x", "--format", "markdown" }).ToArray();
+            var refusalText = InvokeMain(invalidArgs, out var refusalExit);
+            using (var refusal = JsonDocument.Parse(VerificationStructuredJson(refusalText, "markdown")))
+            {
+                Assert.Equal(1, refusalExit);
+                Assert.Equal("verification-evidence-argument-invalid", refusal.RootElement.GetProperty("cause").GetString());
+            }
+
+            var formatBeforeError = recordArgs[..^2].Concat(new[] { "--format", "markdown", "--unknown", "x" }).ToArray();
+            var orderedRefusal = InvokeMain(formatBeforeError, out var orderedRefusalExit);
+            using (var ordered = JsonDocument.Parse(VerificationStructuredJson(orderedRefusal, "markdown")))
+            {
+                Assert.Equal(1, orderedRefusalExit);
+                Assert.Equal("verification-evidence-argument-invalid", ordered.RootElement.GetProperty("cause").GetString());
+            }
+
+            var helpText = InvokeMain(["verification", "evidence", "--help"], out var helpExit);
+            Assert.Equal(0, helpExit);
+            Assert.Contains("not proof that this CLI executed a command", helpText, StringComparison.Ordinal);
+            Assert.Contains("authenticated its producer", helpText, StringComparison.Ordinal);
+            foreach (var operation in new[] { "record", "show", "validate" })
+            {
+                var operationHelp = InvokeMain(["verification", "evidence", operation, "--help"], out var operationHelpExit);
+                Assert.Equal(0, operationHelpExit);
+                Assert.Contains("Usage: intent-cli verification evidence", operationHelp, StringComparison.Ordinal);
+                Assert.Contains("not proof that this CLI executed a command", operationHelp, StringComparison.Ordinal);
+            }
+            Assert.False(File.Exists(Path.Combine(repo, ".intent-cli", "config.toml")));
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli", "verification-evidence")));
+        }
+    }
+
+    [Theory]
+    [InlineData("write-dry-run")]
+    [InlineData("duplicate-id")]
+    [InlineData("read-write")]
+    [InlineData("positional-option-id")]
+    [InlineData("duplicate-positional-id")]
+    public void Main_VerificationEvidenceInvalidFlagCombinationsRemainStructured(string mutation)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var repo = tempDirectory.CreateDirectory("repo");
+            var packetBytes = Encoding.UTF8.GetBytes(VerificationEvidenceCommandTests.ValidPacket + "\n");
+            var packetPath = Path.Combine(repo, ".intent-cli", "issues", "G866", "packet.yaml");
+            Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+            File.WriteAllBytes(packetPath, packetBytes);
+            File.WriteAllBytes(Path.Combine(repo, "capture.trx"), VerificationEvidenceCommandTests.ReadSmallVstest());
+            var nested = Directory.CreateDirectory(Path.Combine(repo, "src", "feature")).FullName;
+            var baseArgs = new[]
+            {
+                "verification", "evidence", mutation == "read-write" ? "show" : "record",
+                "--id", "E1", "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
+                "--packet-sha256", Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant(),
+                "--proof", "P1", "--trx", "capture.trx", "--format", "json"
+            };
+            string[] args = mutation switch
+            {
+                "write-dry-run" => [.. baseArgs, "--write", "--dry-run"],
+                "duplicate-id" => [.. baseArgs, "--id", "E2"],
+                "positional-option-id" => ["verification", "evidence", "show", "E1", "--id", "E1",
+                    "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
+                    "--format", "json"],
+                "duplicate-positional-id" => ["verification", "evidence", "show", "E1", "E2",
+                    "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
+                    "--format", "json"],
+                "read-write" => ["verification", "evidence", "show", "--id", "E1",
+                    "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
+                    "--format", "json", "--write"],
+                _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null)
+            };
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nested);
+            var exit = Program.Main(args);
+            Assert.Equal(1, exit);
+            using var result = JsonDocument.Parse(console.Out.ToString());
+            Assert.Equal("verification-evidence-argument-invalid", result.RootElement.GetProperty("cause").GetString());
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli", "verification-evidence")));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_VerificationEvidenceRejectsUnsafeTrxPathsWithoutWritingOrLeakingPaths(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var repo = tempDirectory.CreateDirectory("repo");
+            var packetBytes = Encoding.UTF8.GetBytes(VerificationEvidenceCommandTests.ValidPacket + "\n");
+            var packetPath = Path.Combine(repo, ".intent-cli", "issues", "G866", "packet.yaml");
+            Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+            File.WriteAllBytes(packetPath, packetBytes);
+            File.WriteAllBytes(Path.Combine(repo, "capture.trx"), VerificationEvidenceCommandTests.ReadSmallVstest());
+            var outsideDirectory = tempDirectory.CreateDirectory("outside");
+            var outsideSentinel = Path.Combine(outsideDirectory, "sentinel.txt");
+            var scratchRoot = Path.GetDirectoryName(outsideDirectory)!;
+            var sentinelBytes = Encoding.UTF8.GetBytes("outside path remains unchanged\n");
+            File.WriteAllBytes(outsideSentinel, sentinelBytes);
+            var nested = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            var packetSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant();
+            var unsafeTrxPaths = new[]
+            {
+                Path.Combine(repo, "capture.trx"),
+                "../outside/sentinel.txt",
+                "./capture.trx",
+                "capture//trx.trx",
+                "capture\\..\\outside\\sentinel.txt",
+            };
+
+            foreach (var trxPath in unsafeTrxPaths)
+            {
+                var args = new[]
+                {
+                    "verification", "evidence", "record", "--id", "E1", "--execution-unit", "G866",
+                    "--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
+                    "--head-sha", VerificationEvidenceCommandTests.Head, "--packet-sha256", packetSha,
+                    "--proof", "P1", "--trx", trxPath, "--format", format, "--write"
+                };
+                using var console = new ConsoleScope();
+                using var currentDirectory = new CurrentDirectoryScope(nested);
+                var exit = Program.Main(args);
+                var output = console.Out.ToString();
+                using var result = JsonDocument.Parse(VerificationStructuredJson(output, format));
+                Assert.Equal(1, exit);
+                Assert.Contains(result.RootElement.GetProperty("cause").GetString(), new[]
+                {
+                    "verification-evidence-argument-invalid", "verification-evidence-read-unavailable"
+                });
+                Assert.False(result.RootElement.GetProperty("wrote").GetBoolean());
+                Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli", "verification-evidence")));
+                Assert.Equal(sentinelBytes, File.ReadAllBytes(outsideSentinel));
+                Assert.DoesNotContain(repo, output, StringComparison.Ordinal);
+                Assert.DoesNotContain(scratchRoot, output, StringComparison.Ordinal);
+                Assert.Equal(string.Empty, console.Error.ToString());
+            }
+        }
+    }
+
+    [Fact]
+    public void Main_VerificationEvidenceMarkdownFencesMaliciousIdentityAndCommandText()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var repo = tempDirectory.CreateDirectory("repo");
+            var command = "dotnet test\n# injected heading\n```\n[run](file:///tmp/evil)";
+            var packet = VerificationEvidenceCommandTests.ValidPacket.Replace("command: dotnet test",
+                "command: \"dotnet test\\n# injected heading\\n```\\n[run](file:///tmp/evil)\"", StringComparison.Ordinal);
+            var packetBytes = Encoding.UTF8.GetBytes(packet + "\n");
+            var packetPath = Path.Combine(repo, ".intent-cli", "issues", "G866", "packet.yaml");
+            Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+            File.WriteAllBytes(packetPath, packetBytes);
+            File.WriteAllBytes(Path.Combine(repo, "capture.trx"), VerificationEvidenceCommandTests.ReadSmallVstest());
+            var nested = Directory.CreateDirectory(Path.Combine(repo, "src", "feature")).FullName;
+            var maliciousId = "E1\n# injected identity\n```";
+            string output;
+            int idExit;
+            using (var console = new ConsoleScope())
+            using (var currentDirectory = new CurrentDirectoryScope(nested))
+            {
+                idExit = Program.Main(["verification", "evidence", "show", "--id", maliciousId,
+                    "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
+                    "--format", "markdown"]);
+                output = console.Out.ToString();
+                Assert.Equal(string.Empty, console.Error.ToString());
+            }
+            Assert.Equal(1, idExit);
+            using (var refusal = JsonDocument.Parse(VerificationStructuredJson(output, "markdown")))
+                Assert.Equal(maliciousId, refusal.RootElement.GetProperty("id").GetString());
+            Assert.DoesNotContain("# injected identity", output[..output.IndexOf("## Structured result", StringComparison.Ordinal)], StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli", "verification-evidence")));
+
+            using var commandConsole = new ConsoleScope();
+            using var commandCwd = new CurrentDirectoryScope(nested);
+            var commandExit = Program.Main(["verification", "evidence", "record", "--id", "E1",
+                "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
+                "--packet-sha256", Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant(),
+                "--proof", "P1", "--trx", "capture.trx", "--format", "markdown"]);
+            var commandOutput = commandConsole.Out.ToString();
+            Assert.Equal(0, commandExit);
+            using var result = JsonDocument.Parse(VerificationStructuredJson(commandOutput, "markdown"));
+            Assert.Equal(command, result.RootElement.GetProperty("binding").GetProperty("command").GetString());
+            Assert.DoesNotContain("# injected heading", commandOutput[..commandOutput.IndexOf("## Structured result", StringComparison.Ordinal)], StringComparison.Ordinal);
+            Assert.DoesNotContain("[run](file:///tmp/evil)", commandOutput[..commandOutput.IndexOf("## Structured result", StringComparison.Ordinal)], StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli", "verification-evidence")));
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_VerificationEvidenceWriteIsVisibleInFreshCloneWithoutTrxOrReachableOrigin(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var bare = tempDirectory.CreateDirectory("evidence-origin.git");
+            var writerRepo = tempDirectory.CreateDirectory(Path.Combine("repos", "writer"));
+            var beforeClone = tempDirectory.CreateDirectory(Path.Combine("repos", "before-clone"));
+            RunGit(tempDirectory.CreateDirectory("."), "init", "--bare", "--quiet", "--initial-branch=main", bare);
+            RunGit(writerRepo, "init", "--quiet", "--initial-branch=main");
+            RunGit(writerRepo, "config", "user.name", "intent-cli-g866-test");
+            RunGit(writerRepo, "config", "user.email", "intent-cli-g866@example.invalid");
+            RunGit(writerRepo, "remote", "add", "origin", bare);
+
+            var packetBytes = Encoding.UTF8.GetBytes(VerificationEvidenceCommandTests.ValidPacket + "\n");
+            var packetRelative = Path.Combine(".intent-cli", "issues", "G866", "packet.yaml");
+            var packetPath = Path.Combine(writerRepo, packetRelative);
+            Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+            File.WriteAllBytes(packetPath, packetBytes);
+            File.WriteAllText(Path.Combine(writerRepo, "README.md"), "G866 local evidence fixture\n");
+            RunGit(writerRepo, "add", "--", packetRelative, "README.md");
+            RunGit(writerRepo, "commit", "--quiet", "-m", "publish G866 packet fixture");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+            RunGit(tempDirectory.CreateDirectory("."), "clone", "--quiet", bare, beforeClone);
+            Assert.False(File.Exists(Path.Combine(beforeClone, ".intent-cli", "config.toml")));
+
+            RunGit(beforeClone, "remote", "set-url", "origin", Path.Combine(tempDirectory.CreateDirectory("."), "unreachable-origin.git"));
+            var beforeNested = Directory.CreateDirectory(Path.Combine(beforeClone, "src", "feature")).FullName;
+            var beforeFiles = SnapshotTree(beforeClone);
+            var beforeIndex = File.ReadAllBytes(Path.Combine(beforeClone, ".git", "index"));
+            var beforeHead = RunGit(beforeClone, "rev-parse", "HEAD");
+            var beforeRefs = RunGit(beforeClone, "show-ref", "--head");
+            var remoteRefsBeforePublication = RunGit(bare, "show-ref", "--head");
+            using (var console = new ConsoleScope())
+            using (var currentDirectory = new CurrentDirectoryScope(beforeNested))
+            {
+                var missingExit = Program.Main(EvidenceReadArgs("show", format));
+                var missing = JsonDocument.Parse(VerificationStructuredJson(console.Out.ToString(), format));
+                using (missing)
+                {
+                    Assert.Equal(1, missingExit);
+                    Assert.Equal("missing", missing.RootElement.GetProperty("state").GetString());
+                    Assert.Equal("verification-evidence-missing", missing.RootElement.GetProperty("cause").GetString());
+                }
+            }
+            Assert.Equal(beforeFiles, SnapshotTree(beforeClone));
+            Assert.Equal(beforeIndex, File.ReadAllBytes(Path.Combine(beforeClone, ".git", "index")));
+            Assert.Equal(beforeHead, RunGit(beforeClone, "rev-parse", "HEAD"));
+            Assert.Equal(beforeRefs, RunGit(beforeClone, "show-ref", "--head"));
+            Assert.Equal(remoteRefsBeforePublication, RunGit(bare, "show-ref", "--head"));
+
+            var trx = VerificationEvidenceCommandTests.ReadSmallVstest();
+            File.WriteAllBytes(Path.Combine(writerRepo, "capture.trx"), trx);
+            var packetSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant();
+            var recordArgs = new[]
+            {
+                "verification", "evidence", "record", "--id", "E1", "--execution-unit", "G866",
+                "--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
+                "--head-sha", VerificationEvidenceCommandTests.Head, "--packet-sha256", packetSha,
+                "--proof", "P1", "--trx", "capture.trx", "--write", "--format", format
+            };
+            var writerNested = Directory.CreateDirectory(Path.Combine(writerRepo, "src", "feature")).FullName;
+            using (var console = new ConsoleScope())
+            using (var currentDirectory = new CurrentDirectoryScope(writerNested))
+            {
+                var writeExit = Program.Main(recordArgs);
+                var written = JsonDocument.Parse(VerificationStructuredJson(console.Out.ToString(), format));
+                using (written)
+                {
+                    Assert.Equal(0, writeExit);
+                    Assert.Equal("recorded", written.RootElement.GetProperty("disposition").GetString());
+                }
+            }
+
+            // The writer has a canonical local artifact now, but has not staged or pushed it yet.
+            // The earlier clone must continue to report missing without changing any Git state.
+            using (var console = new ConsoleScope())
+            using (var currentDirectory = new CurrentDirectoryScope(beforeNested))
+            {
+                var missingExit = Program.Main(EvidenceReadArgs("show", format));
+                using var missing = JsonDocument.Parse(VerificationStructuredJson(console.Out.ToString(), format));
+                Assert.Equal(1, missingExit);
+                Assert.Equal("missing", missing.RootElement.GetProperty("state").GetString());
+                Assert.Equal("verification-evidence-missing", missing.RootElement.GetProperty("cause").GetString());
+            }
+            Assert.Equal(beforeFiles, SnapshotTree(beforeClone));
+            Assert.Equal(beforeIndex, File.ReadAllBytes(Path.Combine(beforeClone, ".git", "index")));
+            Assert.Equal(beforeHead, RunGit(beforeClone, "rev-parse", "HEAD"));
+            Assert.Equal(beforeRefs, RunGit(beforeClone, "show-ref", "--head"));
+            Assert.Equal(remoteRefsBeforePublication, RunGit(bare, "show-ref", "--head"));
+
+            var artifactRelative = Path.Combine(".intent-cli", "verification-evidence", "intent-cli", "intent-cli-dev", "G866", "E1.json");
+            var artifactBytes = File.ReadAllBytes(Path.Combine(writerRepo, artifactRelative));
+            File.Delete(Path.Combine(writerRepo, "capture.trx"));
+            RunGit(writerRepo, "add", "--", artifactRelative);
+            RunGit(writerRepo, "commit", "--quiet", "-m", "publish G866 local TRX evidence");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+            var remoteRefsAfterPublication = RunGit(bare, "show-ref", "--head");
+
+            var afterClone = Path.Combine(tempDirectory.CreateDirectory("repos"), "after-clone");
+            RunGit(tempDirectory.CreateDirectory("."), "clone", "--quiet", bare, afterClone);
+            Assert.False(File.Exists(Path.Combine(afterClone, "capture.trx")));
+            Assert.False(File.Exists(Path.Combine(afterClone, ".intent-cli", "config.toml")));
+            RunGit(afterClone, "remote", "set-url", "origin", Path.Combine(tempDirectory.CreateDirectory("."), "unreachable-origin.git"));
+            var afterNested = Directory.CreateDirectory(Path.Combine(afterClone, "src", "feature")).FullName;
+            var filesBefore = SnapshotTree(afterClone);
+            var indexBefore = File.ReadAllBytes(Path.Combine(afterClone, ".git", "index"));
+            var headBefore = RunGit(afterClone, "rev-parse", "HEAD");
+            var refsBefore = RunGit(afterClone, "show-ref", "--head");
+            using (var console = new ConsoleScope())
+            using (var currentDirectory = new CurrentDirectoryScope(afterNested))
+            {
+                var showExit = Program.Main(EvidenceReadArgs("show", format));
+                var shown = JsonDocument.Parse(VerificationStructuredJson(console.Out.ToString(), format));
+                using (shown)
+                {
+                    Assert.Equal(0, showExit);
+                    Assert.Equal("current", shown.RootElement.GetProperty("state").GetString());
+                    Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(artifactBytes)).ToLowerInvariant(),
+                        shown.RootElement.GetProperty("artifact_sha256").GetString());
+                }
+            }
+            Assert.Equal(filesBefore, SnapshotTree(afterClone));
+            using (var console = new ConsoleScope())
+            using (var currentDirectory = new CurrentDirectoryScope(afterNested))
+            {
+                var validateExit = Program.Main(EvidenceReadArgs("validate", format));
+                var validated = JsonDocument.Parse(VerificationStructuredJson(console.Out.ToString(), format));
+                using (validated)
+                {
+                    Assert.Equal(0, validateExit);
+                    Assert.Equal("current", validated.RootElement.GetProperty("state").GetString());
+                    Assert.Equal("not-observed", validated.RootElement.GetProperty("execution").GetString());
+                }
+            }
+            Assert.Equal(filesBefore, SnapshotTree(afterClone));
+            Assert.Equal(indexBefore, File.ReadAllBytes(Path.Combine(afterClone, ".git", "index")));
+            Assert.Equal(headBefore, RunGit(afterClone, "rev-parse", "HEAD"));
+            Assert.Equal(refsBefore, RunGit(afterClone, "show-ref", "--head"));
+            Assert.Equal(remoteRefsAfterPublication, RunGit(bare, "show-ref", "--head"));
+        }
+    }
+
+    private static string[] EvidenceReadArgs(string operation, string format) =>
+    ["verification", "evidence", operation, "E1", "--execution-unit", "G866",
+     "--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
+     "--head-sha", VerificationEvidenceCommandTests.Head, "--format", format];
+
     [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
@@ -619,10 +1011,17 @@ public sealed class ProgramTests
         const string heading = "## Structured result (same facts as JSON)";
         var marker = output.IndexOf(heading, StringComparison.Ordinal);
         Assert.True(marker >= 0, "Markdown output must include its structured result section.");
-        var fenceStart = output.IndexOf("```json\n", marker, StringComparison.Ordinal);
+        var fenceStart = output.IndexOf("```", marker, StringComparison.Ordinal);
         Assert.True(fenceStart >= 0, "Markdown output must include the JSON result fence.");
-        var start = fenceStart + "```json\n".Length;
-        var end = output.IndexOf("\n```", start, StringComparison.Ordinal);
+        var lineStart = output.LastIndexOf('\n', fenceStart) + 1;
+        var lineEnd = output.IndexOf('\n', lineStart);
+        Assert.True(lineStart > 0 && lineEnd > lineStart, "Markdown output must include the JSON result fence.");
+        var opening = output[lineStart..lineEnd];
+        Assert.EndsWith("json", opening, StringComparison.Ordinal);
+        var fence = opening[..^"json".Length];
+        Assert.True(fence.Length >= 3 && fence.All(character => character == '`'), "Markdown JSON fence must use backticks.");
+        var start = lineEnd + 1;
+        var end = output.IndexOf("\n" + fence, start, StringComparison.Ordinal);
         Assert.True(end > start, "Markdown JSON result fence must close.");
         return output[start..end];
     }

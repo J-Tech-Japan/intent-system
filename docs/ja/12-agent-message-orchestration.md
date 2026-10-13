@@ -4395,3 +4395,15 @@ execution は `not-observed` のままです。記載された command を実行
 source #1866 で未実装の evidence binding、deferral、design prompt integration、worker enforcement は含まず、
 #1866/#1867/#1857 は open のままです。完全な schema example は
 [packet command reference](08-command-reference.md) を参照してください。
+
+## supplied TRX の local evidence（G866 — preview-through-1.x）
+
+`intent-cli verification evidence record|show|validate` は、任意で選択した
+`local-required` proof を supplied TRX bytes と現在の packet に結び付けます。`record` は no-write
+preview が既定で、`--write` のみが canonical local record を作成します。`show` / `validate` は指定した ID
+を読みます。これは observation のみです。execution は `not-observed`、producer は未認証、acceptance は未評価で、
+AC pass を推論せず、publication も検証しません。test を実行せず worker gate にもなりません。
+`hosted-required` proof と deferral は未対応で、自動 commit/push はしません。他 clone に record を見せるには、
+commit と plain-push の後、fresh clone から `show` と `validate` を実行します。raw TRX bytes は local artifact に
+保存し、出力には表示しません。埋め込まれた TRX にはテスト名、標準出力、マシン上のパスが含まれる場合があります。
+artifact を commit/push するとその内容も公開されます。この command は個人情報の検査を行いません。

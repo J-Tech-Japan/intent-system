@@ -914,6 +914,35 @@ schema 件数の超過は invalid、byte/depth 超過は unavailable です。SH
 report は source #1866 の未実装である evidence binding、deferral、design prompt、worker enforcement ではありません。
 #1866 と関連する #1867/#1857 は open のままです。
 
+### local verification evidence record（G866 — preview-through-1.x）
+
+任意の `intent-cli verification evidence record|show|validate` は、呼び出し側が選んだ
+G865 の `local-required` proof を、実際に渡された TRX bytes と現在の packet に結び付けます。
+`record` は `--write` を明示しない限り no-write preview です。`show` と `validate` は指定した
+単一 ID を読み、latest record を推測しません。local store は
+`.intent-cli/verification-evidence/<domain>/<team>/<unit>/<id>.json` です。
+
+```bash
+intent-cli verification evidence record --id E1 --execution-unit G123 \
+  --domain example --team builders --repo owner/repo --head-sha <40-lowerhex> \
+  --packet-sha256 <64-lowerhex> --proof P1 --trx artifacts/results.trx --format json
+intent-cli verification evidence record --id E1 --execution-unit G123 \
+  --domain example --team builders --repo owner/repo --head-sha <40-lowerhex> \
+  --packet-sha256 <64-lowerhex> --proof P1 --trx artifacts/results.trx --write --format json
+intent-cli verification evidence show E1 --execution-unit G123 --domain example \
+  --team builders --repo owner/repo --head-sha <40-lowerhex> --format json
+intent-cli verification evidence validate E1 --execution-unit G123 --domain example \
+  --team builders --repo owner/repo --head-sha <40-lowerhex> --format json
+```
+
+これは supplied bytes の local observation です。記録された command/test を実行せず、producer や supplied
+head を認証せず、acceptance を評価せず、AC pass を推論せず、publication を確認せず、worker gate にも使いません。
+`hosted-required` proof と deferral は未対応です。結果は `execution: not-observed`、
+`producer: not-authenticated`、`acceptance: not-assessed`、`publication: not-verified` を保ちます。
+raw TRX は local canonical artifact にのみ保存し、出力には表示しません。埋め込まれた TRX にはテスト名、標準出力、マシン上のパスが
+含まれる場合があります。artifact を commit/push するとその内容も公開されます。この command は個人情報の検査を行いません。
+他 clone から参照するには artifact を commit と plain-push し、fresh clone から `show` と `validate` を実行してください。自動 commit/push はしません。
+
 ### 貼り付け evidence gate（G785）
 
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`

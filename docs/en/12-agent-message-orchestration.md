@@ -5109,3 +5109,18 @@ deferral/evidence-pointer/authority fields are unsupported. Evidence binding,
 deferral, design-prompt integration, and worker enforcement remain unimplemented
 under source #1866; #1866, #1867, and #1857 remain open. See the
 [packet command reference](08-command-reference.md) for the full schema example.
+
+## Local supplied TRX evidence (G866 — preview-through-1.x)
+
+`intent-cli verification evidence record|show|validate` optionally binds one
+selected local-required proof to supplied TRX bytes and the current packet.
+`record` defaults to a no-write preview; `--write` creates one canonical local
+record, and `show` / `validate` address that exact ID. The result is an
+observation only: execution is `not-observed`, the producer is not authenticated,
+acceptance is not assessed, no AC pass is inferred, and publication is not
+verified. It does not run tests or gate a worker. Hosted-required proofs and
+deferral are unsupported; no automatic commit or push occurs. For another clone
+to see the record, commit and plain-push it, then use `show` and `validate` from
+a fresh clone. Raw TRX bytes remain in the local artifact and are not printed.
+Embedded TRX may contain test names, stdout, or machine paths; committing/pushing
+the artifact publishes those bytes, and this command does not scan them for privacy.

@@ -142,6 +142,118 @@ public sealed class GuideCommandsListCommandTests
     }
 
     [Fact]
+    public void VerificationEvidenceSemanticsAreDiscoverableFromAllThreeGuideRoutes()
+    {
+        const string record = "verification evidence record";
+        const string localOnly = "publication not verified";
+        const string privacyNote = "Embedded TRX may contain test names, stdout, or machine paths; committing/pushing the artifact publishes those bytes, and this command does not scan them for privacy.";
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var catalogWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "commands", "list", "--format", format], CreateContext(), catalogWriter));
+            var catalogText = catalogWriter.ToString();
+            string purpose;
+            if (format == "json")
+            {
+                using var catalog = JsonDocument.Parse(catalogText);
+                purpose = catalog.RootElement.GetProperty("groups").EnumerateArray()
+                    .Single(group => group.GetProperty("name").GetString() == "verification")
+                    .GetProperty("purpose").GetString()!;
+            }
+            else purpose = catalogText;
+            Assert.Contains(record, purpose, StringComparison.Ordinal);
+            Assert.Contains("only explicit `--write` stores locally", purpose, StringComparison.Ordinal);
+            Assert.Contains("not-observed", purpose, StringComparison.Ordinal);
+            Assert.Contains("does not infer an AC passed", purpose, StringComparison.Ordinal);
+            Assert.Contains(localOnly, purpose, StringComparison.Ordinal);
+            Assert.Contains("fresh clone", purpose, StringComparison.Ordinal);
+            Assert.Contains(privacyNote, purpose, StringComparison.Ordinal);
+
+            using var soloWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", format], CreateContext(), soloWriter));
+            string soloText;
+            if (format == "json")
+            {
+                using var solo = JsonDocument.Parse(soloWriter.ToString());
+                soloText = solo.RootElement.GetProperty("loop").EnumerateArray()
+                    .Single(step => step.GetProperty("id").GetString() == "packet-draft-and-validate")
+                    .GetProperty("instruction").GetString()!;
+            }
+            else soloText = soloWriter.ToString();
+            Assert.Contains(record, soloText, StringComparison.Ordinal);
+            Assert.Contains("--write` stores one canonical local artifact", soloText, StringComparison.Ordinal);
+            Assert.Contains("acceptance is `not-assessed`", soloText, StringComparison.Ordinal);
+            Assert.Contains("Hosted-required proofs and", soloText, StringComparison.Ordinal);
+            Assert.Contains("deferral are unsupported", soloText, StringComparison.Ordinal);
+            Assert.Contains("commit and plain-push it", soloText, StringComparison.Ordinal);
+            Assert.Contains("fresh clone", soloText, StringComparison.Ordinal);
+            Assert.Contains(privacyNote, soloText, StringComparison.Ordinal);
+
+            using var workflowWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "workflow", "task", "issue-publish", "--format", format], CreateContext(), workflowWriter));
+            var workflowText = workflowWriter.ToString();
+            string invariants;
+            if (format == "json")
+            {
+                using var workflow = JsonDocument.Parse(workflowText);
+                invariants = string.Join(" ", workflow.RootElement.GetProperty("invariants").EnumerateArray().Select(item => item.GetString()));
+            }
+            else invariants = workflowText;
+            Assert.Contains(record, invariants, StringComparison.Ordinal);
+            Assert.Contains("previews by default", invariants, StringComparison.Ordinal);
+            Assert.Contains("execution is `not-observed`", invariants, StringComparison.Ordinal);
+            Assert.Contains("does not infer an AC passed", invariants, StringComparison.Ordinal);
+            Assert.Contains("Hosted-required proof", invariants, StringComparison.Ordinal);
+            Assert.Contains("deferral are unsupported", invariants, StringComparison.Ordinal);
+            Assert.Contains("Commit and plain-push a record", invariants, StringComparison.Ordinal);
+            Assert.Contains("fresh clone", invariants, StringComparison.Ordinal);
+            Assert.Contains(privacyNote, invariants, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void G866DocumentationIsAlignedInEnglishAndJapanese()
+    {
+        var root = RepoVersionPolicySource.RepoRoot();
+        foreach (var language in new[] { "en", "ja" })
+        {
+            var reference = File.ReadAllText(Path.Combine(root, "docs", language, "08-command-reference.md"));
+            var orchestration = File.ReadAllText(Path.Combine(root, "docs", language, "12-agent-message-orchestration.md"));
+            var ledger = File.ReadAllText(Path.Combine(root, "docs", language, "1.0-compatibility-ledger.md"));
+            Assert.Contains("G866", reference, StringComparison.Ordinal);
+            Assert.Contains("verification evidence record|show|validate", reference, StringComparison.Ordinal);
+            Assert.Contains("not-observed", reference, StringComparison.Ordinal);
+            Assert.Contains("fresh clone", reference, StringComparison.Ordinal);
+            Assert.Contains("G866", orchestration, StringComparison.Ordinal);
+            Assert.Contains("G866", ledger, StringComparison.Ordinal);
+            if (language == "en")
+            {
+                AssertPrivacyNoteFragments(reference, "Embedded TRX may contain", "this command does not scan them for privacy.");
+                AssertPrivacyNoteFragments(orchestration, "Embedded TRX may contain", "this command does not scan them for privacy.");
+                AssertPrivacyNoteFragments(ledger, "Embedded TRX may contain", "this command does not scan them for privacy.");
+                Assert.Contains("Hosted-required proofs and", orchestration, StringComparison.Ordinal);
+                Assert.Contains("deferral are unsupported", orchestration, StringComparison.Ordinal);
+                Assert.Contains("no automatic Git mutation", ledger, StringComparison.Ordinal);
+            }
+            else
+            {
+                AssertPrivacyNoteFragments(reference, "埋め込まれた TRX にはテスト名", "この command は個人情報の検査を行いません。");
+                AssertPrivacyNoteFragments(orchestration, "埋め込まれた TRX にはテスト名", "この command は個人情報の検査を行いません。");
+                AssertPrivacyNoteFragments(ledger, "埋め込まれた TRX にはテスト名", "この command は個人情報の検査を行いません。");
+                Assert.Contains("`hosted-required` proof", orchestration, StringComparison.Ordinal);
+                Assert.Contains("deferral は未対応", orchestration, StringComparison.Ordinal);
+                Assert.Contains("自動 Git mutation はありません", ledger, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    private static void AssertPrivacyNoteFragments(string text, string first, string last)
+    {
+        Assert.Contains(first, text, StringComparison.Ordinal);
+        Assert.Contains(last, text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SoloConductorGuideRouteAndCommandCatalogExposeTheRulingReadFlow()
     {
         using var catalogWriter = new StringWriter();

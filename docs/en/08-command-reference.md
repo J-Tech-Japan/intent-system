@@ -1110,6 +1110,39 @@ packet behavior. This
 optional report is not the deferred evidence-binding, deferral, design-prompt, or
 worker-enforcement work in source #1866; #1866 and related #1867/#1857 remain open.
 
+### Local verification evidence record (G866 — preview-through-1.x)
+
+The opt-in `intent-cli verification evidence record|show|validate` commands bind
+one caller-selected `local-required` G865 proof to exact supplied TRX bytes and
+the current packet. `record` is a no-write preview unless `--write` is explicit.
+`show` and `validate` address one exact ID; they do not select a latest record.
+The local store is `.intent-cli/verification-evidence/<domain>/<team>/<unit>/<id>.json`.
+
+```bash
+intent-cli verification evidence record --id E1 --execution-unit G123 \
+  --domain example --team builders --repo owner/repo --head-sha <40-lowerhex> \
+  --packet-sha256 <64-lowerhex> --proof P1 --trx artifacts/results.trx --format json
+intent-cli verification evidence record --id E1 --execution-unit G123 \
+  --domain example --team builders --repo owner/repo --head-sha <40-lowerhex> \
+  --packet-sha256 <64-lowerhex> --proof P1 --trx artifacts/results.trx --write --format json
+intent-cli verification evidence show E1 --execution-unit G123 --domain example \
+  --team builders --repo owner/repo --head-sha <40-lowerhex> --format json
+intent-cli verification evidence validate E1 --execution-unit G123 --domain example \
+  --team builders --repo owner/repo --head-sha <40-lowerhex> --format json
+```
+
+This is a local observation of supplied bytes. The command never runs the
+recorded command or tests, and does not authenticate the producer or supplied
+head, assess acceptance, infer that an AC passed, verify publication, or gate a
+worker. Hosted-required proofs and deferral are unsupported. Results keep
+`execution: not-observed`, `producer: not-authenticated`,
+`acceptance: not-assessed`, and `publication: not-verified`; raw TRX is kept in
+the local canonical artifact, not rendered in output. Embedded TRX may contain
+test names, stdout, or machine paths; committing/pushing the artifact publishes
+those bytes, and this command does not scan them for privacy. To make a record visible
+to another clone, commit and plain-push the artifact, then run `show` and
+`validate` from a fresh clone. Recording does not commit or push automatically.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by
