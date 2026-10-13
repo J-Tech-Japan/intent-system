@@ -55,6 +55,9 @@ public sealed class VerificationEvidenceCommandTests
         Assert.True(written.GetProperty("wrote").GetBoolean());
         var relative = Text(written, "artifact_path");
         var artifactBytes = File.ReadAllBytes(host.Absolute(relative));
+        Assert.NotEmpty(artifactBytes);
+        Assert.Equal((byte)'\n', artifactBytes[^1]);
+        Assert.DoesNotContain((byte)'\r', artifactBytes);
         using var artifactDocument = JsonDocument.Parse(artifactBytes);
         Assert.Equal(trx, Convert.FromBase64String(Text(artifactDocument.RootElement, "trx_base64")));
         Assert.Equal(Hash(artifactBytes), Text(written, "artifact_sha256"));
@@ -88,6 +91,15 @@ public sealed class VerificationEvidenceCommandTests
         Assert.True(replay.GetProperty("idempotent").GetBoolean());
         Assert.Equal(relative, Text(replay, "artifact_path"));
         Assert.Equal(Hash(artifactBytes), Hash(File.ReadAllBytes(host.Absolute(relative))));
+
+        var (writeReplayExit, writeReplayText) = Invoke(host,
+            [.. RecordArgs(host, format, packetSha, "renamed-capture.trx"), "--write"]);
+        var writeReplay = Result(writeReplayText, format);
+        Assert.Equal(0, writeReplayExit);
+        Assert.Equal("idempotent", Text(writeReplay, "disposition"));
+        Assert.False(writeReplay.GetProperty("wrote").GetBoolean());
+        Assert.True(writeReplay.GetProperty("idempotent").GetBoolean());
+        Assert.Equal(artifactBytes, File.ReadAllBytes(host.Absolute(relative)));
     }
 
     [Theory]
@@ -106,6 +118,70 @@ public sealed class VerificationEvidenceCommandTests
         Assert.Equal("verification-evidence-packet-changed", Text(result, "cause"));
         Assert.Equal(0, trxRead);
         Assert.False(Directory.Exists(host.EvidenceRoot));
+    }
+
+    [Theory]
+    [InlineData("domain")]
+    [InlineData("team")]
+    [InlineData("unit")]
+    public void RequestedPacketIdentityMismatchRefusesWithoutDiskProof(string field)
+    {
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            var packet = field == "unit"
+                ? ValidPacket.Replace("source_execution_unit: G866", "source_execution_unit: G999", StringComparison.Ordinal)
+                : ValidPacket;
+            using var host = new TempHost(packet: packet);
+            host.WriteTrx("capture.trx", ReadSmallVstest());
+            var args = field switch
+            {
+                "domain" => RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx", domain: "other-domain"),
+                "team" => RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx", team: "other-team"),
+                "unit" => RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"),
+                _ => throw new ArgumentOutOfRangeException(nameof(field))
+            };
+            var trxReads = 0;
+            var (exit, output) = Invoke(host, args, (operation, _) => { if (operation == "trx-read") trxReads++; });
+            var result = Result(output, format);
+            Assert.Equal(1, exit);
+            Assert.Equal("conflict", Text(result, "state"));
+            Assert.Equal("verification-evidence-identity-conflict", Text(result, "cause"));
+            Assert.Null(result.GetProperty("artifact_path").GetString());
+            Assert.Null(result.GetProperty("artifact_sha256").GetString());
+            Assert.Equal(0, trxReads);
+            Assert.False(Directory.Exists(host.EvidenceRoot));
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void SequentialDifferentTrxForSameIdentityConflictsAndPreservesFirstBytes(string format)
+    {
+        using var host = new TempHost();
+        var firstTrx = ReadSmallVstest();
+        var secondTrx = MutateSmallTrx("unicode-name");
+        host.WriteTrx("first.trx", firstTrx);
+        host.WriteTrx("second.trx", secondTrx);
+        var packetSha = Hash(host.PacketBytes);
+        var (firstExit, firstOutput) = Invoke(host,
+            [.. RecordArgs(host, format, packetSha, "first.trx"), "--write"]);
+        var first = Result(firstOutput, format);
+        Assert.Equal(0, firstExit);
+        var path = Text(first, "artifact_path");
+        var originalBytes = File.ReadAllBytes(host.Absolute(path));
+        var originalSha = Hash(originalBytes);
+
+        var (secondExit, secondOutput) = Invoke(host,
+            [.. RecordArgs(host, format, packetSha, "second.trx"), "--write"]);
+        var second = Result(secondOutput, format);
+        Assert.Equal(1, secondExit);
+        Assert.Equal("conflict", Text(second, "state"));
+        Assert.Equal("verification-evidence-record-conflict", Text(second, "cause"));
+        Assert.Equal(path, Text(second, "artifact_path"));
+        Assert.Equal(originalSha, Text(second, "artifact_sha256"));
+        Assert.Equal(originalBytes, File.ReadAllBytes(host.Absolute(path)));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(host.Absolute(path))!, "*.tmp"));
     }
 
     [Theory]
@@ -259,10 +335,22 @@ public sealed class VerificationEvidenceCommandTests
     [InlineData("write-and-dry-run", "json")]
     [InlineData("duplicate-write", "markdown")]
     [InlineData("read-with-trx", "json")]
+    [InlineData("read-with-proof", "markdown")]
+    [InlineData("read-with-packet-sha", "json")]
+    [InlineData("read-dry-run", "markdown")]
     public void InvalidFlagsAreStructuredAndRejectedBeforeAnyInputRead(string mutation, string format)
     {
         using var host = new TempHost();
         host.WriteTrx("capture.trx", ReadSmallVstest());
+        byte[]? seededArtifact = null;
+        if (mutation.StartsWith("read-", StringComparison.Ordinal))
+        {
+            var (seedExit, seedOutput) = Invoke(host,
+                [.. RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"), "--write"]);
+            Assert.Equal(0, seedExit);
+            var seeded = Result(seedOutput, format);
+            seededArtifact = File.ReadAllBytes(host.Absolute(Text(seeded, "artifact_path")));
+        }
         var args = RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx");
         switch (mutation)
         {
@@ -272,6 +360,9 @@ public sealed class VerificationEvidenceCommandTests
             case "write-and-dry-run": args = [.. args, "--write", "--dry-run"]; break;
             case "duplicate-write": args = [.. args, "--write", "--write"]; break;
             case "read-with-trx": args = [.. ReadArgs("show", format), "--trx", "capture.trx"]; break;
+            case "read-with-proof": args = [.. ReadArgs("show", format), "--proof", "P1"]; break;
+            case "read-with-packet-sha": args = [.. ReadArgs("validate", format), "--packet-sha256", Hash(host.PacketBytes)]; break;
+            case "read-dry-run": args = [.. ReadArgs("show", format), "--dry-run"]; break;
             default: throw new ArgumentOutOfRangeException(nameof(mutation));
         }
         var reads = 0;
@@ -282,7 +373,8 @@ public sealed class VerificationEvidenceCommandTests
         Assert.Equal("verification-evidence-argument-invalid", Text(result, "cause"));
         Assert.Equal("refused", Text(result, "disposition"));
         Assert.Equal(0, reads);
-        Assert.False(Directory.Exists(host.EvidenceRoot));
+        if (seededArtifact is null) Assert.False(Directory.Exists(host.EvidenceRoot));
+        else Assert.Equal(seededArtifact, File.ReadAllBytes(host.Absolute(".intent-cli/verification-evidence/intent-cli/intent-cli-dev/G866/E1.json")));
         Assert.DoesNotContain(host.Root, output, StringComparison.Ordinal);
     }
 
@@ -536,6 +628,155 @@ public sealed class VerificationEvidenceCommandTests
         Assert.Contains(relativeTemp, result.GetProperty("residual_owned_paths").EnumerateArray()
             .Select(item => item.GetString()));
         Assert.False(File.Exists(host.Absolute(".intent-cli/verification-evidence/intent-cli/intent-cli-dev/G866/E1.json")));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void StoreAncestorSwapAtEveryPublicationPhaseNeverTouchesReplacementOrOutside(string format)
+    {
+        foreach (var phase in new[] { "temp-create", "before-publish", "atomic-create", "temp-cleanup" })
+        {
+            using var host = new TempHost();
+            using var outside = new TempHost();
+            var trx = ReadSmallVstest();
+            host.WriteTrx("capture.trx", trx);
+            var movedStore = host.Absolute("moved-original-store");
+            var outsideTarget = Path.Combine(outside.EvidenceRoot, Domain, Team, Unit, Id + ".json");
+            Directory.CreateDirectory(Path.GetDirectoryName(outsideTarget)!);
+            var outsideTargetBytes = Encoding.UTF8.GetBytes("external target sentinel\n");
+            File.WriteAllBytes(outsideTarget, outsideTargetBytes);
+            var outsideTempBytes = Encoding.UTF8.GetBytes("external temp sentinel\n");
+            string? outsideTemp = null;
+            string? replacementTemp = null;
+            string? originalTemp = null;
+            var swapped = false;
+            var replacedWithRegularDirectory = false;
+            var reached = false;
+
+            void SwapToOutside(string tempPath)
+            {
+                reached = true;
+                var relativeTemp = Path.GetRelativePath(host.EvidenceRoot, tempPath);
+                var tempWasCreated = File.Exists(tempPath);
+                Directory.Move(host.EvidenceRoot, movedStore);
+                if (tempWasCreated) originalTemp = Path.Combine(movedStore, relativeTemp);
+                Directory.CreateSymbolicLink(host.EvidenceRoot, outside.EvidenceRoot);
+                outsideTemp = Path.Combine(outside.EvidenceRoot, relativeTemp);
+                Directory.CreateDirectory(Path.GetDirectoryName(outsideTemp)!);
+                File.WriteAllBytes(outsideTemp, outsideTempBytes);
+                swapped = true;
+            }
+
+            var (exit, output) = Invoke(host,
+                [.. RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"), "--write"],
+                (operation, path) =>
+                {
+                    if (operation == phase)
+                    {
+                        var tempPath = operation is "temp-create" or "temp-cleanup"
+                            ? path
+                            : Directory.GetFiles(host.EvidenceRoot, "*.tmp", SearchOption.AllDirectories).Single();
+                        SwapToOutside(tempPath);
+                    }
+                    else if (operation == "temp-cleanup" && swapped && (phase is "before-publish" or "atomic-create")
+                        && !replacedWithRegularDirectory)
+                    {
+                        // The original scope was moved and a symlink was already detected. A later
+                        // regular directory at the old pathname is a replacement, not an owned path.
+                        Directory.Delete(host.EvidenceRoot);
+                        Directory.CreateDirectory(host.EvidenceRoot);
+                        replacementTemp = Path.Combine(host.EvidenceRoot,
+                            Path.GetRelativePath(movedStore, originalTemp!));
+                        Directory.CreateDirectory(Path.GetDirectoryName(replacementTemp)!);
+                        File.WriteAllBytes(replacementTemp, Encoding.UTF8.GetBytes("replacement directory sentinel\n"));
+                        replacedWithRegularDirectory = true;
+                    }
+                });
+
+            var result = Result(output, format);
+            Assert.True(reached, $"phase {phase} was not reached");
+            Assert.True(swapped);
+            Assert.Equal(outsideTargetBytes, File.ReadAllBytes(outsideTarget));
+            Assert.Equal(outsideTempBytes, File.ReadAllBytes(outsideTemp!));
+            Assert.DoesNotContain(host.Root, output, StringComparison.Ordinal);
+            Assert.DoesNotContain(outside.Root, output, StringComparison.Ordinal);
+
+            if (phase == "temp-cleanup")
+            {
+                Assert.Equal(0, exit);
+                Assert.True(result.GetProperty("wrote").GetBoolean());
+                Assert.Equal("recorded", Text(result, "disposition"));
+                Assert.True(File.Exists(Path.Combine(movedStore, Domain, Team, Unit, Id + ".json")));
+                Assert.NotNull(originalTemp);
+                Assert.True(File.Exists(originalTemp));
+                Assert.Contains(result.GetProperty("diagnostics").EnumerateArray(), item =>
+                    Text(item, "cause") == "owned-temp-cleanup"
+                    && Text(item, "detail").Contains("original owned temporary path cannot be safely resolved", StringComparison.Ordinal));
+                Assert.Empty(result.GetProperty("residual_owned_paths").EnumerateArray());
+            }
+            else
+            {
+                Assert.Equal(1, exit);
+                Assert.False(result.GetProperty("wrote").GetBoolean());
+                Assert.Null(result.GetProperty("artifact_path").GetString());
+                Assert.Null(result.GetProperty("artifact_sha256").GetString());
+                Assert.Equal("verification-evidence-identity-conflict", Text(result, "cause"));
+                Assert.Empty(result.GetProperty("residual_owned_paths").EnumerateArray());
+                Assert.False(File.Exists(Path.Combine(movedStore, Domain, Team, Unit, Id + ".json")));
+                if (phase == "temp-create")
+                {
+                    Assert.Null(originalTemp);
+                    Assert.False(File.Exists(Path.Combine(movedStore, Domain, Team, Unit,
+                        Path.GetFileName(outsideTemp!))));
+                }
+                else
+                {
+                    Assert.NotNull(originalTemp);
+                    Assert.True(File.Exists(originalTemp));
+                    Assert.True(replacedWithRegularDirectory);
+                    Assert.Equal(Encoding.UTF8.GetBytes("replacement directory sentinel\n"), File.ReadAllBytes(replacementTemp!));
+                    Assert.Contains(result.GetProperty("diagnostics").EnumerateArray(), item =>
+                        Text(item, "cause") == "owned-directory-cleanup"
+                        && Text(item, "detail").Contains("original owned directory path cannot be safely resolved", StringComparison.Ordinal));
+                }
+            }
+
+            if (new DirectoryInfo(host.EvidenceRoot).LinkTarget is not null)
+                Directory.Delete(host.EvidenceRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void CrLfStoredJsonIsNotCanonicalEvidence(string format)
+    {
+        using var host = new TempHost();
+        var trx = ReadSmallVstest();
+        host.WriteTrx("capture.trx", trx);
+        var (writeExit, writeOutput) = Invoke(host,
+            [.. RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"), "--write"]);
+        Assert.Equal(0, writeExit);
+        var written = Result(writeOutput, format);
+        var target = host.Absolute(Text(written, "artifact_path"));
+        var canonicalBytes = File.ReadAllBytes(target);
+        Assert.DoesNotContain((byte)'\r', canonicalBytes);
+        var crlfBytes = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(canonicalBytes).Replace("\n", "\r\n", StringComparison.Ordinal));
+        Assert.NotEqual(canonicalBytes, crlfBytes);
+        File.WriteAllBytes(target, crlfBytes);
+
+        foreach (var operation in new[] { "show", "validate" })
+        {
+            var (exit, output) = Invoke(host, ReadArgs(operation, format));
+            var result = Result(output, format);
+            Assert.Equal(1, exit);
+            Assert.Equal("unavailable", Text(result, "state"));
+            Assert.Equal("verification-evidence-record-invalid", Text(result, "cause"));
+            Assert.Null(result.GetProperty("artifact_path").GetString());
+            Assert.Null(result.GetProperty("artifact_sha256").GetString());
+            Assert.Equal(crlfBytes, File.ReadAllBytes(target));
+        }
     }
 
     [Theory]
@@ -1517,7 +1758,7 @@ public sealed class VerificationEvidenceCommandTests
     {
         foreach (var mutation in new[]
         {
-            "total", "executed", "passed", "failed", "not-executed", "bad-guid", "bad-name",
+            "total", "executed", "passed", "failed", "not-executed", "root-guid", "aborted-counter", "duplicate-entry", "missing-result", "bad-guid", "bad-name",
             "long-name", "bad-outcome", "duplicate-execution", "missing-entry", "extra-entry",
             "missing-definition", "extra-definition", "wrong-definition-execution", "wrong-entry-execution",
             "duplicate-result", "duplicate-definition", "nested-result", "wrong-root-namespace", "wrong-result-namespace",
@@ -1525,7 +1766,8 @@ public sealed class VerificationEvidenceCommandTests
             "stray-execution", "stray-counters", "wrong-summary-outcome"
         })
         {
-            var cause = mutation is "bad-guid" or "bad-name" or "long-name" or "bad-outcome"
+            var cause = mutation is "root-guid" or "aborted-counter" or "duplicate-entry" or "missing-result"
+                or "bad-guid" or "bad-name" or "long-name" or "bad-outcome"
                 or "duplicate-execution" or "missing-entry" or "extra-entry" or "duplicate-definition"
                 or "missing-definition" or "extra-definition" or "wrong-definition-execution" or "wrong-entry-execution"
                 or "duplicate-result" or "wrong-execution-namespace" or "missing-results-section" or "duplicate-results-section" or "misplaced-counters"
@@ -2077,6 +2319,10 @@ public sealed class VerificationEvidenceCommandTests
             case "passed": counters.SetAttributeValue("passed", "3"); break;
             case "failed": counters.SetAttributeValue("failed", "1"); break;
             case "not-executed": counters.SetAttributeValue("notExecuted", "1"); break;
+            case "root-guid": root.SetAttributeValue("id", "not-a-guid"); break;
+            case "aborted-counter": counters.SetAttributeValue("aborted", "1"); break;
+            case "duplicate-entry": entries.Add(new XElement(entries.Elements(ns + "TestEntry").First())); break;
+            case "missing-result": results.Elements(ns + "UnitTestResult").First().Remove(); break;
             case "bad-guid": result.SetAttributeValue("testId", "not-a-guid"); break;
             case "bad-name": result.SetAttributeValue("testName", "  "); break;
             case "long-name": result.SetAttributeValue("testName", new string('x', TrxEvidenceReader.MaximumNameLength + 1)); break;

@@ -71,6 +71,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        NewLine = "\n",
         Encoder = JavaScriptEncoder.Default,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
@@ -250,6 +251,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
             return Failure("invalid", "verification-evidence-record-invalid", "writer bytes differ from canonical serialization", relative);
 
         var createdDirectories = new List<string>();
+        var ownershipUncertain = false;
         var fullDirectory = string.Empty;
         var pathCause = "verification-evidence-read-unavailable";
         var pathDetail = "evidence directory could not be safely inspected";
@@ -257,14 +259,16 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
         try
         {
             prepared = TryPrepareDirectories(record, out fullDirectory, out createdDirectories,
-                out pathCause, out pathDetail);
+                out ownershipUncertain, out pathCause, out pathDetail);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
             or ArgumentException or NotSupportedException)
         {
             var cleanupDiagnostics = new List<VerificationEvidenceDiagnostic>();
             var residual = new List<string>();
-            CleanupDirectories(createdDirectories, relative, cleanupDiagnostics, residual);
+            CleanupDirectories(createdDirectories, relative, cleanupDiagnostics, residual, ref ownershipUncertain);
+            if (string.IsNullOrEmpty(pathCause))
+                pathCause = "verification-evidence-read-unavailable";
             pathDetail = "evidence directory setup failed at a bounded file operation";
             cleanupDiagnostics.Insert(0, new(pathCause, relative, pathDetail));
             return new(false, "unavailable", pathCause, pathDetail, false, false, relative, null,
@@ -275,7 +279,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
         {
             var cleanupDiagnostics = new List<VerificationEvidenceDiagnostic>();
             var residual = new List<string>();
-            CleanupDirectories(createdDirectories, relative, cleanupDiagnostics, residual);
+            CleanupDirectories(createdDirectories, relative, cleanupDiagnostics, residual, ref ownershipUncertain);
             cleanupDiagnostics.Insert(0, new(pathCause, relative, pathDetail));
             return new(false, pathCause == "verification-evidence-identity-conflict" ? "conflict" : "unavailable",
                 pathCause, pathDetail, false, false, relative, null, residual, cleanupDiagnostics);
@@ -287,7 +291,8 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
         {
             var cleanupDiagnostics = new List<VerificationEvidenceDiagnostic>();
             var residual = new List<string>();
-            CleanupDirectories(createdDirectories, relative, cleanupDiagnostics, residual);
+            if (leafFailure == "verification-evidence-identity-conflict") ownershipUncertain = true;
+            CleanupDirectories(createdDirectories, relative, cleanupDiagnostics, residual, ref ownershipUncertain);
             cleanupDiagnostics.Insert(0, new(leafFailure, relative, leafDetail));
             return new(false, "unavailable", leafFailure, leafDetail, false, false, relative, null, residual, cleanupDiagnostics);
         }
@@ -305,7 +310,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
             }
             var cleanupDiagnostics = new List<VerificationEvidenceDiagnostic>();
             var residual = new List<string>();
-            CleanupDirectories(createdDirectories, relative, cleanupDiagnostics, residual);
+            CleanupDirectories(createdDirectories, relative, cleanupDiagnostics, residual, ref ownershipUncertain);
             cleanupDiagnostics.Insert(0, new("verification-evidence-record-conflict", relative,
                 "target already exists with different, malformed, or mismatched content"));
             return new(false, "conflict", "verification-evidence-record-conflict",
@@ -315,6 +320,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
         }
 
         string? tempPath = null;
+        var tempCreated = false;
         var wrote = false;
         var idempotent = false;
         var diagnostics = new List<VerificationEvidenceDiagnostic>();
@@ -324,25 +330,42 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
         {
             tempPath = Path.Combine(fullDirectory, "." + record.Id + "." + Guid.NewGuid().ToString("N") + ".tmp");
             beforeOperation?.Invoke("temp-create", tempPath);
+            if (!TryValidateDirectoryChain(fullDirectory, out var boundaryCause, out var boundaryDetail))
+            {
+                ownershipUncertain = true;
+                CleanupFailureArtifacts(null, createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
+                diagnostics.Insert(0, new(boundaryCause, relative, boundaryDetail));
+                return new(false, boundaryCause == "verification-evidence-identity-conflict" ? "conflict" : "unavailable",
+                    boundaryCause, boundaryDetail, false, false, null, null, residualPaths, diagnostics);
+            }
             using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
+                tempCreated = true;
                 stream.Write(bytes);
                 stream.Flush(true);
             }
 
             phase = "before-publish";
             beforeOperation?.Invoke("before-publish", fullPath);
+            if (!TryValidateDirectoryChain(fullDirectory, out boundaryCause, out boundaryDetail))
+            {
+                ownershipUncertain = true;
+                CleanupFailureArtifacts(tempCreated ? tempPath : null, createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
+                diagnostics.Insert(0, new(boundaryCause, relative, boundaryDetail));
+                return new(false, boundaryCause == "verification-evidence-identity-conflict" ? "conflict" : "unavailable",
+                    boundaryCause, boundaryDetail, false, false, null, null, residualPaths, diagnostics);
+            }
             var check = recheck();
             if (!check.Matches)
             {
-                CleanupFailureArtifacts(tempPath, createdDirectories, relative, diagnostics, residualPaths);
+                CleanupFailureArtifacts(tempCreated ? tempPath : null, createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
                 return new(false, "stale", check.Cause, check.Detail, false, false, null, null,
                     residualPaths, diagnostics);
             }
 
             if (!InspectLeaf(fullPath, out exists, out leafFailure, out leafDetail))
             {
-                CleanupFailureArtifacts(tempPath, createdDirectories, relative, diagnostics, residualPaths);
+                CleanupFailureArtifacts(tempCreated ? tempPath : null, createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
                 return new(false, "unavailable", leafFailure, leafDetail, false, false, null, null,
                     residualPaths, diagnostics);
             }
@@ -353,12 +376,12 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
                     && raced.Bytes.AsSpan().SequenceEqual(bytes))
                 {
                     idempotent = true;
-                    CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, publicationCompleted: true);
-                    CleanupDirectories(createdDirectories, relative, diagnostics, residualPaths);
+                    CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, ref ownershipUncertain, publicationCompleted: true);
+                    CleanupDirectories(createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
                     return new(true, "current", "", "identical canonical record won the publication race", false, true,
                         relative, raced.Sha256, residualPaths, diagnostics);
                 }
-                CleanupFailureArtifacts(tempPath, createdDirectories, relative, diagnostics, residualPaths);
+                CleanupFailureArtifacts(tempCreated ? tempPath : null, createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
                 diagnostics.Insert(0, new("verification-evidence-record-conflict", relative,
                     "a different or invalid record appeared before publication"));
                 return new(false, "conflict", "verification-evidence-record-conflict",
@@ -369,12 +392,20 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
 
             phase = "atomic-create";
             beforeOperation?.Invoke("atomic-create", fullPath);
+            if (!TryValidateDirectoryChain(fullDirectory, out boundaryCause, out boundaryDetail))
+            {
+                ownershipUncertain = true;
+                CleanupFailureArtifacts(tempCreated ? tempPath : null, createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
+                diagnostics.Insert(0, new(boundaryCause, relative, boundaryDetail));
+                return new(false, boundaryCause == "verification-evidence-identity-conflict" ? "conflict" : "unavailable",
+                    boundaryCause, boundaryDetail, false, false, null, null, residualPaths, diagnostics);
+            }
             var link = TryCreateAtomicHardLink(tempPath, fullPath);
             if (link.Success)
             {
                 // Publication is the truth boundary. Keep this assignment before temp cleanup.
                 wrote = true;
-                CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, publicationCompleted: true);
+                CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, ref ownershipUncertain, publicationCompleted: true);
                 var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
                 var warning = diagnostics.Count == 0 ? "canonical evidence record was atomically created" : "record created; owned temporary cleanup needs attention";
                 return new(true, "current", "", warning, wrote, false, relative, sha, residualPaths, diagnostics);
@@ -385,12 +416,12 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
                 && racedTarget.Bytes.AsSpan().SequenceEqual(bytes))
             {
                 idempotent = true;
-                CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, publicationCompleted: true);
-                CleanupDirectories(createdDirectories, relative, diagnostics, residualPaths);
+                CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, ref ownershipUncertain, publicationCompleted: true);
+                CleanupDirectories(createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
                 return new(true, "current", "", "identical canonical record won the publication race", false, idempotent,
                     relative, racedTarget.Sha256, residualPaths, diagnostics);
             }
-            CleanupFailureArtifacts(tempPath, createdDirectories, relative, diagnostics, residualPaths);
+            CleanupFailureArtifacts(tempCreated ? tempPath : null, createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
             var targetInspected = InspectLeaf(fullPath, out var targetPresent, out var targetFailure, out var targetDetail);
             var destinationExists = targetInspected && targetPresent
                 || racedTarget.State is "current" or "invalid" or "conflict";
@@ -413,7 +444,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException
             or NotSupportedException or DllNotFoundException or EntryPointNotFoundException)
         {
-            CleanupFailureArtifacts(tempPath, createdDirectories, relative, diagnostics, residualPaths);
+            CleanupFailureArtifacts(tempCreated ? tempPath : null, createdDirectories, relative, diagnostics, residualPaths, ref ownershipUncertain);
             var cause = phase == "atomic-create" && exception is DllNotFoundException or EntryPointNotFoundException
                 ? "verification-evidence-read-unavailable" : "verification-evidence-read-unavailable";
             return new(false, "unavailable", cause, "local evidence write failed at a bounded file operation",
@@ -424,9 +455,10 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
     }
 
     private bool TryPrepareDirectories(VerificationEvidenceRecord record, out string finalDirectory,
-        out List<string> created, out string cause, out string detail)
+        out List<string> created, out bool ownershipUncertain, out string cause, out string detail)
     {
         created = [];
+        ownershipUncertain = false;
         cause = "verification-evidence-read-unavailable";
         detail = "evidence directory could not be safely inspected";
         finalDirectory = string.Empty;
@@ -458,6 +490,11 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
             else
             {
                 beforeOperation?.Invoke("directory-create", child);
+                if (!TryValidateDirectoryChain(current, out cause, out detail))
+                {
+                    ownershipUncertain = true;
+                    return false;
+                }
                 if (TryCreateDirectoryExclusive(child, out var createdHere, out detail))
                 {
                     if (createdHere) created.Add(child);
@@ -573,6 +610,80 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
             detail = state == EntryState.Link ? "repository root is a symlink or reparse point" : "repository root is not a directory";
             return false;
         }
+        return true;
+    }
+
+    private bool TryValidateDirectoryChain(string directory, out string cause, out string detail)
+    {
+        cause = "verification-evidence-read-unavailable";
+        detail = "evidence directory chain could not be safely inspected";
+        if (!TryFullRoot(out var root, out cause, out detail)) return false;
+
+        string fullDirectory;
+        string relative;
+        try
+        {
+            fullDirectory = Path.GetFullPath(directory);
+            relative = Path.GetRelativePath(root, fullDirectory);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or NotSupportedException)
+        {
+            cause = "verification-evidence-identity-conflict";
+            detail = "evidence directory path is invalid";
+            return false;
+        }
+
+        if (Path.IsPathRooted(relative))
+        {
+            cause = "verification-evidence-identity-conflict";
+            detail = "evidence directory is outside the repository root";
+            return false;
+        }
+
+        var segments = relative == "."
+            ? Array.Empty<string>()
+            : relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.None);
+        if (segments.Any(segment => segment.Length == 0 || segment is "." or ".."))
+        {
+            cause = "verification-evidence-identity-conflict";
+            detail = "evidence directory path contains an unsafe segment";
+            return false;
+        }
+
+        var current = root;
+        foreach (var segment in segments)
+        {
+            if (!TryReadDirectoryEntries(current, segment, out var exists, out var alias, out detail))
+            {
+                cause = alias ? "verification-evidence-identity-conflict" : "verification-evidence-read-unavailable";
+                return false;
+            }
+            if (!exists)
+            {
+                cause = "verification-evidence-read-unavailable";
+                detail = "evidence directory disappeared during a bounded operation";
+                return false;
+            }
+
+            var child = Path.Combine(current, segment);
+            if (!InspectDirectory(child, out var childExists, out cause, out detail) || !childExists)
+            {
+                if (cause.Length == 0) cause = "verification-evidence-read-unavailable";
+                if (detail.Length == 0) detail = "evidence directory disappeared during a bounded operation";
+                return false;
+            }
+            current = child;
+        }
+
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!string.Equals(Path.GetFullPath(current), fullDirectory, comparison))
+        {
+            cause = "verification-evidence-identity-conflict";
+            detail = "evidence directory identity changed during a bounded operation";
+            return false;
+        }
+        cause = string.Empty;
+        detail = string.Empty;
         return true;
     }
 
@@ -741,44 +852,107 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
     private sealed record AtomicLinkResult(bool Success, bool Unsupported, string Detail);
 
     private void CleanupOwnedTemp(string tempPath, string relative,
-        List<VerificationEvidenceDiagnostic> diagnostics, List<string> residual, bool publicationCompleted = false)
+        List<VerificationEvidenceDiagnostic> diagnostics, List<string> residual,
+        ref bool ownershipUncertain, bool publicationCompleted = false)
     {
         try
         {
             beforeOperation?.Invoke("temp-cleanup", tempPath);
+            if (ownershipUncertain)
+            {
+                var unresolvedPath = ToRelative(tempPath);
+                diagnostics.Add(new("owned-temp-cleanup", unresolvedPath,
+                    "the original owned temporary path cannot be safely resolved after its directory chain changed"));
+                return;
+            }
+            var directory = Path.GetDirectoryName(tempPath)!;
+            if (!TryValidateDirectoryChain(directory, out _, out _))
+            {
+                ownershipUncertain = true;
+                diagnostics.Add(new("owned-temp-cleanup", ToRelative(tempPath),
+                    "the original owned temporary path cannot be safely resolved after its directory chain changed"));
+                return;
+            }
+            if (!InspectLeaf(tempPath, out var exists, out _, out _))
+            {
+                ownershipUncertain = true;
+                diagnostics.Add(new("owned-temp-cleanup", ToRelative(tempPath),
+                    "the original owned temporary path could not be safely verified for cleanup"));
+                return;
+            }
+            if (!exists)
+                return;
             File.Delete(tempPath);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
         {
             var path = ToRelative(tempPath);
-            residual.Add(path);
-            diagnostics.Add(new("owned-temp-cleanup", path, publicationCompleted
-                ? "canonical final record is complete but its owned temporary path remains"
-                : "publication did not complete and its owned temporary path remains"));
+            var chainValid = !ownershipUncertain
+                && TryValidateDirectoryChain(Path.GetDirectoryName(tempPath)!, out _, out _);
+            string detail;
+            if (!chainValid)
+            {
+                ownershipUncertain = true;
+                detail = "the original owned temporary path cannot be safely resolved after its directory chain changed";
+            }
+            else if (!InspectLeaf(tempPath, out var exists, out _, out _))
+            {
+                ownershipUncertain = true;
+                detail = "the original owned temporary path could not be safely verified after cleanup failed";
+            }
+            else if (exists)
+            {
+                residual.Add(path);
+                detail = publicationCompleted
+                    ? "canonical final record is complete but its owned temporary path remains"
+                    : "publication did not complete and its owned temporary path remains";
+            }
+            else
+            {
+                detail = "the owned temporary path was already absent after cleanup failed";
+            }
+            diagnostics.Add(new("owned-temp-cleanup", path, detail));
         }
     }
 
     private void CleanupDirectories(List<string> directories, string relative,
-        List<VerificationEvidenceDiagnostic> diagnostics, List<string> residual)
+        List<VerificationEvidenceDiagnostic> diagnostics, List<string> residual, ref bool ownershipUncertain)
     {
         foreach (var directory in directories.AsEnumerable().Reverse())
         {
+            var path = ToRelative(directory);
+            if (ownershipUncertain)
+            {
+                diagnostics.Add(new("owned-directory-cleanup", path,
+                    "the original owned directory path cannot be safely resolved after its directory chain changed"));
+                continue;
+            }
+            if (!TryValidateDirectoryChain(directory, out _, out _))
+            {
+                ownershipUncertain = true;
+                diagnostics.Add(new("owned-directory-cleanup", path,
+                    "the original owned directory path cannot be safely resolved after its directory chain changed"));
+                continue;
+            }
             try { Directory.Delete(directory, recursive: false); }
             catch (DirectoryNotFoundException) { }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
             {
-                var path = ToRelative(directory);
-                residual.Add(path);
+                var chainValid = TryValidateDirectoryChain(directory, out _, out _);
+                if (chainValid && InspectDirectory(directory, out var exists, out _, out _) && exists)
+                    residual.Add(path);
+                else if (!chainValid)
+                    ownershipUncertain = true;
                 diagnostics.Add(new("owned-directory-cleanup", path, "owned directory was preserved because it was no longer empty or could not be removed"));
             }
         }
     }
 
     private void CleanupFailureArtifacts(string? tempPath, List<string> directories, string relative,
-        List<VerificationEvidenceDiagnostic> diagnostics, List<string> residual)
+        List<VerificationEvidenceDiagnostic> diagnostics, List<string> residual, ref bool ownershipUncertain)
     {
-        if (tempPath is not null) CleanupOwnedTemp(tempPath, relative, diagnostics, residual);
-        CleanupDirectories(directories, relative, diagnostics, residual);
+        if (tempPath is not null) CleanupOwnedTemp(tempPath, relative, diagnostics, residual, ref ownershipUncertain);
+        CleanupDirectories(directories, relative, diagnostics, residual, ref ownershipUncertain);
     }
 
     private static VerificationEvidenceStoreWrite Failure(string state, string cause, string detail, string? path,

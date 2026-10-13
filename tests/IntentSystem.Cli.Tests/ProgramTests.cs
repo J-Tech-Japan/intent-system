@@ -353,6 +353,65 @@ public sealed class ProgramTests
         }
     }
 
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_VerificationEvidenceRejectsUnsafeTrxPathsWithoutWritingOrLeakingPaths(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var repo = tempDirectory.CreateDirectory("repo");
+            var packetBytes = Encoding.UTF8.GetBytes(VerificationEvidenceCommandTests.ValidPacket + "\n");
+            var packetPath = Path.Combine(repo, ".intent-cli", "issues", "G866", "packet.yaml");
+            Directory.CreateDirectory(Path.GetDirectoryName(packetPath)!);
+            File.WriteAllBytes(packetPath, packetBytes);
+            File.WriteAllBytes(Path.Combine(repo, "capture.trx"), VerificationEvidenceCommandTests.ReadSmallVstest());
+            var outsideDirectory = tempDirectory.CreateDirectory("outside");
+            var outsideSentinel = Path.Combine(outsideDirectory, "sentinel.txt");
+            var scratchRoot = Path.GetDirectoryName(outsideDirectory)!;
+            var sentinelBytes = Encoding.UTF8.GetBytes("outside path remains unchanged\n");
+            File.WriteAllBytes(outsideSentinel, sentinelBytes);
+            var nested = tempDirectory.CreateDirectory(Path.Combine("repo", "src", "feature"));
+            var packetSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant();
+            var unsafeTrxPaths = new[]
+            {
+                Path.Combine(repo, "capture.trx"),
+                "../outside/sentinel.txt",
+                "./capture.trx",
+                "capture//trx.trx",
+                "capture\\..\\outside\\sentinel.txt",
+            };
+
+            foreach (var trxPath in unsafeTrxPaths)
+            {
+                var args = new[]
+                {
+                    "verification", "evidence", "record", "--id", "E1", "--execution-unit", "G866",
+                    "--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
+                    "--head-sha", VerificationEvidenceCommandTests.Head, "--packet-sha256", packetSha,
+                    "--proof", "P1", "--trx", trxPath, "--format", format, "--write"
+                };
+                using var console = new ConsoleScope();
+                using var currentDirectory = new CurrentDirectoryScope(nested);
+                var exit = Program.Main(args);
+                var output = console.Out.ToString();
+                using var result = JsonDocument.Parse(VerificationStructuredJson(output, format));
+                Assert.Equal(1, exit);
+                Assert.Contains(result.RootElement.GetProperty("cause").GetString(), new[]
+                {
+                    "verification-evidence-argument-invalid", "verification-evidence-read-unavailable"
+                });
+                Assert.False(result.RootElement.GetProperty("wrote").GetBoolean());
+                Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli", "verification-evidence")));
+                Assert.Equal(sentinelBytes, File.ReadAllBytes(outsideSentinel));
+                Assert.DoesNotContain(repo, output, StringComparison.Ordinal);
+                Assert.DoesNotContain(scratchRoot, output, StringComparison.Ordinal);
+                Assert.Equal(string.Empty, console.Error.ToString());
+            }
+        }
+    }
+
     [Fact]
     public void Main_VerificationEvidenceMarkdownFencesMaliciousIdentityAndCommandText()
     {
