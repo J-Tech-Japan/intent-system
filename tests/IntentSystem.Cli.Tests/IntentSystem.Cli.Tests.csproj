@@ -25,6 +25,9 @@
     <EmbeddedResource Include="Fixtures/G866/full-cli-vstest.trx.gz">
       <LogicalName>g866-full-cli-vstest.trx.gz</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Fixtures/G868/no-marker-base-goldens.json">
+      <LogicalName>g868-no-marker-base-goldens.json</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

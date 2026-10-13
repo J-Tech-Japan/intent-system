@@ -442,8 +442,14 @@ public sealed class GuideCommandsListCommandTests
                 Assert.Contains("--github-only", document, StringComparison.Ordinal);
                 Assert.Contains("G785", document, StringComparison.Ordinal);
                 Assert.Contains("#1866", document, StringComparison.Ordinal);
+                AssertPrivacyNoteFragments(document,
+                    language == "en" ? "Embedded TRX may contain" : "埋め込まれた TRX にはテスト名",
+                    language == "en" ? "this command does not scan them for privacy." : "この command は個人情報の検査を行いません。");
             }
         }
+
+        var japaneseReference = File.ReadAllText(Path.Combine(root, "docs", "ja", "08-command-reference.md"));
+        Assert.Contains("出力形式は text、JSON、Markdown です。", japaneseReference, StringComparison.Ordinal);
     }
 
     private static void AssertPrivacyNoteFragments(string text, string first, string last)

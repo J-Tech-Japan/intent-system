@@ -126,7 +126,8 @@ internal static class WorkerVerificationGate
 
             if (LegacyValueOptions.Contains(argument))
             {
-                if (index + 1 >= args.Length || string.IsNullOrEmpty(args[index + 1]))
+                if (index + 1 >= args.Length || string.IsNullOrEmpty(args[index + 1])
+                    || args[index + 1].StartsWith("--", StringComparison.Ordinal))
                 {
                     error ??= $"{argument} requires a nonempty value";
                     legacy.Add(argument);

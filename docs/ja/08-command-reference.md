@@ -1000,7 +1000,7 @@ G867 typed coverage が complete で、local-required proof が少なくとも 1
 hosted-required proof がないことを要求します。gate は live target PR head と local coverage を読み、既存の
 read-only lifecycle checks の後、最初の lifecycle write 直前に head を再読してから同じ typed coverage を再評価します。
 この保証はその最初の write までで、atomic ではなく、後続の partial publication を rollback しません。
-syntax error は exit 1、well-formed gate refusal は exit 2 です。成功後の proceed/exit は既存 worker result が決めます。
+出力形式は text、JSON、Markdown です。syntax error は exit 1、well-formed gate refusal は exit 2 です。成功後の proceed/exit は既存 worker result が決めます。
 marker がなければ legacy bytes と provider budgets を保ち、G785 は独立して引き続き適用されます。
 
 これは caller が選んだ local bytes と live PR head の観測です。test execution、producer/command、semantic AC acceptance、

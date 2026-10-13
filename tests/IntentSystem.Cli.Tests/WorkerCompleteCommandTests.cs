@@ -281,6 +281,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     public void G868MissingRecordRefusesBeforeHeadOrLegacyProviders(string format)
     {
         using var host = new VerificationEvidenceCommandTests.TempHost();
+        SeedG868ValidQueueSentinel(host.Root, host.Unit);
+        var durableBefore = SnapshotG868Tree(host.Root);
         var context = G868Context(host.Root);
         var mutatorFactories = 0;
         var prLookupFactories = 0;
@@ -305,7 +307,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(0, mutatorFactories);
         Assert.Equal(0, prLookupFactories);
         Assert.Equal(0, issueLookupFactories);
-        Assert.False(Directory.Exists(host.EvidenceRoot));
+        Assert.False(File.Exists(G868RecordPath(host, "E1")));
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         if (format == "json")
         {
             using var output = JsonDocument.Parse(writer.ToString());
@@ -326,6 +329,158 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         {
             Assert.Contains("- cause: worker-verification-coverage-incomplete", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("- phase: initial", writer.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void G868RejectsOptionTokenAsOptInLegacyValueBeforeAnyReads(string format)
+    {
+        using var host = new VerificationEvidenceCommandTests.TempHost();
+        WriteG868Record(host, "P1", "E1");
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
+        var args = G868IssueArguments(host, format, ["--evidence", "P1=E1"], write: false).ToList();
+        args.Add("--github-only");
+        RemoveOption(args, "--dry-run");
+        args.AddRange(["--accept-evidence-gap", "--dry-run", "--write"]);
+        var headReads = 0;
+        var coverageOperations = 0;
+        var mutatorFactories = 0;
+        var prFactories = 0;
+        var issueFactories = 0;
+        WorkerCompleteCommand.MutatorFactory = () => { mutatorFactories++; return new FakeMutator(); };
+        WorkerCompleteCommand.PrLookupFactory = () => { prFactories++; return new PermissivePrLookup(); };
+        WorkerCompleteCommand.IssueLookupFactory = () => { issueFactories++; return new StubIssueLookup(); };
+        using var writer = new StringWriter();
+
+        var exit = WorkerCompleteCommand.Execute(G868Context(host.Root), args.ToArray(), writer,
+            new WorkerVerificationGate.Dependencies(
+                ReadPullRequestHeadSha: (_, _) => { headReads++; return VerificationEvidenceCommandTests.Head; },
+                BeforeCoverageOperation: (_, _) => coverageOperations++));
+
+        Assert.Equal(1, exit);
+        Assert.Equal(0, headReads);
+        Assert.Equal(0, coverageOperations);
+        Assert.Equal(0, mutatorFactories);
+        Assert.Equal(0, prFactories);
+        Assert.Equal(0, issueFactories);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(writer.ToString());
+            var root = document.RootElement;
+            Assert.False(root.GetProperty("proceed").GetBoolean());
+            Assert.False(root.GetProperty("applied").GetBoolean());
+            Assert.Equal("worker-verification-invalid-arguments",
+                root.GetProperty("verification_gate").GetProperty("cause").GetString());
+            Assert.Contains("--accept-evidence-gap requires a nonempty value",
+                root.GetProperty("verification_gate").GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("worker-verification-invalid-arguments", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("--accept-evidence-gap requires a nonempty value", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("- proceed: false", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("- applied: false", writer.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json", "worker-analyzer-refusal")]
+    [InlineData("markdown", "worker-analyzer-refusal")]
+    [InlineData("json", "already-pr-created-dry-run")]
+    [InlineData("markdown", "already-pr-created-dry-run")]
+    public void G868InitialSatisfiedGateIsTheOnlyObservationBeforeLegacyRefusal(
+        string format, string refusal)
+    {
+        using var host = new VerificationEvidenceCommandTests.TempHost();
+        WriteG868Record(host, "P1", "E1");
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
+        var headReads = 0;
+        var packetReads = 0;
+        var recordReads = 0;
+        var mutatorFactories = 0;
+        var labelReads = 0;
+        var applies = 0;
+        var prReads = 0;
+        var issueReads = 0;
+        WorkerCompleteCommand.MutatorFactory = () =>
+        {
+            mutatorFactories++;
+            return new FakeMutator
+            {
+                Labels = refusal == "worker-analyzer-refusal"
+                    ? ["intent-target"]
+                    : ["intent-target", WorkerResultSummaryConstants.Labels.IntentPrCreated],
+                ReadCallback = () => labelReads++,
+                ApplyCallback = () => applies++,
+            };
+        };
+        WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
+        {
+            Body = "Closes #525\n",
+            ClosingIssuesReferences = [new GitHubPrClosingIssueReference { Number = 525, Repository = null }],
+            LookupCallback = () => prReads++,
+        };
+        WorkerCompleteCommand.IssueLookupFactory = () => new StubIssueLookup
+        {
+            Body = "## Acceptance Criteria\n- Preserve the documented behavior.\n",
+            LookupCallback = () => issueReads++,
+        };
+        var args = refusal == "worker-analyzer-refusal"
+            ? G868Arguments(host, format, ["--evidence", "P1=E1"], write: true)
+            : G868IssueArguments(host, format, ["--evidence", "P1=E1"], write: false)
+                .Append("--github-only").ToArray();
+        var dependencyCalls = new List<string>();
+        using var writer = new StringWriter();
+
+        var exit = WorkerCompleteCommand.Execute(G868Context(host.Root), args, writer,
+            new WorkerVerificationGate.Dependencies(
+                ReadPullRequestHeadSha: (_, _) =>
+                {
+                    headReads++;
+                    dependencyCalls.Add("head");
+                    return VerificationEvidenceCommandTests.Head;
+                },
+                BeforeCoverageOperation: (operation, _) =>
+                {
+                    dependencyCalls.Add("coverage:" + operation);
+                    if (operation == "packet-read") packetReads++;
+                    if (operation == "stored-read") recordReads++;
+                }));
+
+        Assert.Equal(2, exit);
+        Assert.Equal(1, headReads);
+        Assert.Equal(1, packetReads);
+        Assert.Equal(1, recordReads);
+        Assert.Equal(new[] { "coverage:packet-read", "coverage:stored-read", "head" }, dependencyCalls);
+        Assert.Equal(1, mutatorFactories);
+        Assert.Equal(1, labelReads);
+        Assert.Equal(0, applies);
+        Assert.Equal(refusal == "already-pr-created-dry-run" ? 1 : 0, prReads);
+        Assert.Equal(refusal == "already-pr-created-dry-run" ? 2 : 0, issueReads);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(writer.ToString());
+            var root = document.RootElement;
+            Assert.False(root.GetProperty("proceed").GetBoolean());
+            Assert.False(root.GetProperty("applied").GetBoolean());
+            var gate = root.GetProperty("verification_gate");
+            Assert.Equal("satisfied", gate.GetProperty("state").GetString());
+            Assert.Equal("initial", gate.GetProperty("phase").GetString());
+            Assert.Equal("worker-verification-satisfied", gate.GetProperty("cause").GetString());
+        }
+        else
+        {
+            Assert.Contains("- state: satisfied", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("- phase: initial", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("- cause: worker-verification-satisfied", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("- proceed: False", writer.ToString(), StringComparison.Ordinal);
+            Assert.Contains("- applied: False", writer.ToString(), StringComparison.Ordinal);
         }
     }
 
@@ -845,6 +1000,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     {
         using var host = new VerificationEvidenceCommandTests.TempHost();
         WriteG868Record(host, "P1", "E1");
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
         var headReads = 0;
         var providers = 0;
         WorkerCompleteCommand.MutatorFactory = () => { providers++; return new FakeMutator(); };
@@ -869,6 +1026,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(2, exit);
         Assert.Equal(1, headReads);
         Assert.Equal(0, providers);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         Assert.DoesNotContain(host.Root, writer.ToString(), StringComparison.Ordinal);
         if (format == "json")
         {
@@ -941,6 +1099,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             File.WriteAllBytes(recordPath, VerificationEvidenceStore.Serialize(foreign));
         }
         var mutatedRecord = File.ReadAllBytes(recordPath);
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
         var headReads = 0;
         var providers = 0;
         WorkerCompleteCommand.MutatorFactory = () => { providers++; return new FakeMutator(); };
@@ -956,6 +1116,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(0, headReads);
         Assert.Equal(0, providers);
         Assert.Equal(mutatedRecord, File.ReadAllBytes(recordPath));
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         if (format == "json")
         {
             using var document = JsonDocument.Parse(writer.ToString());
@@ -994,6 +1155,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         var secondPath = G868RecordPath(host, "E2");
         var secondBytes = File.ReadAllBytes(secondPath);
         var secondSha = VerificationEvidenceCommandTests.Hash(secondBytes);
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
         var headReads = 0;
         var providers = 0;
         WorkerCompleteCommand.MutatorFactory = () => { providers++; return new FakeMutator(); };
@@ -1009,6 +1172,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(2, exit);
         Assert.Equal(0, headReads);
         Assert.Equal(0, providers);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         Assert.Equal(firstBytes, File.ReadAllBytes(firstPath));
         Assert.Equal(secondBytes, File.ReadAllBytes(secondPath));
         if (format == "json")
@@ -1417,6 +1581,9 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             default: throw new ArgumentOutOfRangeException(nameof(mutation));
         }
 
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
+
         var headReads = 0;
         var coverageReads = 0;
         var mutatorReads = 0;
@@ -1430,6 +1597,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(2, exitCode);
         Assert.Equal(0, headReads);
         Assert.Equal(0, mutatorReads);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         Assert.True(coverageReads > 0);
         if (format == "json")
         {
@@ -1533,6 +1701,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             File.WriteAllBytes(path, VerificationEvidenceStore.Serialize(record with { PacketSha256 = packetSha }));
             Assert.True(VerificationEvidenceStore.TryParse(File.ReadAllBytes(path), out _, out var detail), detail);
         }
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
 
         var references = mutation == "heavy-local-missing"
             ? new[] { "--evidence", "P2=E2" }
@@ -1555,6 +1725,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(0, headReads);
         Assert.Equal(0, providers);
         Assert.True(coverageReads > 0);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         Assert.DoesNotContain(host.Root, writer.ToString(), StringComparison.Ordinal);
         if (format == "json")
         {
@@ -1652,6 +1823,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 File.WriteAllBytes(Path.Combine(Path.GetDirectoryName(recordPath)!, "e1.JSON"), validRecordBytes);
             }
 
+            SeedG868RefusalSentinels(host.Root);
+            var durableBefore = SnapshotG868Tree(host.Root);
             var outsideBefore = File.ReadAllBytes(outside);
             var headReads = 0;
             var providers = 0;
@@ -1677,6 +1850,9 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             Assert.Equal(2, exit);
             Assert.Equal(0, headReads);
             Assert.Equal(0, providers);
+            readLock?.Dispose();
+            readLock = null;
+            Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
             if (mutation == "packet-case-alias") Assert.DoesNotContain("packet-read", operations);
             else Assert.Contains("packet-read", operations);
             if (mutation == "record-locked") Assert.Contains("stored-read", operations);
@@ -1744,6 +1920,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             case "record-id": ReplaceOptionValue(args, "--evidence", "P1=E2"); break;
             default: throw new ArgumentOutOfRangeException(nameof(mutation));
         }
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
         var headReads = 0;
         var providers = 0;
         WorkerCompleteCommand.MutatorFactory = () => { providers++; return new FakeMutator(); };
@@ -1757,6 +1935,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(2, exit);
         Assert.Equal(0, headReads);
         Assert.Equal(0, providers);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         if (format == "json")
         {
             using var document = JsonDocument.Parse(writer.ToString());
@@ -1795,6 +1974,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         var packetSha = VerificationEvidenceCommandTests.Hash(host.PacketBytes);
         var options = G868Arguments(host, format, includeEvidence: true).ToList();
         ReplaceOptionValue(options, "--verification-packet-sha256", packetSha);
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
 
         var headReads = 0;
         using var writer = new StringWriter();
@@ -1804,6 +1985,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
 
         Assert.Equal(2, exit);
         Assert.Equal(0, headReads);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         Assert.Contains("verification-coverage-identity-conflict", writer.ToString(), StringComparison.Ordinal);
         if (format == "json")
         {
@@ -1882,6 +2064,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         var args = G868Arguments(host, format,
             ["--evidence", "P1=E1", "--evidence", "P2=E2"], write: false).ToList();
         ReplaceOptionValue(args, "--verification-packet-sha256", alternatePacketSha);
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
 
         var exit = WorkerCompleteCommand.Execute(G868Context(host.Root), args.ToArray(), writer,
             new WorkerVerificationGate.Dependencies(
@@ -1890,6 +2074,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(2, exit);
         Assert.Equal(0, headReads);
         Assert.Equal(0, providerReads);
+        Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
         Assert.DoesNotContain("trx_base64", writer.ToString(), StringComparison.Ordinal);
         if (format == "json")
         {
@@ -2106,8 +2291,11 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     {
         using var host = new VerificationEvidenceCommandTests.TempHost();
         WriteG868Record(host, "P1", "E1");
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
         using var outsideHost = new VerificationEvidenceCommandTests.TempHost();
         WriteG868Record(outsideHost, "P1", "E1");
+        var outsideBefore = SnapshotG868Tree(outsideHost.Root);
         using var failedRecordHost = new VerificationEvidenceCommandTests.TempHost(
             packet: Encoding.UTF8.GetString(host.PacketBytes).TrimEnd('\r', '\n'));
         Assert.Equal(host.PacketBytes, failedRecordHost.PacketBytes);
@@ -2119,13 +2307,23 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         var headReads = 0;
         var coverageOperations = new List<string>();
         var mutateInRead = drift == "label-read-record-delete";
+        var durableAfterIntentionalDrift = durableBefore;
         var mutator = new FakeMutator
         {
             Labels = new[] { WorkerNextActionConstants.Labels.IntentPrUpdateInProgress },
             ReadCallback = () =>
             {
                 events.Add("labels");
-                if (mutateInRead) File.Delete(recordPath);
+                if (mutateInRead)
+                {
+                    Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
+                    File.Delete(recordPath);
+                    durableAfterIntentionalDrift = SnapshotG868Tree(host.Root);
+                }
+                else
+                {
+                    Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
+                }
             },
             ApplyCallback = () => events.Add("apply"),
         };
@@ -2135,22 +2333,42 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             {
                 headReads++;
                 events.Add($"head-{headReads}");
+                Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
+                var driftMutatesTree = false;
                 if (headReads == 2)
                 {
-                    if (drift == "final-head-record-delete") File.Delete(recordPath);
-                    if (drift == "final-head-packet-delete") File.Delete(host.PacketPath);
+                    if (drift == "final-head-record-delete")
+                    {
+                        File.Delete(recordPath);
+                        driftMutatesTree = true;
+                    }
+                    if (drift == "final-head-packet-delete")
+                    {
+                        File.Delete(host.PacketPath);
+                        driftMutatesTree = true;
+                    }
                     if (drift == "final-head-packet-symlink")
                     {
                         File.Delete(host.PacketPath);
                         File.CreateSymbolicLink(host.PacketPath, outsideHost.PacketPath);
+                        driftMutatesTree = true;
                     }
                     if (drift == "final-head-record-symlink")
                     {
                         File.Delete(recordPath);
                         File.CreateSymbolicLink(recordPath, outsideRecordPath);
+                        driftMutatesTree = true;
                     }
-                    if (drift == "final-head-record-malformed") File.WriteAllText(recordPath, "{ malformed");
-                    if (drift == "final-head-record-failed") File.Copy(failedRecordPath, recordPath, overwrite: true);
+                    if (drift == "final-head-record-malformed")
+                    {
+                        File.WriteAllText(recordPath, "{ malformed");
+                        driftMutatesTree = true;
+                    }
+                    if (drift == "final-head-record-failed")
+                    {
+                        File.Copy(failedRecordPath, recordPath, overwrite: true);
+                        driftMutatesTree = true;
+                    }
                     if (drift == "final-head-record-tampered-summary")
                     {
                         var stored = JsonSerializer.Deserialize<VerificationEvidenceRecord>(File.ReadAllBytes(recordPath))!;
@@ -2158,9 +2376,15 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                         {
                             Report = stored.Report with { Passed = stored.Report.Passed - 1 },
                         }));
+                        driftMutatesTree = true;
                     }
                     if (drift == "final-head-packet-change")
+                    {
                         host.WritePacket([.. host.PacketBytes, (byte)'\n', (byte)'#', (byte)'x']);
+                        driftMutatesTree = true;
+                    }
+                    if (driftMutatesTree)
+                        durableAfterIntentionalDrift = SnapshotG868Tree(host.Root);
                     if (drift == "final-head-mismatch") return new string('f', 40);
                     if (drift == "final-head-io") throw new IOException("private path must not escape");
                     if (drift == "final-head-invalid-operation") throw new InvalidOperationException("private path must not escape");
@@ -2180,6 +2404,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
 
         Assert.Equal(2, exitCode);
         Assert.Equal(2, headReads);
+        Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
+        Assert.Equal(outsideBefore, SnapshotG868Tree(outsideHost.Root));
         Assert.Empty(mutator.AppliedTransitions);
         Assert.DoesNotContain("apply", events);
         Assert.Contains("labels", events);
@@ -2247,6 +2473,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     {
         using var host = new VerificationEvidenceCommandTests.TempHost();
         WriteG868Record(host, "P1", "E1");
+        SeedG868RefusalSentinels(host.Root);
+        var durableBefore = SnapshotG868Tree(host.Root);
         var mutator = new FakeMutator
         {
             Labels = [WorkerNextActionConstants.Labels.IntentPrUpdateInProgress],
@@ -2288,6 +2516,9 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             Assert.Equal(2, packetReads);
             Assert.Equal(member == "record" ? 2 : 1, recordReads);
             Assert.Empty(mutator.AppliedTransitions);
+            held?.Dispose();
+            held = null;
+            Assert.Equal(durableBefore, SnapshotG868Tree(host.Root));
             if (format == "json")
             {
                 using var document = JsonDocument.Parse(writer.ToString());
@@ -2338,14 +2569,20 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     {
         using var host = new VerificationEvidenceCommandTests.TempHost();
         WriteG868Record(host, "P1", "E1");
+        SeedG868NonQueueSentinels(host.Root);
+        SeedG868ValidQueueSentinel(host.Root, host.Unit);
+        var durableBefore = SnapshotG868Tree(host.Root);
+        var durableAfterIntentionalDrift = durableBefore;
         var recordPath = G868RecordPath(host, "E1");
         var events = new List<string>();
         var deleted = false;
         void Drift()
         {
+            Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
             if (deleted) return;
             deleted = true;
             File.Delete(recordPath);
+            durableAfterIntentionalDrift = SnapshotG868Tree(host.Root);
         }
 
         WorkerCompleteCommand.PrLookupFactory = () => new StubPrLookup
@@ -2354,6 +2591,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             ClosingIssuesReferences = [new GitHubPrClosingIssueReference { Number = 525, Repository = null }],
             LookupCallback = () =>
             {
+                Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
                 events.Add("pr-read");
                 if (readFamily == "pr-read") Drift();
             },
@@ -2362,6 +2600,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         {
             LookupCallback = () =>
             {
+                Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
                 events.Add("issue-read");
                 if (readFamily == "issue-read") Drift();
             },
@@ -2369,7 +2608,11 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         var mutator = new FakeMutator
         {
             Labels = ["intent-target", "intent-issue-in-progress"],
-            ReadCallback = () => events.Add("labels"),
+            ReadCallback = () =>
+            {
+                Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
+                events.Add("labels");
+            },
             ApplyCallback = () => events.Add("apply"),
         };
         WorkerCompleteCommand.MutatorFactory = () => mutator;
@@ -2390,6 +2633,7 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 {
                     headReads++;
                     events.Add($"head-{headReads}");
+                    Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
                     return VerificationEvidenceCommandTests.Head;
                 },
                 BeforeCoverageOperation: (operation, _) =>
@@ -2404,9 +2648,10 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         Assert.Equal(2, coveragePacketReads);
         Assert.DoesNotContain("apply", events);
         Assert.Equal("head-1", events[events.IndexOf("head-1")]);
-        Assert.True(events.IndexOf("head-1") < events.IndexOf(readFamily));
+            Assert.True(events.IndexOf("head-1") < events.IndexOf(readFamily));
         Assert.True(events.IndexOf(readFamily) < events.IndexOf("head-2"));
         Assert.True(events.IndexOf("head-2") < events.LastIndexOf("packet-read"));
+        Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root));
 
         if (format == "json")
         {
@@ -2582,16 +2827,24 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         using var host = new VerificationEvidenceCommandTests.TempHost(packet: G868TwoProofPacket);
         WriteG868Record(host, "P1", "E1");
         WriteG868Record(host, "P2", "E2");
+        SeedG868NonQueueSentinels(host.Root);
         using var workspace = new WorkerCompleteWorkspace();
         workspace.WriteQueueState(workspace.CreateItem(host.Unit,
             VerificationEvidenceCommandTests.Repo, 525, VerificationEvidenceCommandTests.Domain));
+        SeedG868NonQueueSentinels(workspace.RootPath);
         var queueBefore = File.ReadAllBytes(workspace.QueueStatePath);
+        var durableBefore = SnapshotG868Tree(host.Root, workspace.RootPath);
+        var durableAfterIntentionalDrift = durableBefore;
         var events = new List<string>();
         var headReads = 0;
         var mutator = new FakeMutator
         {
             Labels = [WorkerResultSummaryConstants.Labels.IntentPrCreated, "intent-target"],
-            ReadCallback = () => events.Add("labels"),
+            ReadCallback = () =>
+            {
+                Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root, workspace.RootPath));
+                events.Add("labels");
+            },
             ApplyCallback = () => events.Add("apply"),
         };
         WorkerCompleteCommand.MutatorFactory = () => mutator;
@@ -2611,17 +2864,24 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 {
                     headReads++;
                     events.Add($"head-{headReads}");
-                    if (headReads == 2) File.Delete(G868RecordPath(host, "E1"));
+                    Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root, workspace.RootPath));
+                    if (headReads == 2)
+                    {
+                        File.Delete(G868RecordPath(host, "E1"));
+                        durableAfterIntentionalDrift = SnapshotG868Tree(host.Root, workspace.RootPath);
+                    }
                     return VerificationEvidenceCommandTests.Head;
                 },
                 BeforeCoverageOperation: (operation, _) => events.Add(operation)));
 
-        Assert.Equal(2, exit);
+        Assert.True(exit == 2, writer.ToString());
         Assert.Equal(2, headReads);
         Assert.Contains("labels", events);
         Assert.DoesNotContain("apply", events);
         Assert.Empty(mutator.AppliedTransitions);
         Assert.Equal(queueBefore, File.ReadAllBytes(workspace.QueueStatePath));
+        Assert.Equal(durableAfterIntentionalDrift, SnapshotG868Tree(host.Root, workspace.RootPath));
+        Assert.NotEqual(durableBefore, durableAfterIntentionalDrift);
         Assert.DoesNotContain("https://github.com/J-Tech-Japan/intent-system/pull/764",
             File.ReadAllText(workspace.QueueStatePath), StringComparison.Ordinal);
         if (format == "json")
@@ -2892,23 +3152,25 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                     : null);
         }
 
-        var baseline = Run(null);
         var dependencyCalls = 0;
         var observed = Run(new WorkerVerificationGate.Dependencies(
             ReadPullRequestHeadSha: (_, _) => { dependencyCalls++; return VerificationEvidenceCommandTests.Head; },
             BeforeCoverageOperation: (_, _) => dependencyCalls++));
+        var mode = write ? "write" : "dry-run";
+        var golden = ReadG868BaseGolden($"{kind}-{mode}-{format}");
 
-        Assert.Equal(baseline.ExitCode, observed.ExitCode);
-        Assert.Equal(baseline.Output, observed.Output);
-        Assert.Equal(baseline.MutatorFactories, observed.MutatorFactories);
-        Assert.Equal(baseline.LabelReads, observed.LabelReads);
-        Assert.Equal(baseline.ApplyCalls, observed.ApplyCalls);
-        Assert.Equal(baseline.PrFactories, observed.PrFactories);
-        Assert.Equal(baseline.PrReads, observed.PrReads);
-        Assert.Equal(baseline.IssueFactories, observed.IssueFactories);
-        Assert.Equal(baseline.IssueReads, observed.IssueReads);
-        Assert.Equal(baseline.QueueExists, observed.QueueExists);
-        Assert.Equal(baseline.QueueBytes, observed.QueueBytes);
+        Assert.Equal(golden.Output, observed.Output);
+        Assert.Equal(golden.Row.GetProperty("exit").GetInt32(), observed.ExitCode);
+        Assert.Equal(golden.Row.GetProperty("mutatorFactories").GetInt32(), observed.MutatorFactories);
+        Assert.Equal(golden.Row.GetProperty("labelReads").GetInt32(), observed.LabelReads);
+        Assert.Equal(golden.Row.GetProperty("applyCalls").GetInt32(), observed.ApplyCalls);
+        Assert.Equal(golden.Row.GetProperty("prFactories").GetInt32(), observed.PrFactories);
+        Assert.Equal(golden.Row.GetProperty("prReads").GetInt32(), observed.PrReads);
+        Assert.Equal(golden.Row.GetProperty("issueFactories").GetInt32(), observed.IssueFactories);
+        Assert.Equal(golden.Row.GetProperty("issueReads").GetInt32(), observed.IssueReads);
+        Assert.Equal(golden.Row.GetProperty("queueExists").GetBoolean(), observed.QueueExists);
+        Assert.False(observed.QueueExists);
+        Assert.Null(observed.QueueBytes);
         Assert.Equal(0, dependencyCalls);
         Assert.DoesNotContain("verification_gate", observed.Output, StringComparison.Ordinal);
         if (format == "json")
@@ -2982,37 +3244,38 @@ public sealed class WorkerCompleteCommandTests : IDisposable
                 counts[4], counts[5], counts[6], File.ReadAllBytes(workspace.QueueStatePath));
         }
 
-        var baseline = Run(null);
         var dependencyCalls = 0;
         var withDependencies = Run(new WorkerVerificationGate.Dependencies(
             ReadPullRequestHeadSha: (_, _) => { dependencyCalls++; return VerificationEvidenceCommandTests.Head; },
             BeforeCoverageOperation: (_, _) => dependencyCalls++));
+        var goldenKey = path == "analyzer-refusal" ? "g785-analyzer-refusal" : path;
+        var golden = ReadG868BaseGolden($"{goldenKey}-{format}");
 
-        Assert.Equal(baseline.Exit, withDependencies.Exit);
-        Assert.Equal(baseline.Output, withDependencies.Output);
-        Assert.Equal(baseline.PrFactory, withDependencies.PrFactory);
-        Assert.Equal(baseline.PrLookup, withDependencies.PrLookup);
-        Assert.Equal(baseline.IssueFactory, withDependencies.IssueFactory);
-        Assert.Equal(baseline.IssueLookup, withDependencies.IssueLookup);
-        Assert.Equal(baseline.MutatorFactory, withDependencies.MutatorFactory);
-        Assert.Equal(baseline.LabelRead, withDependencies.LabelRead);
-        Assert.Equal(baseline.Apply, withDependencies.Apply);
-        Assert.Equal(queueBefore, baseline.Queue);
+        Assert.Equal(golden.Output, withDependencies.Output);
+        Assert.Equal(golden.Row.GetProperty("exit").GetInt32(), withDependencies.Exit);
+        Assert.Equal(golden.Row.GetProperty("prFactories").GetInt32(), withDependencies.PrFactory);
+        Assert.Equal(golden.Row.GetProperty("prReads").GetInt32(), withDependencies.PrLookup);
+        Assert.Equal(golden.Row.GetProperty("issueFactories").GetInt32(), withDependencies.IssueFactory);
+        Assert.Equal(golden.Row.GetProperty("issueReads").GetInt32(), withDependencies.IssueLookup);
+        Assert.Equal(golden.Row.GetProperty("mutatorFactories").GetInt32(), withDependencies.MutatorFactory);
+        Assert.Equal(golden.Row.GetProperty("labelReads").GetInt32(), withDependencies.LabelRead);
+        Assert.Equal(golden.Row.GetProperty("applyCalls").GetInt32(), withDependencies.Apply);
         Assert.Equal(queueBefore, withDependencies.Queue);
         Assert.Equal(0, dependencyCalls);
+        Assert.Equal(golden.Row.GetProperty("queueExists").GetBoolean(), File.Exists(workspace.QueueStatePath));
         if (path == "analyzer-refusal")
         {
-            Assert.Equal(1, baseline.Exit);
-            Assert.Contains("evidence gap (G785)", baseline.Output, StringComparison.Ordinal);
-            Assert.Equal(0, baseline.LabelRead);
-            Assert.Equal(0, baseline.Apply);
+            Assert.Equal(1, withDependencies.Exit);
+            Assert.Contains("evidence gap (G785)", withDependencies.Output, StringComparison.Ordinal);
+            Assert.Equal(0, withDependencies.LabelRead);
+            Assert.Equal(0, withDependencies.Apply);
         }
         else
         {
-            Assert.Equal(2, baseline.Exit);
-            Assert.Equal(1, baseline.LabelRead);
-            Assert.Equal(0, baseline.Apply);
-            Assert.Contains("already", baseline.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(2, withDependencies.Exit);
+            Assert.Equal(1, withDependencies.LabelRead);
+            Assert.Equal(0, withDependencies.Apply);
+            Assert.Contains("already", withDependencies.Output, StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -3031,21 +3294,124 @@ public sealed class WorkerCompleteCommandTests : IDisposable
         };
         var mutatorFactories = 0;
         WorkerCompleteCommand.MutatorFactory = () => { mutatorFactories++; return new FakeMutator(); };
-        using var baselineWriter = new StringWriter();
-        var baselineExit = WorkerCompleteCommand.Execute(workspace.Context, args, baselineWriter);
         var dependencyCalls = 0;
-        using var dependentWriter = new StringWriter();
-        var dependentExit = WorkerCompleteCommand.Execute(workspace.Context, args, dependentWriter,
+        using var writer = new StringWriter();
+        var exit = WorkerCompleteCommand.Execute(workspace.Context, args, writer,
             new WorkerVerificationGate.Dependencies(
                 ReadPullRequestHeadSha: (_, _) => { dependencyCalls++; return VerificationEvidenceCommandTests.Head; },
                 BeforeCoverageOperation: (_, _) => dependencyCalls++));
+        var golden = ReadG868BaseGolden("unsupported-markdown-format");
 
-        Assert.Equal(1, baselineExit);
-        Assert.Equal(baselineExit, dependentExit);
-        Assert.Equal(baselineWriter.ToString(), dependentWriter.ToString());
+        Assert.Equal(1, exit);
+        Assert.Equal(golden.Output, writer.ToString());
+        Assert.Equal(golden.Row.GetProperty("exit").GetInt32(), exit);
+        Assert.Equal(golden.Row.GetProperty("mutatorFactories").GetInt32(), mutatorFactories);
         Assert.Equal(0, dependencyCalls);
         Assert.Equal(0, mutatorFactories);
-        Assert.Contains("--format must be 'text' or 'json'", dependentWriter.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--format must be 'text' or 'json'", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    private static (string Output, JsonElement Row) ReadG868BaseGolden(string key)
+    {
+        using var stream = typeof(WorkerCompleteCommandTests).Assembly
+            .GetManifestResourceStream("g868-no-marker-base-goldens.json");
+        Assert.NotNull(stream);
+        using var document = JsonDocument.Parse(stream!);
+        var root = document.RootElement;
+        Assert.Equal("0bb274e5d3b77a80370b118c53ce307c9fec57d2",
+            root.GetProperty("baselineCommit").GetString());
+        var row = root.GetProperty("cases").EnumerateArray()
+            .Single(item => item.GetProperty("key").GetString() == key).Clone();
+        var bytes = Convert.FromBase64String(row.GetProperty("outputBase64").GetString()!);
+        var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        Assert.Equal(row.GetProperty("outputSha256").GetString(), hash);
+        return (Encoding.UTF8.GetString(bytes), row);
+    }
+
+    private static void SeedG868RefusalSentinels(string root)
+    {
+        SeedG868NonQueueSentinels(root);
+        var intent = Path.Combine(root, ".intent-cli");
+        File.WriteAllText(Path.Combine(intent, "queue-state.json"), "{\"sentinel\":\"queue\"}\n");
+    }
+
+    private static void SeedG868ValidQueueSentinel(string root, string unit)
+    {
+        var intent = Path.Combine(root, ".intent-cli");
+        Directory.CreateDirectory(intent);
+        using var workspace = new WorkerCompleteWorkspace();
+        var state = new QueueState
+        {
+            SchemaVersion = "1",
+            UpdatedAt = new DateTimeOffset(2026, 10, 13, 0, 0, 0, TimeSpan.Zero),
+            Items = [workspace.CreateItem(unit, VerificationEvidenceCommandTests.Repo, 525,
+                VerificationEvidenceCommandTests.Domain)],
+        };
+        File.WriteAllText(Path.Combine(intent, "queue-state.json"), QueueStateSerializer.Serialize(state));
+    }
+
+    private static void SeedG868NonQueueSentinels(string root)
+    {
+        var intent = Path.Combine(root, ".intent-cli");
+        Directory.CreateDirectory(Path.Combine(intent, "claims"));
+        Directory.CreateDirectory(Path.Combine(intent, "issues", "G868-unrelated"));
+        Directory.CreateDirectory(Path.Combine(intent, "verification-evidence", "foreign-domain",
+            "foreign-team", "G868-unrelated"));
+        File.WriteAllText(Path.Combine(intent, "runs.jsonl"), "{\"sentinel\":\"run\"}\n");
+        File.WriteAllText(Path.Combine(intent, "claims", "g868-sentinel.json"), "{\"sentinel\":\"claim\"}\n");
+        File.WriteAllText(Path.Combine(intent, "issues", "G868-unrelated", "implementation.md"),
+            "unrelated issue state\n");
+        File.WriteAllText(Path.Combine(intent, "verification-evidence", "foreign-domain", "foreign-team",
+            "G868-unrelated", "E-foreign.json"), "unrelated evidence bytes\n");
+    }
+
+    private static string SnapshotG868Tree(params string[] roots)
+    {
+        var entries = new List<string>();
+        foreach (var suppliedRoot in roots)
+        {
+            var root = Path.GetFullPath(suppliedRoot);
+            entries.Add($"ROOT {root}");
+            if (!Directory.Exists(root))
+            {
+                entries.Add("ROOT-MISSING");
+                continue;
+            }
+
+            var pending = new Stack<string>();
+            pending.Push(root);
+            while (pending.Count > 0)
+            {
+                var directory = pending.Pop();
+                foreach (var path in Directory.EnumerateFileSystemEntries(directory)
+                             .OrderBy(item => item, StringComparer.Ordinal))
+                {
+                    var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+                    FileSystemInfo info = Directory.Exists(path) ? new DirectoryInfo(path) : new FileInfo(path);
+                    var linkTarget = info.LinkTarget;
+                    if (linkTarget is not null)
+                    {
+                        entries.Add($"LINK {relative} -> {linkTarget}");
+                        continue;
+                    }
+
+                    var attributes = File.GetAttributes(path);
+                    if ((attributes & FileAttributes.Directory) != 0)
+                    {
+                        entries.Add($"DIR {relative}");
+                        pending.Push(path);
+                    }
+                    else
+                    {
+                        var bytes = File.ReadAllBytes(path);
+                        entries.Add($"FILE {relative} {bytes.Length} "
+                            + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+                    }
+                }
+            }
+        }
+
+        return string.Join("\n", entries.OrderBy(entry => entry, StringComparer.Ordinal));
     }
 
     private static string[] G868IssueArguments(
