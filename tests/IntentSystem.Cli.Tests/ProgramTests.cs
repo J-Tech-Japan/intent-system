@@ -286,6 +286,13 @@ public sealed class ProgramTests
             Assert.Equal(0, helpExit);
             Assert.Contains("not proof that this CLI executed a command", helpText, StringComparison.Ordinal);
             Assert.Contains("authenticated its producer", helpText, StringComparison.Ordinal);
+            foreach (var operation in new[] { "record", "show", "validate" })
+            {
+                var operationHelp = InvokeMain(["verification", "evidence", operation, "--help"], out var operationHelpExit);
+                Assert.Equal(0, operationHelpExit);
+                Assert.Contains("Usage: intent-cli verification evidence", operationHelp, StringComparison.Ordinal);
+                Assert.Contains("not proof that this CLI executed a command", operationHelp, StringComparison.Ordinal);
+            }
             Assert.False(File.Exists(Path.Combine(repo, ".intent-cli", "config.toml")));
             Assert.False(Directory.Exists(Path.Combine(repo, ".intent-cli", "verification-evidence")));
         }
@@ -295,6 +302,8 @@ public sealed class ProgramTests
     [InlineData("write-dry-run")]
     [InlineData("duplicate-id")]
     [InlineData("read-write")]
+    [InlineData("positional-option-id")]
+    [InlineData("duplicate-positional-id")]
     public void Main_VerificationEvidenceInvalidFlagCombinationsRemainStructured(string mutation)
     {
         lock (ProcessStateLock)
@@ -319,6 +328,14 @@ public sealed class ProgramTests
             {
                 "write-dry-run" => [.. baseArgs, "--write", "--dry-run"],
                 "duplicate-id" => [.. baseArgs, "--id", "E2"],
+                "positional-option-id" => ["verification", "evidence", "show", "E1", "--id", "E1",
+                    "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
+                    "--format", "json"],
+                "duplicate-positional-id" => ["verification", "evidence", "show", "E1", "E2",
+                    "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
+                    "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
+                    "--format", "json"],
                 "read-write" => ["verification", "evidence", "show", "--id", "E1",
                     "--execution-unit", "G866", "--domain", "intent-cli", "--team", "intent-cli-dev",
                     "--repo", "J-Tech-Japan/intent-system", "--head-sha", VerificationEvidenceCommandTests.Head,
@@ -535,7 +552,7 @@ public sealed class ProgramTests
     }
 
     private static string[] EvidenceReadArgs(string operation, string format) =>
-    ["verification", "evidence", operation, "--id", "E1", "--execution-unit", "G866",
+    ["verification", "evidence", operation, "E1", "--execution-unit", "G866",
      "--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
      "--head-sha", VerificationEvidenceCommandTests.Head, "--format", format];
 

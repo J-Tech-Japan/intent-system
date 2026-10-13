@@ -353,17 +353,18 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
                     && raced.Bytes.AsSpan().SequenceEqual(bytes))
                 {
                     idempotent = true;
-                    CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths);
+                    CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, publicationCompleted: true);
                     CleanupDirectories(createdDirectories, relative, diagnostics, residualPaths);
                     return new(true, "current", "", "identical canonical record won the publication race", false, true,
                         relative, raced.Sha256, residualPaths, diagnostics);
                 }
                 CleanupFailureArtifacts(tempPath, createdDirectories, relative, diagnostics, residualPaths);
+                diagnostics.Insert(0, new("verification-evidence-record-conflict", relative,
+                    "a different or invalid record appeared before publication"));
                 return new(false, "conflict", "verification-evidence-record-conflict",
                     "a different or invalid record appeared before publication", false, false, relative,
                     raced.State == "current" ? raced.Sha256 : null,
-                    residualPaths, [new("verification-evidence-record-conflict", relative,
-                        "a different or invalid record appeared before publication")]);
+                    residualPaths, diagnostics);
             }
 
             phase = "atomic-create";
@@ -373,7 +374,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
             {
                 // Publication is the truth boundary. Keep this assignment before temp cleanup.
                 wrote = true;
-                CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths);
+                CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, publicationCompleted: true);
                 var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
                 var warning = diagnostics.Count == 0 ? "canonical evidence record was atomically created" : "record created; owned temporary cleanup needs attention";
                 return new(true, "current", "", warning, wrote, false, relative, sha, residualPaths, diagnostics);
@@ -384,7 +385,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
                 && racedTarget.Bytes.AsSpan().SequenceEqual(bytes))
             {
                 idempotent = true;
-                CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths);
+                CleanupOwnedTemp(tempPath, relative, diagnostics, residualPaths, publicationCompleted: true);
                 CleanupDirectories(createdDirectories, relative, diagnostics, residualPaths);
                 return new(true, "current", "", "identical canonical record won the publication race", false, idempotent,
                     relative, racedTarget.Sha256, residualPaths, diagnostics);
@@ -740,7 +741,7 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
     private sealed record AtomicLinkResult(bool Success, bool Unsupported, string Detail);
 
     private void CleanupOwnedTemp(string tempPath, string relative,
-        List<VerificationEvidenceDiagnostic> diagnostics, List<string> residual)
+        List<VerificationEvidenceDiagnostic> diagnostics, List<string> residual, bool publicationCompleted = false)
     {
         try
         {
@@ -751,7 +752,9 @@ internal sealed class VerificationEvidenceStore(string repoRoot, Action<string, 
         {
             var path = ToRelative(tempPath);
             residual.Add(path);
-            diagnostics.Add(new("owned-temp-cleanup", path, "published record is complete but its owned temporary path remains"));
+            diagnostics.Add(new("owned-temp-cleanup", path, publicationCompleted
+                ? "canonical final record is complete but its owned temporary path remains"
+                : "publication did not complete and its owned temporary path remains"));
         }
     }
 

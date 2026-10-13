@@ -12,7 +12,7 @@ namespace IntentSystem.Cli.Commands;
 internal static class VerificationEvidenceCommand
 {
     private const int MaximumSiblingEntries = VerificationEvidenceStore.MaximumSiblingEntries;
-    private const string Usage = "Usage: intent-cli verification evidence record|show|validate --id <id> --execution-unit <unit> --domain <domain> --team <team> --repo <owner/repo> --head-sha <40-lowerhex> [record: --packet-sha256 <64-lowerhex> --proof <proof-id> --trx <root-relative-path> [--write|--dry-run]] [--format json|markdown]";
+    private const string Usage = "Usage: intent-cli verification evidence record --id <id> ... | show|validate <id>|--id <id> --execution-unit <unit> --domain <domain> --team <team> --repo <owner/repo> --head-sha <40-lowerhex> [record: --packet-sha256 <64-lowerhex> --proof <proof-id> --trx <root-relative-path> [--write|--dry-run]] [--format json|markdown]";
     private const string PublicationGuidance = "Publication is not verified by this command. To make a local record visible in a fresh clone, stage the artifact and commit/plain-push it yourself.";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
@@ -74,6 +74,12 @@ internal static class VerificationEvidenceCommand
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
         if (args.Length == 1 && args[0] == "--help")
+        {
+            writer.WriteLine(Usage);
+            writer.WriteLine("Local observation only: the supplied TRX is not proof that this CLI executed a command, authenticated its producer, passed an acceptance criterion, or published a record.");
+            return 0;
+        }
+        if (args.Length == 2 && (args[0] is "record" or "show" or "validate") && args[1] == "--help")
         {
             writer.WriteLine(Usage);
             writer.WriteLine("Local observation only: the supplied TRX is not proof that this CLI executed a command, authenticated its producer, passed an acceptance criterion, or published a record.");
@@ -151,10 +157,22 @@ internal static class VerificationEvidenceCommand
         string? suppliedFormat = null, error = null;
         var write = false;
         var dryRun = false;
+        var positionalId = false;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var index = 1; index < args.Length; index++)
         {
             var option = args[index];
+            if (!option.StartsWith("--", StringComparison.Ordinal))
+            {
+                if ((operation is "show" or "validate") && index == 1 && id is null && !positionalId)
+                {
+                    id = option;
+                    positionalId = true;
+                    continue;
+                }
+                error = "show and validate accept exactly one positional ID and no additional positional arguments.";
+                break;
+            }
             if (option is "--write" or "--dry-run")
             {
                 if (operation != "record") { error = $"'{option}' is only valid for record."; break; }
@@ -165,6 +183,8 @@ internal static class VerificationEvidenceCommand
             }
             if (option is not ("--id" or "--execution-unit" or "--domain" or "--team" or "--repo" or "--head-sha" or "--packet-sha256" or "--proof" or "--trx" or "--format"))
             { error = $"Unknown argument '{option}'."; break; }
+            if (option == "--id" && positionalId)
+            { error = "a positional ID and --id cannot be supplied together."; break; }
             if (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
             { error = $"Missing value for '{option}'."; break; }
             if (!seen.Add(option)) { error = $"Duplicate argument '{option}'."; break; }
@@ -397,6 +417,18 @@ internal static class VerificationEvidenceCommand
 
         var record = stored.Record;
         var verified = FromStored(options, operation, record, stored.Path!, stored.Sha256!);
+        if (!string.Equals(options.Repo, record.TargetRepo, StringComparison.Ordinal))
+        {
+            const string detail = "requested repository does not match the stored record target_repo";
+            Emit(writer, options.Format!, verified with
+            {
+                State = "conflict", Cause = "verification-evidence-identity-conflict", Detail = detail,
+                Disposition = "refused", PacketPath = null, ObservedPacketSha256 = null,
+                ArtifactPath = null, ArtifactSha256 = null, TrxSha256 = null, Binding = null, Report = null,
+                Diagnostics = [new("verification-evidence-identity-conflict", null, detail)],
+            });
+            return 1;
+        }
         var currentOptions = options with { Proof = record.Binding.ProofId };
         if (!TryLoadPacket(root, currentOptions, beforeOperation, out var current, out var packetFailure))
         {
@@ -599,6 +631,7 @@ internal static class VerificationEvidenceCommand
     {
         invalid = false;
         var stack = new Stack<EventFrame>();
+        var scalarAnchors = new Dictionary<string, string>(StringComparer.Ordinal);
         try
         {
             var parser = new Parser(new StringReader(yaml));
@@ -628,12 +661,17 @@ internal static class VerificationEvidenceCommand
                             : CurrentPath(stack);
                         var explicitTag = scalar.Tag.ToString() != "?" || (!scalar.IsPlainImplicit && !scalar.IsQuotedImplicit);
                         if (explicitTag && IsIdentityPath(path)) invalid = true;
+                        if (!string.IsNullOrEmpty(scalar.Anchor.ToString())) scalarAnchors[scalar.Anchor.ToString()] = scalar.Value ?? string.Empty;
                         Consume(stack, keyPosition ? scalar.Value : null);
                         break;
                     }
-                    case AnchorAlias:
+                    case AnchorAlias alias:
                     {
-                        if (IsIdentityPath(CurrentPath(stack))) invalid = true;
+                        var keyPosition = stack.Count > 0 && stack.Peek().IsMapping && stack.Peek().ExpectingKey;
+                        var aliasPath = keyPosition && scalarAnchors.TryGetValue(alias.Value.ToString(), out var aliasedKey)
+                            ? stack.Peek().Path + "/" + EscapePath(aliasedKey)
+                            : CurrentPath(stack);
+                        if (IsIdentityPath(aliasPath)) invalid = true;
                         Consume(stack, null);
                         break;
                     }

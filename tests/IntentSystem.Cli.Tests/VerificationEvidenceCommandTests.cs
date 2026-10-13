@@ -119,18 +119,21 @@ public sealed class VerificationEvidenceCommandTests
     [InlineData("domain", "wrong-type", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("domain", "tagged", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("domain", "aliased", "conflict", "verification-evidence-identity-conflict")]
+    [InlineData("domain", "key-aliased", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("domain", "duplicate", "unavailable", "verification-evidence-packet-invalid")]
     [InlineData("domain", "case", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("team", "missing", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("team", "wrong-type", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("team", "tagged", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("team", "aliased", "conflict", "verification-evidence-identity-conflict")]
+    [InlineData("team", "key-aliased", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("team", "duplicate", "unavailable", "verification-evidence-packet-invalid")]
     [InlineData("team", "case", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("target_repo", "missing", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("target_repo", "wrong-type", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("target_repo", "tagged", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("target_repo", "aliased", "conflict", "verification-evidence-identity-conflict")]
+    [InlineData("target_repo", "key-aliased", "conflict", "verification-evidence-identity-conflict")]
     [InlineData("target_repo", "duplicate", "unavailable", "verification-evidence-packet-invalid")]
     [InlineData("target_repo", "case", "conflict", "verification-evidence-identity-conflict")]
     public void PacketIdentityMutationsRefuseBeforeReadingTrx(string field, string mutation, string expectedState, string expectedCause)
@@ -153,6 +156,37 @@ public sealed class VerificationEvidenceCommandTests
             Assert.Equal(JsonValueKind.Null, result.GetProperty("artifact_path").ValueKind);
             Assert.False(Directory.Exists(host.EvidenceRoot));
         }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void RootIdentityKeyAliasRefusesBeforeReadingTrxWhileUnrelatedMetadataAliasIsAccepted(string format)
+    {
+        var rootKeyAlias = "metadata: &identityKey implementation_issue_packet\n" +
+            ValidPacket.Replace("implementation_issue_packet:\n", "*identityKey:\n", StringComparison.Ordinal);
+        using (var host = new TempHost(packet: rootKeyAlias))
+        {
+            host.WriteTrx("capture.trx", ReadSmallVstest());
+            var trxReads = 0;
+            var (exit, output) = Invoke(host, RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"),
+                (operation, _) => { if (operation == "trx-read") trxReads++; });
+            var result = Result(output, format);
+            Assert.Equal(1, exit);
+            Assert.Equal("conflict", Text(result, "state"));
+            Assert.Equal("verification-evidence-identity-conflict", Text(result, "cause"));
+            Assert.Equal(0, trxReads);
+            Assert.False(Directory.Exists(host.EvidenceRoot));
+        }
+
+        var unrelatedAlias = ValidPacket + "\nmetadata: &ordinary note\nother_metadata: *ordinary\n";
+        using var positive = new TempHost(packet: unrelatedAlias);
+        positive.WriteTrx("capture.trx", ReadSmallVstest());
+        var (positiveExit, positiveOutput) = Invoke(positive,
+            RecordArgs(positive, format, Hash(positive.PacketBytes), "capture.trx"));
+        Assert.Equal(0, positiveExit);
+        Assert.Equal("planned", Text(Result(positiveOutput, format), "disposition"));
+        Assert.False(Directory.Exists(positive.EvidenceRoot));
     }
 
     [Fact]
@@ -313,6 +347,52 @@ public sealed class VerificationEvidenceCommandTests
     }
 
     [Theory]
+    [InlineData("criterion-index")]
+    [InlineData("proof-reference")]
+    [InlineData("proof-lane")]
+    public void ValidAlternateCriterionAndLaneBindingsAreStaleButRetainHistoricalStoredFacts(string mutation)
+    {
+        var initialPacket = TwoCriterionPacket;
+        var changedPacket = MutateValidAlternateBinding(initialPacket, mutation);
+        Assert.NotEqual(initialPacket, changedPacket);
+        Assert.Equal("complete", PacketVerificationContract.Evaluate(Unit,
+            $".intent-cli/issues/{Unit}/packet.yaml", Encoding.UTF8.GetBytes(initialPacket)).State);
+        Assert.Equal("complete", PacketVerificationContract.Evaluate(Unit,
+            $".intent-cli/issues/{Unit}/packet.yaml", Encoding.UTF8.GetBytes(changedPacket)).State);
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var host = new TempHost(packet: initialPacket);
+            var trx = ReadSmallVstest();
+            host.WriteTrx("capture.trx", trx);
+            var (writeExit, writeOutput) = Invoke(host,
+                [.. RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx", proof: "P1"), "--write"]);
+            Assert.Equal(0, writeExit);
+            var written = Result(writeOutput, format);
+            var artifactPath = Text(written, "artifact_path");
+            var artifactBytes = File.ReadAllBytes(host.Absolute(artifactPath));
+            var artifactSha = Hash(artifactBytes);
+            host.WritePacket(Encoding.UTF8.GetBytes(changedPacket + "\n"));
+
+            foreach (var operation in new[] { "show", "validate" })
+            {
+                var (exit, output) = Invoke(host, ReadArgs(operation, format));
+                var result = Result(output, format);
+                Assert.Equal(operation == "show" ? 0 : 1, exit);
+                Assert.Equal("stale", Text(result, "state"));
+                Assert.Equal("verification-evidence-stale-packet", Text(result, "cause"));
+                Assert.Equal(artifactPath, Text(result, "artifact_path"));
+                Assert.Equal(artifactSha, Text(result, "artifact_sha256"));
+                Assert.Equal(Hash(trx), Text(result, "trx_sha256"));
+                Assert.Equal(Text(written.GetProperty("binding"), "proof_id"),
+                    Text(result.GetProperty("binding"), "proof_id"));
+                Assert.Equal(Text(written.GetProperty("report"), "reported_outcome"),
+                    Text(result.GetProperty("report"), "reported_outcome"));
+                Assert.Equal(artifactBytes, File.ReadAllBytes(host.Absolute(artifactPath)));
+            }
+        }
+    }
+
+    [Theory]
     [InlineData("missing")]
     [InlineData("hosted")]
     public void MissingOrHostedSelectedProofRefusesBeforeTrxRead(string selectedProof)
@@ -414,6 +494,90 @@ public sealed class VerificationEvidenceCommandTests
         Assert.False(result.GetProperty("wrote").GetBoolean());
         Assert.False(File.Exists(host.Absolute(".intent-cli/verification-evidence/intent-cli/intent-cli-dev/G866/E1.json")));
         Assert.False(Directory.Exists(host.EvidenceRoot));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PacketRecheckRefusalRetainsCleanupFailureWithoutClaimingPublication(string format)
+    {
+        using var host = new TempHost();
+        host.WriteTrx("capture.trx", ReadSmallVstest());
+        var changedPacket = Encoding.UTF8.GetBytes(ValidPacket + "\n# changed before publication\n");
+        string? temporaryPath = null;
+        var reachedRecheck = false;
+        var (exit, output) = Invoke(host,
+            [.. RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"), "--write"],
+            (operation, path) =>
+            {
+                if (operation == "before-publish")
+                {
+                    reachedRecheck = true;
+                    File.WriteAllBytes(host.PacketPath, changedPacket);
+                }
+                else if (operation == "temp-cleanup")
+                {
+                    temporaryPath = path;
+                    throw new IOException("injected cleanup failure before publication");
+                }
+            });
+        var result = Result(output, format);
+        Assert.True(reachedRecheck);
+        Assert.NotNull(temporaryPath);
+        Assert.Equal(1, exit);
+        Assert.Equal("stale", Text(result, "state"));
+        Assert.Equal("verification-evidence-packet-changed", Text(result, "cause"));
+        Assert.False(result.GetProperty("wrote").GetBoolean());
+        var cleanup = result.GetProperty("diagnostics").EnumerateArray()
+            .Single(item => Text(item, "cause") == "owned-temp-cleanup");
+        Assert.Contains("publication did not complete", Text(cleanup, "detail"), StringComparison.Ordinal);
+        Assert.DoesNotContain("published record is complete", Text(cleanup, "detail"), StringComparison.Ordinal);
+        var relativeTemp = Path.GetRelativePath(host.Root, temporaryPath!).Replace(Path.DirectorySeparatorChar, '/');
+        Assert.Contains(relativeTemp, result.GetProperty("residual_owned_paths").EnumerateArray()
+            .Select(item => item.GetString()));
+        Assert.False(File.Exists(host.Absolute(".intent-cli/verification-evidence/intent-cli/intent-cli-dev/G866/E1.json")));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PrepublicationCompetingTargetKeepsConflictAndCleanupDiagnostics(string format)
+    {
+        using var host = new TempHost();
+        host.WriteTrx("capture.trx", ReadSmallVstest());
+        var target = host.Absolute(".intent-cli/verification-evidence/intent-cli/intent-cli-dev/G866/E1.json");
+        var racedBytes = Encoding.UTF8.GetBytes("{ malformed prepublication target");
+        string? temporaryPath = null;
+        var reached = false;
+        var (exit, output) = Invoke(host,
+            [.. RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"), "--write"],
+            (operation, path) =>
+            {
+                if (operation == "before-publish")
+                {
+                    reached = true;
+                    File.WriteAllBytes(target, racedBytes);
+                }
+                else if (operation == "temp-cleanup")
+                {
+                    temporaryPath = path;
+                    throw new IOException("injected cleanup failure after competing target");
+                }
+            });
+        var result = Result(output, format);
+        Assert.True(reached);
+        Assert.NotNull(temporaryPath);
+        Assert.Equal(1, exit);
+        Assert.Equal("conflict", Text(result, "state"));
+        Assert.Equal("verification-evidence-record-conflict", Text(result, "cause"));
+        Assert.Equal(racedBytes, File.ReadAllBytes(target));
+        var diagnostics = result.GetProperty("diagnostics").EnumerateArray().ToArray();
+        Assert.Contains(diagnostics, item => Text(item, "cause") == "verification-evidence-record-conflict");
+        Assert.Contains(diagnostics, item => Text(item, "cause") == "owned-temp-cleanup");
+        var relativeTemp = Path.GetRelativePath(host.Root, temporaryPath!).Replace(Path.DirectorySeparatorChar, '/');
+        Assert.Contains(relativeTemp, result.GetProperty("residual_owned_paths").EnumerateArray()
+            .Select(item => item.GetString()));
+        Assert.False(result.GetProperty("wrote").GetBoolean());
     }
 
     [Theory]
@@ -923,6 +1087,34 @@ public sealed class VerificationEvidenceCommandTests
         Assert.Equal(JsonValueKind.Null, shown.GetProperty("report").ValueKind);
     }
 
+    [Theory]
+    [InlineData("show", "json")]
+    [InlineData("validate", "json")]
+    [InlineData("show", "markdown")]
+    [InlineData("validate", "markdown")]
+    public void RequestedRepositoryMismatchPrecedesCurrentPacketReadAndReturnsNoWrongScopeProof(string operation, string format)
+    {
+        using var host = new TempHost();
+        host.WriteTrx("capture.trx", ReadSmallVstest());
+        var (writeExit, writeOutput) = Invoke(host,
+            [.. RecordArgs(host, "json", Hash(host.PacketBytes), "capture.trx"), "--write"]);
+        Assert.Equal(0, writeExit);
+        var written = Result(writeOutput, "json");
+        File.Delete(host.PacketPath);
+
+        var packetReads = 0;
+        var args = ReadArgs(operation, format, repo: "another-owner/another-repo");
+        var (exit, output) = Invoke(host, args, (name, _) => { if (name == "packet-read") packetReads++; });
+        var result = Result(output, format);
+        Assert.Equal(1, exit);
+        Assert.Equal("conflict", Text(result, "state"));
+        Assert.Equal("verification-evidence-identity-conflict", Text(result, "cause"));
+        Assert.Equal(0, packetReads);
+        foreach (var property in new[] { "packet_path", "observed_packet_sha256", "artifact_path", "artifact_sha256", "trx_sha256", "binding", "report" })
+            Assert.Equal(JsonValueKind.Null, result.GetProperty(property).ValueKind);
+        Assert.NotNull(Text(written, "artifact_sha256"));
+    }
+
     [Fact]
     public void WrongHeadShowsVerifiedHistoryButValidationRefusesStaleBinding()
     {
@@ -971,7 +1163,9 @@ public sealed class VerificationEvidenceCommandTests
             {
                 var issues = Path.Combine(host.Root, ".intent-cli", "issues");
                 Directory.Delete(issues, recursive: true);
-                Directory.CreateSymbolicLink(issues, outside.Root);
+                var outsideIssues = Path.Combine(outside.Root, ".intent-cli", "issues");
+                Assert.True(File.Exists(Path.Combine(outsideIssues, Unit, "packet.yaml")));
+                Directory.CreateSymbolicLink(issues, outsideIssues);
                 relative = $".intent-cli/issues/{Unit}/packet.yaml";
             }
             else if (linkKind == "trx-leaf")
@@ -992,15 +1186,20 @@ public sealed class VerificationEvidenceCommandTests
             var result = Result(output, format);
             Assert.Equal(1, exit);
             Assert.Equal("unavailable", Text(result, "state"));
-            Assert.Contains(Text(result, "cause"), new[]
-            {
-                "verification-evidence-read-unavailable", "verification-evidence-identity-conflict"
-            });
+            if (linkKind == "packet-parent")
+                Assert.Equal("verification-evidence-identity-conflict", Text(result, "cause"));
+            else
+                Assert.Contains(Text(result, "cause"), new[]
+                {
+                    "verification-evidence-read-unavailable", "verification-evidence-identity-conflict"
+                });
             Assert.Equal(relative, Text(result.GetProperty("diagnostics")[0], "path"));
             Assert.DoesNotContain(host.Root, output, StringComparison.Ordinal);
             Assert.DoesNotContain(outside.Root, output, StringComparison.Ordinal);
             Assert.Equal(sentinel, File.ReadAllBytes(outsideFile));
             Assert.DoesNotContain("trx-read", operations);
+            if (linkKind == "packet-parent")
+                Assert.DoesNotContain("packet-read", operations);
             if (linkKind.StartsWith("trx-", StringComparison.Ordinal))
                 Assert.Contains("packet-read", operations);
             Assert.False(Directory.Exists(host.EvidenceRoot));
@@ -1449,6 +1648,31 @@ public sealed class VerificationEvidenceCommandTests
     }
 
     [Theory]
+    [InlineData("empty")]
+    [InlineData("with-result")]
+    public void TestResultAggregationIsExplicitlyUnsupportedWhileOrdinaryVstestOutputRemainsAccepted(string aggregation)
+    {
+        Assert.True(TrxEvidenceReader.Read(ReadSmallVstest()).Success);
+        var mutation = aggregation == "empty" ? "aggregation-empty" : "aggregation-with-result";
+        var bytes = MutateSmallTrx(mutation);
+        Assert.False(ReadSmallVstest().AsSpan().SequenceEqual(bytes));
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var host = new TempHost();
+            host.WriteTrx("aggregation.trx", bytes);
+            var (exit, output) = Invoke(host,
+                RecordArgs(host, format, Hash(host.PacketBytes), "aggregation.trx"));
+            var result = Result(output, format);
+            Assert.Equal(1, exit);
+            Assert.Equal("invalid", Text(result, "state"));
+            Assert.Equal("verification-evidence-unsupported-dialect", Text(result, "cause"));
+            Assert.Contains("TestResultAggregation", Text(result, "detail"), StringComparison.Ordinal);
+            Assert.Equal(Hash(bytes), Text(result, "trx_sha256"));
+            Assert.False(Directory.Exists(host.EvidenceRoot));
+        }
+    }
+
+    [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
     public async Task ExternalDtdIsRejectedWithoutConnectingToItsLoopbackEntity(string format)
@@ -1766,6 +1990,37 @@ public sealed class VerificationEvidenceCommandTests
               evidence: local-required
         """;
 
+    private const string TwoCriterionPacket = """
+        implementation_issue_packet:
+          source_execution_unit: G866
+          domain: intent-cli
+          team: intent-cli-dev
+          target_repo: J-Tech-Japan/intent-system
+          acceptance_criteria:
+            - Preserve the first independently verified behavior
+            - Preserve the second independently verified behavior
+        verification_contract:
+          version: 1
+          acceptance_criteria:
+            - {id: AC1, criterion_index: 1}
+            - {id: AC2, criterion_index: 2}
+          lanes:
+            - {id: unit, weight: ordinary}
+            - {id: build, weight: ordinary}
+          affected_lanes: [unit, build]
+          proofs:
+            - id: P1
+              acceptance_criteria: [AC1]
+              lane: unit
+              command: dotnet test
+              evidence: local-required
+            - id: P2
+              acceptance_criteria: [AC2]
+              lane: build
+              command: dotnet test --no-restore
+              evidence: local-required
+        """;
+
     private static string BuildLargeBindingPacket()
     {
         const int criteriaCount = 128;
@@ -1852,6 +2107,8 @@ public sealed class VerificationEvidenceCommandTests
             case "duplicate-result": results.Add(new XElement(result)); break;
             case "duplicate-definition": definitions.Add(new XElement(definitions.Elements(ns + "UnitTest").First())); break;
             case "nested-result": results.Add(new XElement(ns + "Message", new XElement(result))); break;
+            case "aggregation-empty": results.Add(new XElement(ns + "TestResultAggregation")); break;
+            case "aggregation-with-result": results.Add(new XElement(ns + "TestResultAggregation", new XElement(result))); break;
             case "wrong-root-namespace":
                 root.Name = XName.Get("TestRun", "urn:g866:wrong");
                 root.SetAttributeValue("xmlns", "urn:g866:wrong");
@@ -1939,11 +2196,29 @@ public sealed class VerificationEvidenceCommandTests
             "tagged" => ValidPacket.Replace(line, $"  {field}: !str {original}\n", StringComparison.Ordinal),
             "aliased" => $"metadata: &identityValue {original}\n" + ValidPacket.Replace(line,
                 $"  {field}: *identityValue\n", StringComparison.Ordinal),
+            "key-aliased" => $"metadata: &identityKey {field}\n" + ValidPacket.Replace(line,
+                $"  *identityKey: {original}\n", StringComparison.Ordinal),
             "duplicate" => ValidPacket.Replace(line, line + $"  {field}: duplicate\n", StringComparison.Ordinal),
             "case" => ValidPacket.Replace(line, $"  {field}: {caseValue}\n", StringComparison.Ordinal),
             _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, "Unknown packet mutation.")
         };
     }
+
+    private static string MutateValidAlternateBinding(string packet, string mutation) => mutation switch
+    {
+        "criterion-index" => packet
+            .Replace("{id: AC1, criterion_index: 1}", "{id: AC1, criterion_index: 2}", StringComparison.Ordinal)
+            .Replace("{id: AC2, criterion_index: 2}", "{id: AC2, criterion_index: 1}", StringComparison.Ordinal),
+        "proof-reference" => packet
+            .Replace("acceptance_criteria: [AC1]", "acceptance_criteria: [__swap__]", StringComparison.Ordinal)
+            .Replace("acceptance_criteria: [AC2]", "acceptance_criteria: [AC1]", StringComparison.Ordinal)
+            .Replace("acceptance_criteria: [__swap__]", "acceptance_criteria: [AC2]", StringComparison.Ordinal),
+        "proof-lane" => packet
+            .Replace("lane: unit", "lane: __swap__", StringComparison.Ordinal)
+            .Replace("lane: build", "lane: unit", StringComparison.Ordinal)
+            .Replace("lane: __swap__", "lane: build", StringComparison.Ordinal),
+        _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, "Unknown alternate binding mutation.")
+    };
 
     private static int CreateFifo(string path) => MkFifo(path, Convert.ToUInt32("600", 8));
 

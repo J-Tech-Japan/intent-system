@@ -139,6 +139,9 @@ internal static class TrxEvidenceReader
         }
 
         var resultElements = sections["Results"].Elements(Trx + "UnitTestResult").ToArray();
+        if (sections["Results"].DescendantsAndSelf().Skip(1)
+            .Any(element => string.Equals(element.Name.LocalName, "TestResultAggregation", StringComparison.Ordinal)))
+            return ReadResult.Invalid("verification-evidence-unsupported-dialect", "TestResultAggregation rows are not supported by this bounded TRX reader");
         var entryElements = sections["TestEntries"].Elements(Trx + "TestEntry").ToArray();
         var definitionElements = sections["TestDefinitions"].Elements(Trx + "UnitTest").ToArray();
         if (resultElements.Length > MaximumRows || entryElements.Length > MaximumRows || definitionElements.Length > MaximumRows)
