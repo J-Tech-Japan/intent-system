@@ -2297,7 +2297,7 @@ public sealed class VerificationEvidenceCommandTests
         return memory.ToArray();
     }
 
-    private static byte[] ReadFullVstest()
+    internal static byte[] ReadFullVstest()
     {
         using var resource = typeof(VerificationEvidenceCommandTests).Assembly.GetManifestResourceStream("g866-full-cli-vstest.trx.gz")
             ?? throw new InvalidOperationException("G866 original CLI VSTest fixture is missing.");
@@ -2396,7 +2396,7 @@ public sealed class VerificationEvidenceCommandTests
         return output.ToString();
     }
 
-    private static byte[] MutateSmallTrx(string mutation)
+    internal static byte[] MutateSmallTrx(string mutation)
     {
         const string nsText = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
         XNamespace ns = nsText;

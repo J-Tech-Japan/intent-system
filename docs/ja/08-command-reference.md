@@ -910,8 +910,9 @@ contract key は未対応です。
 上限は包含です。actual criteria と registry は各128件、lane 64件、proof 256件、ID は
 `[A-Za-z][A-Za-z0-9_-]{0,63}`、criterion と command は UTF-16 code unit で 16,384、packet は 1 MiB、YAML collection depth は 32 です。
 schema 件数の超過は invalid、byte/depth 超過は unavailable です。SHA-256 は BOM を含む実際に読んだ bytes に対する値で、zero-byte または
-事前のサイズ拒否には hash がありません。別途、G863 source declaration が absent/empty の場合は既存動作を保ちます。この任意の
-report は source #1866 の未実装である evidence binding、deferral、design prompt、worker enforcement ではありません。
+事前のサイズ拒否には hash がありません。別途、G863 source declaration が absent/empty の場合は既存動作を保ちます。
+G865 は構造を検証し、G866/G867 は supplied TRX bytes の local binding と read-only coverage を提供します。
+hosted evidence、deferral、design-prompt integration、worker enforcement は #1866 の broader な未完了作業で、
 #1866 と関連する #1867/#1857 は open のままです。
 
 ### local verification evidence record（G866 — preview-through-1.x）
@@ -942,6 +943,34 @@ head を認証せず、acceptance を評価せず、AC pass を推論せず、pu
 raw TRX は local canonical artifact にのみ保存し、出力には表示しません。埋め込まれた TRX にはテスト名、標準出力、マシン上のパスが
 含まれる場合があります。artifact を commit/push するとその内容も公開されます。この command は個人情報の検査を行いません。
 他 clone から参照するには artifact を commit と plain-push し、fresh clone から `show` と `validate` を実行してください。自動 commit/push はしません。
+
+### local verification coverage（G867 — preview-through-1.x）
+
+`verification evidence coverage` は metadata-free の read-only observation で、呼び出し側が明示した
+G866 local record を最大16件まで確認します。`proof-id=record-id` は引数で指定し、evidence store を走査したり
+最新 record を選んだりしません。missing、stale、failed、skipped、unavailable を別々に報告します。
+packet の `hosted-required` proof は `not-applicable` / `not-observed` のままで、hosted evidence は取得しません。
+record を選ぶには `--evidence <proof-id>=<record-id>` を繰り返します。
+
+```bash
+intent-cli verification evidence coverage --execution-unit G123 \
+  --domain example --team builders --repo owner/repo \
+  --head-sha <40-lowerhex> --packet-sha256 <64-lowerhex> \
+  --evidence P1=E1 --evidence P2=E2 --format json
+intent-cli worker result-summary --kind issue-to-pr --repo owner/repo \
+  --issue <n> --pr <n> --outcome pr-created --verification-report \
+  --verification-unit G123 --verification-domain example --verification-team builders \
+  --verification-head-sha <40-lowerhex> --verification-packet-sha256 <64-lowerhex> \
+  --verification-evidence P1=E1 --format json
+```
+
+任意の `result-summary` group は同じ typed report を追加しますが、既存の status、outcome、warnings、推奨 label action、exit code は
+変更しません。`--verification-report` がなければ従来の出力を維持し、markdown format は引き続き未対応です。
+`complete` には `structural_state=complete`（G865 の gap なし）と、すべての local-required proof row が current かつ passing であることが必要です。
+単独の coverage command は complete の場合だけ exit 0、incomplete / unavailable / invalid の場合は exit 1 です。有効な optional result-summary report は advisory で、従来の exit code を変えません。
+coverage は advisory-only であり、producer や command を認証せず、acceptance criterion の合格を評価せず、publication を確認せず、worker completion の gate にもなりません。
+`complete` はこの observation 内で構造と local-required row の両方が complete であることを表します。
+raw TRX bytes や test name は coverage output に表示しません。ただし G866 artifact には supplied bytes が保存され、test name、stdout、machine path を含む場合があります。
 
 ### 貼り付け evidence gate（G785）
 

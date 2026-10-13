@@ -83,7 +83,7 @@ public sealed class GuideCommandsListCommandTests
     public void VerificationValidatorIsReachableFromAllThreeGuideRoutesInBothFormats()
     {
         const string command = "intent-cli packet validate-verification --execution-unit <unit> --format json";
-        const string unimplemented = "#1866 evidence binding, deferral, design prompt integration, and worker enforcement remain unimplemented.";
+        const string implementedLocalScope = "G866/G867 provide local supplied-TRX binding and read-only coverage";
         foreach (var format in new[] { "json", "markdown" })
         {
             using var catalogWriter = new StringWriter();
@@ -102,7 +102,7 @@ public sealed class GuideCommandsListCommandTests
             Assert.Contains("structural coverage", packetPurpose, StringComparison.Ordinal);
             Assert.Contains("never runs commands", packetPurpose, StringComparison.Ordinal);
             Assert.Contains("not a gate", packetPurpose, StringComparison.Ordinal);
-            Assert.Contains(unimplemented, packetPurpose, StringComparison.Ordinal);
+            Assert.Contains(implementedLocalScope, packetPurpose, StringComparison.Ordinal);
 
             using var soloWriter = new StringWriter();
             Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", format], CreateContext(), soloWriter));
@@ -121,7 +121,7 @@ public sealed class GuideCommandsListCommandTests
             Assert.Contains("structural coverage", soloInstruction, StringComparison.Ordinal);
             Assert.Contains("never runs commands", soloInstruction, StringComparison.Ordinal);
             Assert.Contains("does not gate later steps", soloInstruction, StringComparison.Ordinal);
-            Assert.Contains(unimplemented, soloInstruction, StringComparison.Ordinal);
+            Assert.Contains(implementedLocalScope, soloInstruction, StringComparison.Ordinal);
 
             using var publishWriter = new StringWriter();
             Assert.Equal(0, CommandRouter.Execute(["guide", "workflow", "task", "issue-publish", "--format", format], CreateContext(), publishWriter));
@@ -137,7 +137,7 @@ public sealed class GuideCommandsListCommandTests
             Assert.Contains("structural coverage", publishGuidance, StringComparison.Ordinal);
             Assert.Contains("never runs commands", publishGuidance, StringComparison.Ordinal);
             Assert.Contains("not a gate", publishGuidance, StringComparison.Ordinal);
-            Assert.Contains(unimplemented, publishGuidance, StringComparison.Ordinal);
+            Assert.Contains(implementedLocalScope, publishGuidance, StringComparison.Ordinal);
         }
     }
 
@@ -212,6 +212,63 @@ public sealed class GuideCommandsListCommandTests
     }
 
     [Fact]
+    public void VerificationCoverageIsDiscoveredAsLocalAdvisoryFromAllThreeGuideRoutes()
+    {
+        const string command = "intent-cli verification evidence coverage --execution-unit <unit> --domain <domain> --team <team> --repo <owner/repo> --head-sha <40-lowerhex> --packet-sha256 <64-lowerhex> [--evidence <proof-id>=<record-id>]...";
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var catalogWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "commands", "list", "--format", format], CreateContext(), catalogWriter));
+            string catalogPurpose;
+            if (format == "json")
+            {
+                using var catalog = JsonDocument.Parse(catalogWriter.ToString());
+                catalogPurpose = catalog.RootElement.GetProperty("groups").EnumerateArray()
+                    .Single(group => group.GetProperty("name").GetString() == "verification")
+                    .GetProperty("purpose").GetString()!;
+            }
+            else catalogPurpose = catalogWriter.ToString();
+            Assert.Contains(command, catalogPurpose, StringComparison.Ordinal);
+            Assert.Contains("at most 16", catalogPurpose, StringComparison.Ordinal);
+            Assert.Contains("hosted-required", catalogPurpose, StringComparison.Ordinal);
+            Assert.Contains("does not change lifecycle status/outcome/exit", catalogPurpose, StringComparison.Ordinal);
+
+            using var soloWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", format], CreateContext(), soloWriter));
+            string soloInstruction;
+            if (format == "json")
+            {
+                using var solo = JsonDocument.Parse(soloWriter.ToString());
+                var step = solo.RootElement.GetProperty("loop").EnumerateArray()
+                    .Single(item => item.GetProperty("id").GetString() == "packet-draft-and-validate");
+                soloInstruction = step.GetProperty("instruction").GetString()!;
+                Assert.Contains(step.GetProperty("commands").EnumerateArray(),
+                    item => item.GetProperty("command").GetString() == command + " --format json");
+            }
+            else soloInstruction = soloWriter.ToString();
+            Assert.Contains(command, soloInstruction, StringComparison.Ordinal);
+            Assert.Contains("not-applicable/not-observed", soloInstruction, StringComparison.Ordinal);
+            Assert.Contains("does not change lifecycle status, outcome, or exit", soloInstruction, StringComparison.Ordinal);
+
+            using var workflowWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "workflow", "task", "issue-publish", "--format", format], CreateContext(), workflowWriter));
+            string workflowInvariants;
+            if (format == "json")
+            {
+                using var workflow = JsonDocument.Parse(workflowWriter.ToString());
+                workflowInvariants = string.Join(" ", workflow.RootElement.GetProperty("invariants").EnumerateArray()
+                    .Select(item => item.GetString()));
+            }
+            else workflowInvariants = workflowWriter.ToString();
+            Assert.Contains(command, workflowInvariants, StringComparison.Ordinal);
+            Assert.Contains("at most 16", workflowInvariants, StringComparison.Ordinal);
+            Assert.Contains("hosted-required", workflowInvariants, StringComparison.Ordinal);
+            Assert.Contains("does not change lifecycle status, outcome, exit", workflowInvariants, StringComparison.Ordinal);
+            Assert.Contains("publication", workflowInvariants, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void G866DocumentationIsAlignedInEnglishAndJapanese()
     {
         var root = RepoVersionPolicySource.RepoRoot();
@@ -243,6 +300,48 @@ public sealed class GuideCommandsListCommandTests
                 Assert.Contains("`hosted-required` proof", orchestration, StringComparison.Ordinal);
                 Assert.Contains("deferral は未対応", orchestration, StringComparison.Ordinal);
                 Assert.Contains("自動 Git mutation はありません", ledger, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void G867DocumentationCoversReadOnlyLocalCoverageAndAdvisorySummary()
+    {
+        foreach (var language in new[] { "en", "ja" })
+        {
+            var reference = File.ReadAllText(Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", language, "08-command-reference.md"));
+            var orchestration = File.ReadAllText(Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", language, "12-agent-message-orchestration.md"));
+            var ledger = File.ReadAllText(Path.Combine(RepoVersionPolicySource.RepoRoot(), "docs", language, "1.0-compatibility-ledger.md"));
+            foreach (var document in new[] { reference, orchestration, ledger })
+            {
+                Assert.Contains("G867", document, StringComparison.Ordinal);
+                Assert.Contains("verification evidence coverage", document, StringComparison.Ordinal);
+                Assert.Contains("--verification-report", document, StringComparison.Ordinal);
+                Assert.Contains("--evidence <proof-id>=<record-id>", document, StringComparison.Ordinal);
+                Assert.Contains("16", document, StringComparison.Ordinal);
+                Assert.Contains("hosted-required", document, StringComparison.Ordinal);
+                Assert.Contains("structural_state=complete", document, StringComparison.Ordinal);
+            }
+
+            if (language == "en")
+            {
+                Assert.Contains("read-only", reference, StringComparison.Ordinal);
+                Assert.Contains("does not change", reference, StringComparison.Ordinal);
+                Assert.Contains("does not authenticate", orchestration, StringComparison.Ordinal);
+                Assert.Contains("worker completion is not gated", ledger, StringComparison.Ordinal);
+                Assert.Contains("exits 0 only for complete", reference, StringComparison.Ordinal);
+                Assert.Contains("exits 1 for incomplete, unavailable, or invalid states", orchestration, StringComparison.Ordinal);
+                Assert.Contains("exits 1 for incomplete, unavailable, or invalid states", ledger, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains("read-only", reference, StringComparison.Ordinal);
+                Assert.Contains("変更しません", reference, StringComparison.Ordinal);
+                Assert.Contains("認証", orchestration, StringComparison.Ordinal);
+                Assert.Contains("gate", ledger, StringComparison.Ordinal);
+                Assert.Contains("exit 0", reference, StringComparison.Ordinal);
+                Assert.Contains("exit 1", orchestration, StringComparison.Ordinal);
+                Assert.Contains("exit 1", ledger, StringComparison.Ordinal);
             }
         }
     }

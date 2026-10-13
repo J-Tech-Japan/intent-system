@@ -53,10 +53,13 @@ internal static class Program
                 var verificationRoot = RepoRootResolver.Resolve(verificationCwd) ?? verificationCwd;
                 if (args.Length == 1 || args.Length == 2 && (args[1] is "--help" or "help" or "evidence"))
                 {
-                    Console.Out.WriteLine("intent-cli verification evidence record|show|validate [--format json|markdown]");
+                    Console.Out.WriteLine("intent-cli verification evidence record|show|validate|coverage [--format json|markdown]");
                     Console.Out.WriteLine("Reads local packet/TRX evidence only; it does not execute commands, authenticate a producer, assess acceptance, or verify publication.");
                     return 0;
                 }
+                if (args.Length >= 3 && string.Equals(args[1], "evidence", StringComparison.Ordinal)
+                    && string.Equals(args[2], "coverage", StringComparison.Ordinal))
+                    return VerificationEvidenceCoverage.Execute(verificationRoot, args[3..], Console.Out);
                 if (args.Length >= 2 && string.Equals(args[1], "evidence", StringComparison.Ordinal))
                     return VerificationEvidenceCommand.Execute(verificationRoot, args[2..], Console.Out);
             }

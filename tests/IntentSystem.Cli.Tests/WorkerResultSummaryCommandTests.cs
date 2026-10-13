@@ -902,6 +902,71 @@ public sealed class WorkerResultSummaryCommandTests : IDisposable
         Assert.Contains("host merge will be blocked", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Execute_OptInVerificationCoverageKeepsG785IssueLookupBudgetAndReadOnlyFiles()
+    {
+        using var host = new VerificationEvidenceCommandTests.TempHost("G866", VerificationEvidenceCommandTests.ValidPacket);
+        var trx = VerificationEvidenceCommandTests.ReadSmallVstest();
+        host.WriteTrx("capture.trx", trx);
+        var packetSha = VerificationEvidenceCommandTests.Hash(host.PacketBytes);
+        var recordArgs = VerificationEvidenceCommandTests.RecordArgs(host, "json", packetSha, "capture.trx", id: "E1", proof: "P1");
+        var (writeExit, _) = VerificationEvidenceCommandTests.Invoke(host, [.. recordArgs, "--write"]);
+        Assert.Equal(0, writeExit);
+
+        var lookup = new CountingIssueLookup();
+        var factoryCalls = 0;
+        WorkerResultSummaryCommand.IssueLookupFactory = () =>
+        {
+            factoryCalls++;
+            return lookup;
+        };
+        var context = new CliContext
+        {
+            RepoRoot = host.Root,
+            Config = new CliConfig { Project = new ProjectConfig { Domain = "intent-cli", ArtifactRoot = ".intent-cli" } },
+        };
+        var body = "This local summary does not execute tests.\n";
+        var legacyArgs = new[]
+        {
+            "--kind", "issue-to-pr", "--repo", "J-Tech-Japan/intent-system", "--issue", "1895", "--pr", "1900",
+            "--outcome", "pr-created", "--pr-body", body, "--format", "json",
+        };
+        var optInArgs = new[]
+        {
+            "--kind", "issue-to-pr", "--repo", "J-Tech-Japan/intent-system", "--issue", "1895", "--pr", "1900",
+            "--outcome", "pr-created", "--pr-body", body, "--verification-report", "--verification-unit", "G866",
+            "--verification-domain", "intent-cli", "--verification-team", "intent-cli-dev",
+            "--verification-head-sha", VerificationEvidenceCommandTests.Head,
+            "--verification-packet-sha256", packetSha, "--verification-evidence", "P1=E1", "--format", "json",
+        };
+        var snapshot = SnapshotDirectory(host.Root);
+
+        lookup.Calls = 0;
+        factoryCalls = 0;
+        using (var legacyWriter = new StringWriter())
+        {
+            Assert.Equal(0, WorkerResultSummaryCommand.Execute(context, legacyArgs, legacyWriter));
+            Assert.Equal(1, factoryCalls);
+            Assert.Equal(1, lookup.Calls);
+            using var legacy = JsonDocument.Parse(legacyWriter.ToString());
+            Assert.Equal("completed", legacy.RootElement.GetProperty("status").GetString());
+            Assert.False(legacy.RootElement.TryGetProperty("verification_coverage", out _));
+        }
+
+        lookup.Calls = 0;
+        factoryCalls = 0;
+        using (var projectedWriter = new StringWriter())
+        {
+            Assert.Equal(0, WorkerResultSummaryCommand.Execute(context, optInArgs, projectedWriter));
+            Assert.Equal(1, factoryCalls);
+            Assert.Equal(1, lookup.Calls);
+            using var projected = JsonDocument.Parse(projectedWriter.ToString());
+            Assert.Equal("completed", projected.RootElement.GetProperty("status").GetString());
+            Assert.Equal("complete", projected.RootElement.GetProperty("verification_coverage").GetProperty("state").GetString());
+        }
+        Assert.Equal(snapshot, SnapshotDirectory(host.Root));
+    }
+
     private sealed class NoEvidenceIssueLookup : IGitHubIssueLookup
     {
         public GitHubIssueLookupResult Lookup(string repo, int issueNumber) => new()
@@ -912,6 +977,35 @@ public sealed class WorkerResultSummaryCommandTests : IDisposable
             Body = "## Acceptance Criteria\n\n- Existing criterion without a G785 phrase.\n",
         };
     }
+
+    private sealed class CountingIssueLookup : IGitHubIssueLookup
+    {
+        public int Calls { get; set; }
+
+        public GitHubIssueLookupResult Lookup(string repo, int issueNumber)
+        {
+            Calls++;
+            return new GitHubIssueLookupResult
+            {
+                Number = issueNumber,
+                State = "OPEN",
+                Title = "G867 read-only provider budget fixture",
+                Body = "## Acceptance Criteria\n\n- Keep this a normal worker summary.\n",
+            };
+        }
+    }
+
+    private static string[] SnapshotDirectory(string root) => Directory
+        .EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+        .Select(path =>
+        {
+            var relative = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+            return Directory.Exists(path)
+                ? "D " + relative
+                : "F " + relative + " " + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+        })
+        .Order(StringComparer.Ordinal)
+        .ToArray();
 
     private sealed class WorkerResultSummaryWorkspace : IDisposable
     {
