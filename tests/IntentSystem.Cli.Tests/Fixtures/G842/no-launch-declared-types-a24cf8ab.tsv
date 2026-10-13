@@ -13,6 +13,7 @@ ApprovalPostingPathInspection	src/IntentSystem.Cli/Commands/ApprovalPostingOverr
 ArchivePeriodOutput	src/IntentSystem.Cli/Commands/NotifySupervisionStore.cs
 Assessment	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 AtomicAppendWriter	src/IntentSystem.Cli/Commands/AtomicAppendWriter.cs
+AtomicLinkResult	src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs
 AtomicStandaloneBinaryReplacer	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 AutomationClarificationStopCommand	src/IntentSystem.Cli/Commands/AutomationClarificationStopCommand.cs
 AutomationClarificationStopResult	src/IntentSystem.Cli/Commands/AutomationClarificationStopCommand.cs
@@ -587,6 +588,13 @@ UpdateOperationResult	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 UpdateProcessResult	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 UpdateRelease	src/IntentSystem.Cli/Commands/UpdateCommand.cs
 UpdateReleaseAsset	src/IntentSystem.Cli/Commands/UpdateCommand.cs
+VerificationEvidenceBinding	src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs
+VerificationEvidenceCriterion	src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs
+VerificationEvidenceDiagnostic	src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs
+VerificationEvidenceRecord	src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs
+VerificationEvidenceStore	src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs
+VerificationEvidenceStoreRead	src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs
+VerificationEvidenceStoreWrite	src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs
 WorkerClaimAnalyzer	src/IntentSystem.Cli/Commands/WorkerClaimAnalyzer.cs
 WorkerClaimCommand	src/IntentSystem.Cli/Commands/WorkerClaimCommand.cs
 WorkerCompleteAnalyzer	src/IntentSystem.Cli/Commands/WorkerCompleteAnalyzer.cs
@@ -601,7 +609,7 @@ WorkerResultSummaryAnalyzer	src/IntentSystem.Cli/Commands/WorkerResultSummaryAna
 WorkerResultSummaryCommand	src/IntentSystem.Cli/Commands/WorkerResultSummaryCommand.cs
 WorkerSignalCommand	src/IntentSystem.Cli/Commands/WorkerSignalCommand.cs
 WorkerSignalContract	src/IntentSystem.Cli/Commands/WorkerSignalContract.cs
-WriterOperationsHooks	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs
 WorkflowGuidePointer	src/IntentSystem.Cli/Commands/GuideHelpCommand.cs
 WorkspaceGuardResult	src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs
 WorkspaceGuardState	src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs
+WriterOperationsHooks	src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs

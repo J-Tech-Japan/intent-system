@@ -123,6 +123,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "verification",
+            Role = RoleChildImplementation,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityMixed,
+            RecommendedCaller = CallerImplementationLoop,
+            Purpose = "Local supplied-TRX evidence observation: `verification evidence record|show|validate` checks one explicitly selected local-required G865 proof, embeds exact local TRX bytes in an opt-in canonical record, and compares its packet binding. Record defaults to preview; only explicit `--write` stores locally. Execution is `not-observed`, producer unauthenticated, acceptance not assessed, and publication not verified; it does not infer an AC passed, run tests, or gate workers. Commit/plain-push and verify from a fresh clone for remote visibility."
+        },
+        new CommandGroupEntry
+        {
             Name = "worker",
             Role = RoleChildImplementation,
             Classification = ClassificationPrimary,

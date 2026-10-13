@@ -165,6 +165,7 @@ src/IntentSystem.Cli/Commands/UpdateCommand.cs	IUpdateProcessRunner	4
 src/IntentSystem.Cli/Commands/UpdateCommand.cs	Process	1
 src/IntentSystem.Cli/Commands/UpdateCommand.cs	ProcessStartInfo	1
 src/IntentSystem.Cli/Commands/UpdateCommand.cs	ProcessUpdateRunner	2
+src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs	DllImport	4
 src/IntentSystem.Cli/Commands/WorkerClaimAnalyzer.cs	Process	1
 src/IntentSystem.Cli/Commands/WorkerClaimCommand.cs	NestedProviderLauncher	2
 src/IntentSystem.Cli/Commands/WorkerClaimCommand.cs	Process	2

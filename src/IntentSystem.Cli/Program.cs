@@ -46,6 +46,21 @@ internal static class Program
                 return PrivatePreviewExpiryGate.ExpiredExitCode;
             }
 
+            // G866: supplied local TRX observation is a metadata-free root-local command.
+            if (args.Length >= 1 && string.Equals(args[0], "verification", StringComparison.Ordinal))
+            {
+                var verificationCwd = Directory.GetCurrentDirectory();
+                var verificationRoot = RepoRootResolver.Resolve(verificationCwd) ?? verificationCwd;
+                if (args.Length == 1 || args.Length == 2 && (args[1] is "--help" or "help" or "evidence"))
+                {
+                    Console.Out.WriteLine("intent-cli verification evidence record|show|validate [--format json|markdown]");
+                    Console.Out.WriteLine("Reads local packet/TRX evidence only; it does not execute commands, authenticate a producer, assess acceptance, or verify publication.");
+                    return 0;
+                }
+                if (args.Length >= 2 && string.Equals(args[1], "evidence", StringComparison.Ordinal))
+                    return VerificationEvidenceCommand.Execute(verificationRoot, args[2..], Console.Out);
+            }
+
             // G865: optional packet verification-contract reporting is local,
             // read-only, and available without host metadata or bootstrap identity.
             if (args.Length >= 2
