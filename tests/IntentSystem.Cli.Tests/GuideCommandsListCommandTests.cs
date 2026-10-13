@@ -325,11 +325,12 @@ public sealed class GuideCommandsListCommandTests
 
             if (language == "en")
             {
+                var normalizedLedger = string.Join(' ', ledger.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
                 Assert.Contains("read-only", reference, StringComparison.Ordinal);
                 Assert.Contains("does not change", reference, StringComparison.Ordinal);
                 Assert.Contains("does not authenticate", orchestration, StringComparison.Ordinal);
                 Assert.Contains("worker completion is not gated", ledger, StringComparison.Ordinal);
-                Assert.Contains("`complete` requires `structural_state=complete`", ledger, StringComparison.Ordinal);
+                Assert.Contains("advisory. `complete` requires `structural_state=complete`", normalizedLedger, StringComparison.Ordinal);
                 Assert.DoesNotContain("The optional `structural_state=complete`", ledger, StringComparison.Ordinal);
                 Assert.Contains("exits 0 only for complete", reference, StringComparison.Ordinal);
                 Assert.Contains("exits 1 for incomplete, unavailable, or invalid states", orchestration, StringComparison.Ordinal);
