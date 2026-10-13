@@ -288,7 +288,7 @@ internal static class VerificationEvidenceCommand
         if (!TryResolveContainedFile(root, options.Trx!, out var trxPath, out var trxRelative, out var pathCause, out var pathDetail))
         {
             Emit(writer, options.Format!, FromPacket(options, packet, "unavailable", pathCause, pathDetail,
-                "refused", [new(pathCause, trxRelative, pathDetail)]));
+                "refused", [new(pathCause, string.IsNullOrEmpty(trxRelative) ? null : trxRelative, pathDetail)]));
             return 1;
         }
         beforeOperation?.Invoke("trx-read", trxPath);
@@ -524,6 +524,13 @@ internal static class VerificationEvidenceCommand
             return false;
         }
         var full = Path.Combine(root, ".intent-cli", "issues", options.Unit!, "packet.yaml");
+        var packetParent = Path.GetDirectoryName(full)!;
+        if (!TryCheckSiblingName(packetParent, "packet.yaml", out _, out pathCause, out pathDetail))
+        {
+            failure = Refusal(options, "unavailable", pathCause, pathDetail, "refused",
+                [new(pathCause, relative, pathDetail)], packetPath: relative);
+            return false;
+        }
         beforeOperation?.Invoke("packet-read", full);
         if (!CrossRuntimeReviewFileMode.TryReadRegularFileBytes(full, PacketVerificationContract.MaximumBytes,
                 out var bytes, out var readFailure, out _))

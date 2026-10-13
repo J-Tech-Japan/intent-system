@@ -1137,7 +1137,9 @@ head, assess acceptance, infer that an AC passed, verify publication, or gate a
 worker. Hosted-required proofs and deferral are unsupported. Results keep
 `execution: not-observed`, `producer: not-authenticated`,
 `acceptance: not-assessed`, and `publication: not-verified`; raw TRX is kept in
-the local canonical artifact, not rendered in output. To make a record visible
+the local canonical artifact, not rendered in output. Embedded TRX may contain
+test names, stdout, or machine paths; committing/pushing the artifact publishes
+those bytes, and this command does not scan them for privacy. To make a record visible
 to another clone, commit and plain-push the artifact, then run `show` and
 `validate` from a fresh clone. Recording does not commit or push automatically.
 

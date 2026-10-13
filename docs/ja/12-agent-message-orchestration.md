@@ -4405,4 +4405,5 @@ preview が既定で、`--write` のみが canonical local record を作成し�
 AC pass を推論せず、publication も検証しません。test を実行せず worker gate にもなりません。
 `hosted-required` proof と deferral は未対応で、自動 commit/push はしません。他 clone に record を見せるには、
 commit と plain-push の後、fresh clone から `show` と `validate` を実行します。raw TRX bytes は local artifact に
-保存し、出力には表示しません。
+保存し、出力には表示しません。埋め込まれた TRX にはテスト名、標準出力、マシン上のパスが含まれる場合があります。
+artifact を commit/push するとその内容も公開されます。この command は個人情報の検査を行いません。

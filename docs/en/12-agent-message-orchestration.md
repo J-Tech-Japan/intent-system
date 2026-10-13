@@ -5122,3 +5122,5 @@ verified. It does not run tests or gate a worker. Hosted-required proofs and
 deferral are unsupported; no automatic commit or push occurs. For another clone
 to see the record, commit and plain-push it, then use `show` and `validate` from
 a fresh clone. Raw TRX bytes remain in the local artifact and are not printed.
+Embedded TRX may contain test names, stdout, or machine paths; committing/pushing
+the artifact publishes those bytes, and this command does not scan them for privacy.

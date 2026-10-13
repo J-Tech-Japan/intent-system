@@ -1448,6 +1448,58 @@ public sealed class VerificationEvidenceCommandTests
     }
 
     [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void PacketLeafCaseAliasRefusesRecordShowAndValidateBeforePacketOrTrxRead(string format)
+    {
+        foreach (var operation in new[] { "record", "show", "validate" })
+        {
+            using var host = new TempHost();
+            var trx = ReadSmallVstest();
+            host.WriteTrx("capture.trx", trx);
+            var artifactPath = $".intent-cli/verification-evidence/{Domain}/{Team}/{Unit}/{Id}.json";
+            byte[]? artifactBytes = null;
+
+            if (operation is "show" or "validate")
+            {
+                var (seedExit, seedOutput) = Invoke(host,
+                    [.. RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"), "--write"]);
+                Assert.Equal(0, seedExit);
+                artifactPath = Text(Result(seedOutput, format), "artifact_path");
+                artifactBytes = File.ReadAllBytes(host.Absolute(artifactPath));
+            }
+
+            var packetBytes = host.PacketBytes;
+            var packetDirectory = Path.GetDirectoryName(host.PacketPath)!;
+            var temporaryName = Path.Combine(packetDirectory, "packet-rename.tmp");
+            var aliasPath = Path.Combine(packetDirectory, "Packet.yaml");
+            File.Move(host.PacketPath, temporaryName);
+            File.Move(temporaryName, aliasPath);
+
+            var operations = new List<string>();
+            string[] args = operation == "record"
+                ? [.. RecordArgs(host, format, Hash(packetBytes), "capture.trx"), "--write"]
+                : ReadArgs(operation, format);
+            var (exit, output) = Invoke(host, args, (name, _) => operations.Add(name));
+            var result = Result(output, format);
+
+            Assert.Equal(1, exit);
+            Assert.Equal("unavailable", Text(result, "state"));
+            Assert.Equal("verification-evidence-identity-conflict", Text(result, "cause"));
+            Assert.Contains("case-alias", Text(result.GetProperty("diagnostics")[0], "detail"), StringComparison.Ordinal);
+            Assert.Equal($".intent-cli/issues/{Unit}/packet.yaml", Text(result.GetProperty("diagnostics")[0], "path"));
+            Assert.DoesNotContain("packet-read", operations);
+            Assert.DoesNotContain("trx-read", operations);
+            Assert.Equal(packetBytes, File.ReadAllBytes(aliasPath));
+            Assert.DoesNotContain(host.Root, output, StringComparison.Ordinal);
+            if (artifactBytes is null)
+                Assert.False(Directory.Exists(host.EvidenceRoot));
+            else
+                Assert.Equal(artifactBytes, File.ReadAllBytes(host.Absolute(artifactPath)));
+        }
+    }
+
+    [Theory]
     [InlineData("store-root-link")]
     [InlineData("target-link")]
     [InlineData("target-directory")]
@@ -2110,6 +2162,27 @@ public sealed class VerificationEvidenceCommandTests
         var refused = Result(overOutput, format);
         Assert.Equal(1, overExit);
         Assert.Equal("verification-evidence-unsupported-dialect", Text(refused, "cause"));
+        Assert.False(Directory.Exists(host.EvidenceRoot));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void InvalidTrxPathWithUnknownSegmentsHasNullDiagnosticPath(string format)
+    {
+        using var host = new TempHost();
+        host.WriteTrx("capture.trx", ReadSmallVstest());
+        var operations = new List<string>();
+        var (exit, output) = Invoke(host,
+            RecordArgs(host, format, Hash(host.PacketBytes), "./capture.trx"),
+            (operation, _) => operations.Add(operation));
+        var result = Result(output, format);
+
+        Assert.Equal(1, exit);
+        Assert.Equal("verification-evidence-argument-invalid", Text(result, "cause"));
+        Assert.Equal(JsonValueKind.Null, result.GetProperty("diagnostics")[0].GetProperty("path").ValueKind);
+        Assert.Contains("packet-read", operations);
+        Assert.DoesNotContain("trx-read", operations);
         Assert.False(Directory.Exists(host.EvidenceRoot));
     }
 

@@ -939,8 +939,9 @@ intent-cli verification evidence validate E1 --execution-unit G123 --domain exam
 head を認証せず、acceptance を評価せず、AC pass を推論せず、publication を確認せず、worker gate にも使いません。
 `hosted-required` proof と deferral は未対応です。結果は `execution: not-observed`、
 `producer: not-authenticated`、`acceptance: not-assessed`、`publication: not-verified` を保ちます。
-raw TRX は local canonical artifact にのみ保存し、出力には表示しません。他 clone から参照するには artifact を
-commit と plain-push し、fresh clone から `show` と `validate` を実行してください。自動 commit/push はしません。
+raw TRX は local canonical artifact にのみ保存し、出力には表示しません。埋め込まれた TRX にはテスト名、標準出力、マシン上のパスが
+含まれる場合があります。artifact を commit/push するとその内容も公開されます。この command は個人情報の検査を行いません。
+他 clone から参照するには artifact を commit と plain-push し、fresh clone から `show` と `validate` を実行してください。自動 commit/push はしません。
 
 ### 貼り付け evidence gate（G785）
 
