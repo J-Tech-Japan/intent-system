@@ -621,7 +621,7 @@ public sealed class VerificationEvidenceCommandTests
         Assert.Equal("verification-evidence-packet-changed", Text(result, "cause"));
         Assert.False(result.GetProperty("wrote").GetBoolean());
         var cleanup = result.GetProperty("diagnostics").EnumerateArray()
-            .Single(item => Text(item, "cause") == "owned-temp-cleanup");
+            .Single(item => Text(item, "cause") == "verification-evidence-owned-temp-cleanup");
         Assert.Contains("publication did not complete", Text(cleanup, "detail"), StringComparison.Ordinal);
         Assert.DoesNotContain("published record is complete", Text(cleanup, "detail"), StringComparison.Ordinal);
         var relativeTemp = Path.GetRelativePath(host.Root, temporaryPath!).Replace(Path.DirectorySeparatorChar, '/');
@@ -711,7 +711,7 @@ public sealed class VerificationEvidenceCommandTests
                 Assert.NotNull(originalTemp);
                 Assert.True(File.Exists(originalTemp));
                 Assert.Contains(result.GetProperty("diagnostics").EnumerateArray(), item =>
-                    Text(item, "cause") == "owned-temp-cleanup"
+                    Text(item, "cause") == "verification-evidence-owned-temp-cleanup"
                     && Text(item, "detail").Contains("original owned temporary path cannot be safely resolved", StringComparison.Ordinal));
                 Assert.Empty(result.GetProperty("residual_owned_paths").EnumerateArray());
             }
@@ -737,7 +737,7 @@ public sealed class VerificationEvidenceCommandTests
                     Assert.True(replacedWithRegularDirectory);
                     Assert.Equal(Encoding.UTF8.GetBytes("replacement directory sentinel\n"), File.ReadAllBytes(replacementTemp!));
                     Assert.Contains(result.GetProperty("diagnostics").EnumerateArray(), item =>
-                        Text(item, "cause") == "owned-directory-cleanup"
+                        Text(item, "cause") == "verification-evidence-owned-directory-cleanup"
                         && Text(item, "detail").Contains("original owned directory path cannot be safely resolved", StringComparison.Ordinal));
                 }
             }
@@ -814,7 +814,7 @@ public sealed class VerificationEvidenceCommandTests
         Assert.Equal(racedBytes, File.ReadAllBytes(target));
         var diagnostics = result.GetProperty("diagnostics").EnumerateArray().ToArray();
         Assert.Contains(diagnostics, item => Text(item, "cause") == "verification-evidence-record-conflict");
-        Assert.Contains(diagnostics, item => Text(item, "cause") == "owned-temp-cleanup");
+        Assert.Contains(diagnostics, item => Text(item, "cause") == "verification-evidence-owned-temp-cleanup");
         var relativeTemp = Path.GetRelativePath(host.Root, temporaryPath!).Replace(Path.DirectorySeparatorChar, '/');
         Assert.Contains(relativeTemp, result.GetProperty("residual_owned_paths").EnumerateArray()
             .Select(item => item.GetString()));
@@ -946,7 +946,7 @@ public sealed class VerificationEvidenceCommandTests
             Assert.True(result.GetProperty("wrote").GetBoolean());
             Assert.False(result.GetProperty("idempotent").GetBoolean());
             var expectedTempRelative = Path.GetRelativePath(host.Root, temporaryPath!).Replace(Path.DirectorySeparatorChar, '/');
-            Assert.Equal("owned-temp-cleanup", Text(result.GetProperty("diagnostics")[0], "cause"));
+            Assert.Equal("verification-evidence-owned-temp-cleanup", Text(result.GetProperty("diagnostics")[0], "cause"));
             Assert.Equal(expectedTempRelative, Text(result.GetProperty("diagnostics")[0], "path"));
             Assert.Contains(expectedTempRelative, result.GetProperty("residual_owned_paths").EnumerateArray()
                 .Select(item => item.GetString()));
@@ -1759,7 +1759,7 @@ public sealed class VerificationEvidenceCommandTests
         foreach (var mutation in new[]
         {
             "total", "executed", "passed", "failed", "not-executed", "root-guid", "aborted-counter", "duplicate-entry", "missing-result", "bad-guid", "bad-name",
-            "long-name", "bad-outcome", "duplicate-execution", "missing-entry", "extra-entry",
+            "long-name", "bad-definition-name", "long-definition-name", "bad-outcome", "duplicate-execution", "missing-entry", "extra-entry",
             "missing-definition", "extra-definition", "wrong-definition-execution", "wrong-entry-execution",
             "duplicate-result", "duplicate-definition", "nested-result", "wrong-root-namespace", "wrong-result-namespace",
             "wrong-execution-namespace", "missing-results-section", "duplicate-results-section", "misplaced-counters",
@@ -1767,7 +1767,7 @@ public sealed class VerificationEvidenceCommandTests
         })
         {
             var cause = mutation is "root-guid" or "aborted-counter" or "duplicate-entry" or "missing-result"
-                or "bad-guid" or "bad-name" or "long-name" or "bad-outcome"
+                or "bad-guid" or "bad-name" or "long-name" or "bad-definition-name" or "long-definition-name" or "bad-outcome"
                 or "duplicate-execution" or "missing-entry" or "extra-entry" or "duplicate-definition"
                 or "missing-definition" or "extra-definition" or "wrong-definition-execution" or "wrong-entry-execution"
                 or "duplicate-result" or "wrong-execution-namespace" or "missing-results-section" or "duplicate-results-section" or "misplaced-counters"
@@ -2084,6 +2084,18 @@ public sealed class VerificationEvidenceCommandTests
     public void TrxNamesAcceptExactUtf16LimitAndRejectOneCodeUnitOver(string format)
     {
         using var host = new TempHost();
+        var exactDefinitionName = MutateSmallTrx("exact-definition-name");
+        host.WriteTrx("definition-name-exact.trx", exactDefinitionName);
+        var (definitionExactExit, definitionExactOutput) = Invoke(host,
+            RecordArgs(host, format, Hash(host.PacketBytes), "definition-name-exact.trx"));
+        var definitionExact = Result(definitionExactOutput, format);
+        Assert.Equal(0, definitionExactExit);
+        Assert.Equal("planned", Text(definitionExact, "disposition"));
+        Assert.Equal(2, definitionExact.GetProperty("report").GetProperty("total").GetInt32());
+        Assert.Contains(definitionExact.GetProperty("report").GetProperty("discrepancies").EnumerateArray(), item =>
+            Text(item, "code") == "definition-name-differs");
+        Assert.False(Directory.Exists(host.EvidenceRoot));
+
         var exact = BuildBoundedTrx(1, TrxEvidenceReader.MaximumNameLength);
         host.WriteTrx("name-exact.trx", exact);
         var (exactExit, exactOutput) = Invoke(host,
@@ -2163,28 +2175,41 @@ public sealed class VerificationEvidenceCommandTests
 
     internal static JsonElement Result(string output, string format)
     {
+        JsonElement root;
         if (format == "json")
         {
             using var document = JsonDocument.Parse(output);
-            return document.RootElement.Clone();
+            root = document.RootElement.Clone();
         }
-        const string marker = "## Structured result (same facts as JSON)";
-        var index = output.IndexOf(marker, StringComparison.Ordinal);
-        Assert.True(index >= 0, "Markdown must include the structured JSON facts.");
-        var fenceStart = output.IndexOf("```", index, StringComparison.Ordinal);
-        Assert.True(fenceStart >= 0, "Markdown structured JSON fence is missing.");
-        var lineStart = output.LastIndexOf('\n', fenceStart) + 1;
-        var lineEnd = output.IndexOf('\n', lineStart);
-        Assert.True(lineEnd > lineStart, "Markdown JSON fence line is missing.");
-        var opening = output[lineStart..lineEnd];
-        Assert.EndsWith("json", opening, StringComparison.Ordinal);
-        var fence = opening[..^"json".Length];
-        Assert.True(fence.Length >= 3 && fence.All(character => character == '`'));
-        var jsonStart = lineEnd + 1;
-        var fenceEnd = output.IndexOf("\n" + fence, jsonStart, StringComparison.Ordinal);
-        Assert.True(fenceEnd > jsonStart, "Markdown JSON fence is not closed.");
-        using var result = JsonDocument.Parse(output[jsonStart..fenceEnd]);
-        return result.RootElement.Clone();
+        else
+        {
+            const string marker = "## Structured result (same facts as JSON)";
+            var index = output.IndexOf(marker, StringComparison.Ordinal);
+            Assert.True(index >= 0, "Markdown must include the structured JSON facts.");
+            var fenceStart = output.IndexOf("```", index, StringComparison.Ordinal);
+            Assert.True(fenceStart >= 0, "Markdown structured JSON fence is missing.");
+            var lineStart = output.LastIndexOf('\n', fenceStart) + 1;
+            var lineEnd = output.IndexOf('\n', lineStart);
+            Assert.True(lineEnd > lineStart, "Markdown JSON fence line is missing.");
+            var opening = output[lineStart..lineEnd];
+            Assert.EndsWith("json", opening, StringComparison.Ordinal);
+            var fence = opening[..^"json".Length];
+            Assert.True(fence.Length >= 3 && fence.All(character => character == '`'));
+            var jsonStart = lineEnd + 1;
+            var fenceEnd = output.IndexOf("\n" + fence, jsonStart, StringComparison.Ordinal);
+            Assert.True(fenceEnd > jsonStart, "Markdown JSON fence is not closed.");
+            using var result = JsonDocument.Parse(output[jsonStart..fenceEnd]);
+            root = result.RootElement.Clone();
+        }
+
+        if (root.TryGetProperty("diagnostics", out var diagnostics))
+        {
+            Assert.Equal(JsonValueKind.Array, diagnostics.ValueKind);
+            foreach (var diagnostic in diagnostics.EnumerateArray())
+                Assert.True(Text(diagnostic, "cause").StartsWith("verification-evidence-", StringComparison.Ordinal),
+                    "Every public verification evidence diagnostic cause must be namespaced.");
+        }
+        return root;
     }
 
     internal static string Text(JsonElement parent, string property) => parent.GetProperty(property).GetString()!;
@@ -2326,6 +2351,20 @@ public sealed class VerificationEvidenceCommandTests
             case "bad-guid": result.SetAttributeValue("testId", "not-a-guid"); break;
             case "bad-name": result.SetAttributeValue("testName", "  "); break;
             case "long-name": result.SetAttributeValue("testName", new string('x', TrxEvidenceReader.MaximumNameLength + 1)); break;
+            case "bad-definition-name":
+                definitions.Elements(ns + "UnitTest").First(item =>
+                    (string?)item.Attribute("id") == (string?)result.Attribute("testId")).SetAttributeValue("name", "  ");
+                break;
+            case "long-definition-name":
+                definitions.Elements(ns + "UnitTest").First(item =>
+                    (string?)item.Attribute("id") == (string?)result.Attribute("testId")).SetAttributeValue("name",
+                        new string('x', TrxEvidenceReader.MaximumNameLength + 1));
+                break;
+            case "exact-definition-name":
+                definitions.Elements(ns + "UnitTest").First(item =>
+                    (string?)item.Attribute("id") == (string?)result.Attribute("testId")).SetAttributeValue("name",
+                        new string('x', TrxEvidenceReader.MaximumNameLength));
+                break;
             case "bad-outcome": result.SetAttributeValue("outcome", "Aborted"); break;
             case "duplicate-execution":
                 result.SetAttributeValue("executionId", results.Elements(ns + "UnitTestResult").Skip(1).First().Attribute("executionId")!.Value);

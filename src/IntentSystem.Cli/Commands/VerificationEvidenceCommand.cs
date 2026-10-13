@@ -955,22 +955,31 @@ internal static class VerificationEvidenceCommand
 
     private static void Emit(TextWriter writer, string format, Output output)
     {
-        var json = JsonSerializer.Serialize(output, JsonOptions);
+        var publicOutput = output with
+        {
+            Diagnostics = output.Diagnostics.Select(diagnostic => diagnostic with
+            {
+                Cause = diagnostic.Cause.StartsWith("verification-evidence-", StringComparison.Ordinal)
+                    ? diagnostic.Cause
+                    : $"verification-evidence-{diagnostic.Cause}",
+            }).ToArray(),
+        };
+        var json = JsonSerializer.Serialize(publicOutput, JsonOptions);
         if (format == "json") { writer.WriteLine(json); return; }
         writer.WriteLine("# Local verification evidence");
         writer.WriteLine();
         writer.WriteLine("- Operation:");
-        WriteFence(writer, "text", output.Operation);
-        writer.WriteLine($"- State: {output.State}");
-        writer.WriteLine($"- Cause: {output.Cause}");
+        WriteFence(writer, "text", publicOutput.Operation);
+        writer.WriteLine($"- State: {publicOutput.State}");
+        writer.WriteLine($"- Cause: {publicOutput.Cause}");
         writer.WriteLine("- Detail:");
-        WriteFence(writer, "text", output.Detail);
+        WriteFence(writer, "text", publicOutput.Detail);
         writer.WriteLine("- Producer: not authenticated");
         writer.WriteLine("- Execution: not observed");
         writer.WriteLine("- Acceptance: not assessed");
         writer.WriteLine("- Publication: not verified");
         writer.WriteLine("- Publication guidance:");
-        WriteFence(writer, "text", output.PublicationGuidance);
+        WriteFence(writer, "text", publicOutput.PublicationGuidance);
         writer.WriteLine();
         writer.WriteLine("## Structured result (same facts as JSON)");
         writer.WriteLine();
