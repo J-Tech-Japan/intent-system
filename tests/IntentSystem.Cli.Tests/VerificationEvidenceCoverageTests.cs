@@ -549,24 +549,29 @@ public sealed class VerificationEvidenceCoverageTests
 
         WriteActualRecord(host, "P1", "E1", VerificationEvidenceCommandTests.ReadSmallVstest());
         reads.Clear();
-        var partial = RunCoverage(host.Root, CoverageArgs(host, packetSha,
-            ["--evidence", "P2=E2", "--evidence", "P1=E1"]), beforeOperation: (operation, _) => reads.Add(operation));
-        using (var partialJson = JsonDocument.Parse(partial.Output))
+        foreach (var format in new[] { "json", "markdown" })
         {
+            reads.Clear();
+            var partial = RunCoverage(host.Root, CoverageArgs(host, packetSha,
+                ["--evidence", "P2=E2", "--evidence", "P1=E1"]), format,
+                (operation, _) => reads.Add(operation));
+            var partialJson = ParseCoverage(partial.Output, format);
             Assert.Equal(1, partial.Exit);
-            Assert.Equal("incomplete", Text(partialJson.RootElement, "state"));
-            Assert.Equal(new[] { "P1" }, partialJson.RootElement.GetProperty("present_proof_ids").EnumerateArray()
+            Assert.Equal("incomplete", Text(partialJson, "state"));
+            Assert.Equal(new[] { "P1" }, partialJson.GetProperty("present_proof_ids").EnumerateArray()
                 .Select(item => item.GetString()).ToArray());
-            Assert.Equal(new[] { "P2" }, partialJson.RootElement.GetProperty("missing_proof_ids").EnumerateArray()
+            Assert.Equal(new[] { "P2" }, partialJson.GetProperty("missing_proof_ids").EnumerateArray()
                 .Select(item => item.GetString()).ToArray());
-            var absent = partialJson.RootElement.GetProperty("proofs")[1];
+            var absent = partialJson.GetProperty("proofs")[1];
             Assert.Equal("P2", Text(absent, "proof_id"));
             Assert.Equal("missing", Text(absent, "state"));
             Assert.Equal("verification-coverage-record-missing", Text(absent, "cause"));
+            Assert.Equal("verification-coverage-record-missing",
+                Text(absent.GetProperty("diagnostics")[0], "cause"));
             Assert.Contains(".intent-cli/verification-evidence/intent-cli/intent-cli-dev/G867/E2.json",
                 Text(absent.GetProperty("diagnostics")[0], "path"), StringComparison.Ordinal);
+            Assert.Equal(new[] { "packet-read", "stored-read" }, reads);
         }
-        Assert.Equal(new[] { "packet-read", "stored-read" }, reads);
 
         var p2Path = WriteActualRecord(host, "P2", "E2", VerificationEvidenceCommandTests.ReadSmallVstest());
         var p1Path = host.Absolute(Path.Combine(".intent-cli", "verification-evidence", Domain, Team, Unit, "E1.json"));
@@ -587,6 +592,8 @@ public sealed class VerificationEvidenceCoverageTests
             var p1 = rows.Single(row => Text(row, "proof_id") == "P1");
             var p2 = rows.Single(row => Text(row, "proof_id") == "P2");
             Assert.Equal("unavailable", Text(p1, "state"));
+            Assert.Equal("verification-coverage-record-unavailable",
+                Text(p1.GetProperty("diagnostics")[0], "cause"));
             Assert.Equal(JsonValueKind.Null, p1.GetProperty("report").ValueKind);
             Assert.Equal("present", Text(p2, "state"));
             Assert.Equal(2, p2.GetProperty("report").GetProperty("total").GetInt32());
@@ -1255,7 +1262,7 @@ public sealed class VerificationEvidenceCoverageTests
     [InlineData("pr-comment-fix", "repair-pushed")]
     public void ResultSummaryAdvisoryStatesPreserveLifecycleAcrossKindsAndFormats(string kind, string outcome)
     {
-        var cases = new[] { "missing", "stale", "unavailable", "invalid-reference", "hosted-reference" };
+        var cases = new[] { "missing", "record-missing", "stale", "unavailable", "invalid-reference", "hosted-reference" };
         foreach (var format in new[] { "json", "markdown" })
         foreach (var scenario in cases)
         {
@@ -1271,6 +1278,7 @@ public sealed class VerificationEvidenceCoverageTests
             var references = scenario switch
             {
                 "missing" => Array.Empty<string>(),
+                "record-missing" => ["--verification-evidence", "P1=E1"],
                 "invalid-reference" => ["--verification-evidence", "Unknown=E1"],
                 "hosted-reference" => ["--verification-evidence", "P1=E1"],
                 _ => ["--verification-evidence", "P1=E1"],
@@ -1285,20 +1293,31 @@ public sealed class VerificationEvidenceCoverageTests
             var result = RunSummary(Context(host.Root), args);
             Assert.Equal(0, result.Exit);
             Assert.Equal(beforeTree, SnapshotTree(host.Root));
+            JsonElement coverage;
             if (format == "json")
             {
                 using var json = JsonDocument.Parse(result.Output);
                 Assert.Equal("completed", Text(json.RootElement, "status"));
                 Assert.Equal(outcome, Text(json.RootElement, "outcome"));
-                Assert.True(json.RootElement.TryGetProperty("verification_coverage", out var coverage));
+                Assert.True(json.RootElement.TryGetProperty("verification_coverage", out var nestedCoverage));
+                coverage = nestedCoverage.Clone();
                 AssertSummaryCoverageState(coverage, scenario);
             }
             else
             {
                 Assert.Contains("- status: completed", result.Output, StringComparison.Ordinal);
                 Assert.Contains($"- outcome: {outcome}", result.Output, StringComparison.Ordinal);
-                var coverage = ParseCoverage(result.Output, "markdown");
+                coverage = ParseCoverage(result.Output, "markdown");
                 AssertSummaryCoverageState(coverage, scenario);
+            }
+            if (scenario == "record-missing")
+            {
+                var missing = coverage.GetProperty("proofs").EnumerateArray()
+                    .Single(row => Text(row, "proof_id") == "P1");
+                Assert.Equal("missing", Text(missing, "state"));
+                Assert.Equal("verification-coverage-record-missing", Text(missing, "cause"));
+                Assert.Equal("verification-coverage-record-missing",
+                    Text(missing.GetProperty("diagnostics")[0], "cause"));
             }
         }
     }
@@ -1307,7 +1326,7 @@ public sealed class VerificationEvidenceCoverageTests
     {
         var expected = scenario switch
         {
-            "missing" or "stale" => "incomplete",
+            "missing" or "record-missing" or "stale" => "incomplete",
             "unavailable" => "unavailable",
             _ => "invalid",
         };

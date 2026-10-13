@@ -353,16 +353,23 @@ public sealed class G833SoloConductorTests : IDisposable
             .Where(path => !path.EndsWith("GuideSoloConductorCommand.cs", StringComparison.Ordinal))
             .Select(File.ReadAllText));
         var router = File.ReadAllText(Path.Combine(sourceRoot, "Commands", "CommandRouter.cs"));
+        var program = File.ReadAllText(Path.Combine(sourceRoot, "Program.cs"));
 
         var intentCliCommands = commands.Where(command => command.Tool == GuideSoloConductorCommand.ToolIntentCli).ToArray();
         Assert.True(intentCliCommands.Length >= 15);
         foreach (var command in intentCliCommands)
         {
             var tokens = command.Command.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray();
-            foreach (var word in tokens.TakeWhile(token => !token.StartsWith('-') && !token.StartsWith('<')))
-            {
-                Assert.True(router.Contains($"[\"{word}\"]", StringComparison.Ordinal), $"'{word}' in '{command.Command}' is not a routed command");
-            }
+            var routeWords = tokens.TakeWhile(token => !token.StartsWith('-') && !token.StartsWith('<')).ToArray();
+            var commandRouterRoute = routeWords.All(word => router.Contains($"[\"{word}\"]", StringComparison.Ordinal));
+            var directProgramCoverageRoute = routeWords.SequenceEqual(
+                    new[] { "verification", "evidence", "coverage" }, StringComparer.Ordinal)
+                && program.Contains("string.Equals(args[0], \"verification\", StringComparison.Ordinal)", StringComparison.Ordinal)
+                && program.Contains("string.Equals(args[1], \"evidence\", StringComparison.Ordinal)", StringComparison.Ordinal)
+                && program.Contains("string.Equals(args[2], \"coverage\", StringComparison.Ordinal)", StringComparison.Ordinal)
+                && program.Contains("return VerificationEvidenceCoverage.Execute(verificationRoot, args[3..], Console.Out)", StringComparison.Ordinal);
+            Assert.True(commandRouterRoute || directProgramCoverageRoute,
+                $"'intent-cli {string.Join(' ', routeWords)}' is not routed by CommandRouter or Program.Main");
 
             foreach (var flag in tokens.Where(token => token.StartsWith("--", StringComparison.Ordinal)))
             {

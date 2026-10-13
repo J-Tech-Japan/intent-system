@@ -174,12 +174,12 @@ internal static class VerificationEvidenceCoverage
             {
                 rows.Add(Row(binding, "missing", "verification-coverage-record-missing", recordId,
                     "unknown", null, null, null, null,
-                    [StoreDiagnostic(stored, repoRoot)]));
+                    [StoreDiagnostic(stored, repoRoot, "verification-coverage-record-missing")]));
                 continue;
             }
             if (stored.State != "current" || stored.Record is null || stored.Path is null || stored.Sha256 is null)
             {
-                var diagnostic = StoreDiagnostic(stored, repoRoot);
+                var diagnostic = StoreDiagnostic(stored, repoRoot, "verification-coverage-record-unavailable");
                 rows.Add(Row(binding, "unavailable", "verification-coverage-record-unavailable", recordId,
                     "unknown", null, null, null, null, [diagnostic]));
                 rowDiagnostics.Add(diagnostic);
@@ -341,10 +341,10 @@ internal static class VerificationEvidenceCoverage
             binding.Command, binding.Evidence, state, cause, recordId, bindingState, artifactPath,
             artifactSha, trxSha, report, diagnostics);
 
-    private static Diagnostic StoreDiagnostic(VerificationEvidenceStoreRead stored, string root)
+    private static Diagnostic StoreDiagnostic(VerificationEvidenceStoreRead stored, string root, string cause)
     {
         var detail = $"underlying store cause {stored.Cause}: {SafeDetail(root, stored.Detail)}";
-        return new("verification-coverage-record-unavailable", RelativePath(stored.Path), detail);
+        return new(cause, RelativePath(stored.Path), detail);
     }
 
     private static string[] Ids(IEnumerable<ProofRow> rows, string state) => rows
