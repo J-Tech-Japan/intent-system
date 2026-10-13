@@ -230,9 +230,14 @@ internal static class WorkerCompleteCommand
             resolvedDomain = resolution.Domain;
             domainSource = resolution.Source;
             resolvedExecutionUnit = resolution.ExecutionUnit;
+            // A host resolver may establish the domain without resolving an
+            // execution unit (for example, a session-layer or configured
+            // domain with no matching queue row). Only compare the unit when
+            // that resolver actually supplied one.
             if (verification is not null
                 && (!string.Equals(resolvedDomain, verification.CoverageOptions!.Domain, StringComparison.Ordinal)
-                    || !string.Equals(resolvedExecutionUnit, verification.CoverageOptions.Unit, StringComparison.Ordinal)))
+                    || (resolvedExecutionUnit is not null
+                        && !string.Equals(resolvedExecutionUnit, verification.CoverageOptions.Unit, StringComparison.Ordinal))))
             {
                 verificationResult = WorkerVerificationGate.IdentityConflict(
                     verificationResult!.TargetPr!.Value,

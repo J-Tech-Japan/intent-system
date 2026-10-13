@@ -704,6 +704,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     [InlineData("json", "unsupported-kind")]
     [InlineData("json", "unsupported-outcome")]
     [InlineData("json", "recognized-format-order")]
+    [InlineData("json", "marker-as-unit-value")]
+    [InlineData("json", "marker-as-evidence-value")]
     [InlineData("markdown", "missing-unit")]
     [InlineData("markdown", "missing-domain")]
     [InlineData("markdown", "missing-team")]
@@ -732,6 +734,8 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     [InlineData("markdown", "unsupported-kind")]
     [InlineData("markdown", "unsupported-outcome")]
     [InlineData("markdown", "recognized-format-order")]
+    [InlineData("markdown", "marker-as-unit-value")]
+    [InlineData("markdown", "marker-as-evidence-value")]
     public void G868InvalidOptInArgumentsUseMinimalEnvelopeAndReadNothing(string format, string mutation)
     {
         using var host = new VerificationEvidenceCommandTests.TempHost();
@@ -783,6 +787,14 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             case "recognized-format-order":
                 RemoveOption(args, "--format");
                 args.AddRange(["--format", "json", "--format", "markdown"]);
+                break;
+            case "marker-as-unit-value":
+                args.Remove(WorkerVerificationGate.Marker);
+                ReplaceOptionValue(args, "--verification-unit", WorkerVerificationGate.Marker);
+                break;
+            case "marker-as-evidence-value":
+                args.Remove(WorkerVerificationGate.Marker);
+                ReplaceOptionValue(args, "--evidence", WorkerVerificationGate.Marker);
                 break;
             default: throw new ArgumentOutOfRangeException(nameof(mutation));
         }
@@ -3025,6 +3037,109 @@ public sealed class WorkerCompleteCommandTests : IDisposable
             Assert.Contains("worker-verification-identity-conflict", writer.ToString(), StringComparison.Ordinal);
             Assert.Contains("- phase: initial", writer.ToString(), StringComparison.Ordinal);
             Assert.DoesNotContain("## Errors\n- (none)", writer.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json", "session-layer-record")]
+    [InlineData("markdown", "session-layer-record")]
+    [InlineData("json", "configured-no-queue-record")]
+    [InlineData("markdown", "configured-no-queue-record")]
+    [InlineData("json", "explicit-no-queue-record")]
+    [InlineData("markdown", "explicit-no-queue-record")]
+    public void G868HostModeDomainResolutionWithoutQueueUnitPreservesLegacyCompletion(
+        string format,
+        string expectedDomainSource)
+    {
+        using var host = new VerificationEvidenceCommandTests.TempHost();
+        WriteG868Record(host, "P1", "E1");
+        using var workspace = new WorkerCompleteWorkspace();
+        if (expectedDomainSource == "session-layer-record")
+        {
+            workspace.RecordSessionLayer(
+                VerificationEvidenceCommandTests.Domain,
+                "alpha",
+                SessionLayerMode.Agmsg);
+        }
+
+        var context = G868Context(host.Root, workspace.RootPath);
+        var args = G868IssueArguments(host, format, ["--evidence", "P1=E1"], write: true).ToList();
+        if (expectedDomainSource == "explicit-no-queue-record")
+        {
+            var kindIndex = args.IndexOf("--kind");
+            Assert.True(kindIndex >= 0);
+            args.InsertRange(kindIndex, ["--domain", VerificationEvidenceCommandTests.Domain]);
+        }
+
+        Assert.False(File.Exists(context.GetQueueStatePath()));
+        var mutator = new FakeMutator
+        {
+            Labels = ["intent-target", "intent-issue-in-progress"],
+        };
+        var mutatorFactories = 0;
+        WorkerCompleteCommand.MutatorFactory = () => { mutatorFactories++; return mutator; };
+        var headReads = 0;
+        var coveragePacketReads = 0;
+        using var writer = new StringWriter();
+
+        var exitCode = WorkerCompleteCommand.Execute(context, args.ToArray(), writer,
+            new WorkerVerificationGate.Dependencies(
+                ReadPullRequestHeadSha: (_, pr) =>
+                {
+                    Assert.Equal(764, pr);
+                    headReads++;
+                    return VerificationEvidenceCommandTests.Head;
+                },
+                BeforeCoverageOperation: (operation, _) =>
+                {
+                    if (operation == "packet-read") coveragePacketReads++;
+                }));
+
+        Assert.True(exitCode == 0, writer.ToString());
+        Assert.Equal(2, headReads);
+        Assert.Equal(2, coveragePacketReads);
+        Assert.Equal(1, mutatorFactories);
+        Assert.Equal(2, mutator.AppliedTransitions.Count);
+        Assert.False(File.Exists(context.GetQueueStatePath()));
+
+        var issueTransition = mutator.AppliedTransitions[0];
+        Assert.Equal("issue", issueTransition.Kind);
+        Assert.Equal(525, issueTransition.Number);
+        Assert.Contains(WorkerResultSummaryConstants.Labels.IntentPrCreated, issueTransition.AddLabels);
+        Assert.Contains("intent-issue-in-progress", issueTransition.RemoveLabels);
+        var prTransition = mutator.AppliedTransitions[1];
+        Assert.Equal("pr", prTransition.Kind);
+        Assert.Equal(764, prTransition.Number);
+        Assert.Contains(WorkerNextActionConstants.Labels.IntentTarget, prTransition.AddLabels);
+        Assert.DoesNotContain(WorkerResultSummaryConstants.Labels.IntentPrCreated, prTransition.AddLabels);
+
+        if (format == "json")
+        {
+            using var document = JsonDocument.Parse(writer.ToString());
+            var root = document.RootElement;
+            Assert.True(root.GetProperty("proceed").GetBoolean());
+            Assert.True(root.GetProperty("applied").GetBoolean());
+            Assert.Equal("intent-cli", root.GetProperty("domain").GetString());
+            Assert.Equal(expectedDomainSource, root.GetProperty("domain_source").GetString());
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("execution_unit").ValueKind);
+            Assert.True(root.GetProperty("pr_target_applied").GetBoolean());
+            Assert.False(root.GetProperty("linked_pr_synced").GetBoolean());
+            Assert.Contains(root.GetProperty("warnings").EnumerateArray().Select(item => item.GetString()!),
+                warning => warning.Contains("queue-state.json not found", StringComparison.Ordinal));
+            var gate = root.GetProperty("verification_gate");
+            Assert.Equal("satisfied", gate.GetProperty("state").GetString());
+            Assert.Equal("pre-write", gate.GetProperty("phase").GetString());
+        }
+        else
+        {
+            var output = writer.ToString();
+            Assert.Contains($"- domain: intent-cli ({expectedDomainSource})", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("- execution-unit:", output, StringComparison.Ordinal);
+            Assert.Contains("- proceed: True", output, StringComparison.Ordinal);
+            Assert.Contains("- applied: True", output, StringComparison.Ordinal);
+            Assert.Contains("queue-state.json not found", output, StringComparison.Ordinal);
+            Assert.Contains("worker-verification-satisfied", output, StringComparison.Ordinal);
+            Assert.Contains("phase: pre-write", output, StringComparison.Ordinal);
         }
     }
 

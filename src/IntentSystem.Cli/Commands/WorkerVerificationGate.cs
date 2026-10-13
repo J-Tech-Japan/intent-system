@@ -346,7 +346,7 @@ internal static class WorkerVerificationGate
         {
             var argument = args[index];
             if (argument == Marker) return true;
-            if ((LegacyValueOptions.Contains(argument) || VerificationValueOptions.Contains(argument))
+            if (LegacyValueOptions.Contains(argument)
                 && index + 1 < args.Length)
             {
                 index++;
