@@ -1107,8 +1107,8 @@ invalid; byte/depth excess is unavailable. The SHA-256 is over the exact bytes
 read, including a BOM; zero-byte and pre-read size refusals have no hash.
 Separately, absent or explicit empty G863 source declarations retain existing
 packet behavior. G865 validates structure; G866/G867 provide local supplied-TRX
-binding and read-only coverage. Hosted evidence, deferral, design-prompt
-integration, and worker enforcement remain broader open work under #1866;
+binding and read-only coverage. Hosted evidence, deferral, and design-prompt
+integration remain broader open work under #1866; G868 separately adds the explicit worker-completion gate;
 #1866 and related #1867/#1857 remain open.
 
 ### Local verification evidence record (G866 — preview-through-1.x)
@@ -1182,6 +1182,54 @@ this observation; hosted-required rows remain not observed. Raw TRX bytes and
 test names are not rendered in coverage output, although the stored G866
 artifact contains the supplied bytes and may include test names, stdout, or
 machine paths.
+
+### Opt-in worker-completion verification gate (G868 — preview-through-1.x)
+
+`worker complete` keeps its existing dry-run default and exact legacy behavior
+unless the value-free `--require-verification` marker is present. The marker is
+supported only for `issue/pr-created` and `pr/repair-pushed`. It requires the
+existing `--repo` plus `--verification-unit`, `--verification-domain`,
+`--verification-team`, `--verification-head-sha`, and
+`--verification-packet-sha256`; repeat `--evidence <proof-id>=<record-id>` zero
+to sixteen times. The selected `context.RepoRoot` must contain the G865 packet
+and G866 local records, including when `--github-only` is used. The gate uses
+G867's typed reader directly; it does not parse CLI output or scan for records.
+
+```bash
+intent-cli worker complete --kind issue --number <issue> --outcome pr-created \
+  --pr <target-pr> --repo <owner/repo> --require-verification \
+  --verification-unit <unit> --verification-domain <domain> \
+  --verification-team <team> --verification-head-sha <40-lowerhex> \
+  --verification-packet-sha256 <64-lowerhex> --evidence P1=E1 \
+  --dry-run --format json
+intent-cli worker complete --kind pr --number <target-pr> --outcome repair-pushed \
+  --repo <owner/repo> --require-verification --verification-unit <unit> \
+  --verification-domain <domain> --verification-team <team> \
+  --verification-head-sha <40-lowerhex> --verification-packet-sha256 <64-lowerhex> \
+  --evidence P1=E1 --write --format markdown
+```
+
+The gate requires a complete G865 structure, at least one local-required proof,
+no hosted-required proof declarations, and every local proof to have current,
+passing evidence with no failed or derived-skipped results. It observes the
+live target PR head, performs the existing read-only lifecycle checks, then
+reads the head and local coverage again immediately before the first lifecycle
+write. The guarantee ends at that first write: this is not atomic, later
+partial publication is not rolled back, and no new check runs after the first
+mutation. Formats are text, JSON, and Markdown; syntax errors exit 1,
+well-formed gate refusals exit 2, and a satisfied gate leaves the existing
+worker result and exit rules in charge. A missing marker preserves legacy
+output and provider budgets. G785 pasted-evidence requirements remain
+independent; an evidence-gap reason cannot bypass a failed verification gate.
+
+This observes caller-supplied local bytes against a live target PR head. It
+does not establish that tests ran, authenticate a producer, assess semantic AC
+acceptance, verify publication, or prove the evidence checkout is the PR
+checkout. To keep a record bound to H1 while the PR stays at H1, commit and
+plain-push it on a separate evidence ref/root; do not commit that record onto
+the target PR branch, which changes its head. Hosted evidence, deferral,
+execution authentication, and semantic acceptance remain unsupported; broader
+#1866, #1867, and #1857 remain open.
 
 ### Pasted-evidence gate (G785)
 

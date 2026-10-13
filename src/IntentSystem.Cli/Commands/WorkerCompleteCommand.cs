@@ -65,10 +65,43 @@ internal static class WorkerCompleteCommand
     };
 
     public static int Execute(CliContext context, string[] args, TextWriter writer)
+        => Execute(context, args, writer, dependencies: null);
+
+    /// <summary>Per-invocation G868 dependencies; no process-global gate seam is introduced.</summary>
+    internal static int Execute(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        WorkerVerificationGate.Dependencies? dependencies)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(writer);
+
+        var verification = WorkerVerificationGate.ParseInvocation(args);
+        if (!verification.IsOptIn)
+        {
+            return ExecuteCore(context, args, writer, verification: null, dependencies: null);
+        }
+        if (verification.Error is not null || verification.CoverageOptions is null)
+        {
+            WorkerVerificationGate.WriteArgumentRefusal(
+                writer,
+                verification.Format,
+                verification.Error ?? "verification arguments are incomplete");
+            return 1;
+        }
+
+        return ExecuteCore(context, verification.LegacyArguments, writer, verification, dependencies);
+    }
+
+    private static int ExecuteCore(
+        CliContext context,
+        string[] args,
+        TextWriter writer,
+        WorkerVerificationGate.Invocation? verification,
+        WorkerVerificationGate.Dependencies? dependencies)
+    {
 
         if (!TryParseArguments(
                 args,
@@ -85,7 +118,19 @@ internal static class WorkerCompleteCommand
                 out var format,
                 out var error))
         {
+            if (verification is not null)
+            {
+                WorkerVerificationGate.WriteArgumentRefusal(writer, verification.Format, error);
+                return 1;
+            }
             writer.WriteLine(error);
+            return 1;
+        }
+
+        if (verification is not null && !WorkerVerificationGate.IsSupportedOutcome(kind!, outcome!))
+        {
+            WorkerVerificationGate.WriteArgumentRefusal(writer, verification.Format,
+                "--require-verification supports only issue/pr-created and pr/repair-pushed");
             return 1;
         }
 
@@ -126,6 +171,39 @@ internal static class WorkerCompleteCommand
             return 1;
         }
 
+        WorkerVerificationGate.Result? verificationResult = null;
+        if (verification is not null)
+        {
+            var options = verification.CoverageOptions!;
+            var targetPr = kind == GhCliGitHubLabelMutator.Kinds.Issue ? prNumber!.Value : number;
+            if (explicitDomain is not null
+                && !string.Equals(explicitDomain, options.Domain, StringComparison.Ordinal))
+            {
+                verificationResult = WorkerVerificationGate.IdentityConflict(
+                    targetPr, options.HeadSha!,
+                    "the parsed --domain does not match --verification-domain",
+                    "initial");
+                return EmitInitialVerificationRefusal(writer, verification.Format, kind!, repo!, number,
+                    outcome!, mode, prNumber, verificationResult);
+            }
+
+            verificationResult = WorkerVerificationGate.EvaluateCoverage(
+                context.RepoRoot, options, "initial", targetPr, options.HeadSha!, dependencies);
+            if (verificationResult.State != "satisfied")
+            {
+                return EmitInitialVerificationRefusal(writer, verification.Format, kind!, repo!, number,
+                    outcome!, mode, prNumber, verificationResult);
+            }
+
+            verificationResult = WorkerVerificationGate.CheckHead(
+                repo!, targetPr, options.HeadSha!, "initial", verificationResult.Coverage, dependencies);
+            if (verificationResult.State != "satisfied")
+            {
+                return EmitInitialVerificationRefusal(writer, verification.Format, kind!, repo!, number,
+                    outcome!, mode, prNumber, verificationResult);
+            }
+        }
+
         // G724: the startup marker and the context's default domain are not
         // execution identity. Resolve the issue's domain from durable queue /
         // packet evidence before touching GitHub labels or linked_pr. A child
@@ -152,6 +230,18 @@ internal static class WorkerCompleteCommand
             resolvedDomain = resolution.Domain;
             domainSource = resolution.Source;
             resolvedExecutionUnit = resolution.ExecutionUnit;
+            if (verification is not null
+                && (!string.Equals(resolvedDomain, verification.CoverageOptions!.Domain, StringComparison.Ordinal)
+                    || !string.Equals(resolvedExecutionUnit, verification.CoverageOptions.Unit, StringComparison.Ordinal)))
+            {
+                verificationResult = WorkerVerificationGate.IdentityConflict(
+                    verificationResult!.TargetPr!.Value,
+                    verification.CoverageOptions.HeadSha!,
+                    "the resolved host domain or execution unit does not match the requested verification identity",
+                    "initial", verificationResult.Coverage, verificationResult.ObservedHeadSha);
+                return EmitInitialVerificationRefusal(writer, verification.Format, kind!, repo!, number,
+                    outcome!, mode, prNumber, verificationResult);
+            }
         }
         else if (isPrCreatedOutcome)
         {
@@ -323,13 +413,41 @@ internal static class WorkerCompleteCommand
         var isAlreadyPrCreatedIssue = isPrCreatedOutcome
             && currentNames.Contains(WorkerResultSummaryConstants.Labels.IntentPrCreated, StringComparer.Ordinal);
 
+        var verificationBlocksWrite = false;
+        if (verification is not null
+            && (decision.Proceed
+                || (isAlreadyPrCreatedIssue
+                    && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))))
+        {
+            var options = verification.CoverageOptions!;
+            var targetPr = verificationResult!.TargetPr!.Value;
+            var head = WorkerVerificationGate.CheckHead(
+                repo!, targetPr, options.HeadSha!, "pre-write", coverage: null, dependencies);
+            if (head.State != "satisfied")
+            {
+                verificationResult = head;
+                verificationBlocksWrite = true;
+            }
+            else
+            {
+                var freshCoverage = WorkerVerificationGate.EvaluateCoverage(
+                    context.RepoRoot, options, "pre-write", targetPr, options.HeadSha!, dependencies);
+                verificationResult = freshCoverage with { ObservedHeadSha = head.ObservedHeadSha };
+                if (freshCoverage.State != "satisfied")
+                {
+                    verificationBlocksWrite = true;
+                }
+            }
+        }
+
         var applied = false;
         bool? prTargetApplied = null;
         bool? linkedPrSynced = null;
         var publishWarnings = new List<string>();
         var publishErrors = new List<string>();
         var shouldPublishPr = isPrCreatedOutcome && prNumber is { } && (decision.Proceed || isAlreadyPrCreatedIssue);
-        if ((decision.Proceed || isAlreadyPrCreatedIssue)
+        if (!verificationBlocksWrite
+            && (decision.Proceed || isAlreadyPrCreatedIssue)
             && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal))
         {
             if (decision.Proceed)
@@ -418,7 +536,7 @@ internal static class WorkerCompleteCommand
         }
 
         var summary = decision.Summary;
-        var proceed = decision.Proceed;
+        var proceed = decision.Proceed && !verificationBlocksWrite;
         var baseErrors = isAlreadyPrCreatedIssue
             && string.Equals(mode, WorkerClaimCompleteConstants.Modes.Write, StringComparison.Ordinal)
             && publishErrors.Count == 0
@@ -438,6 +556,12 @@ internal static class WorkerCompleteCommand
         {
             proceed = true;
             summary = $"Issue-to-PR completion was already recorded on source issue; ensured PR review publication metadata for PR #{prNumber}.";
+        }
+        if (verificationBlocksWrite)
+        {
+            proceed = false;
+            applied = false;
+            summary = "Worker completion was refused by the verification gate before the first lifecycle write.";
         }
 
         var result = new WorkerCompleteResult
@@ -467,18 +591,68 @@ internal static class WorkerCompleteCommand
             EvidenceBlocksPresent = evidence.EvidenceBlocksPresent,
             EvidenceGap = evidence.EvidenceGap,
             EvidenceGapAccepted = evidenceGapAccepted,
+            VerificationGate = verificationResult,
         };
 
-        if (string.Equals(format, FormatJson, StringComparison.Ordinal))
+        var outputFormat = verification?.Format ?? format;
+        if (string.Equals(outputFormat, FormatJson, StringComparison.Ordinal))
         {
             writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
         }
         else
         {
             WriteText(writer, result);
+            if (verificationResult is not null)
+            {
+                WorkerVerificationGate.WriteText(writer, verificationResult);
+            }
         }
 
         return proceed ? 0 : 2;
+    }
+
+    private static int EmitInitialVerificationRefusal(
+        TextWriter writer,
+        string format,
+        string kind,
+        string repo,
+        int number,
+        string outcome,
+        string mode,
+        int? prNumber,
+        WorkerVerificationGate.Result gate)
+    {
+        var result = new WorkerCompleteResult
+        {
+            Kind = kind,
+            Repo = repo,
+            Number = number,
+            Outcome = outcome,
+            Mode = mode,
+            Proceed = false,
+            Applied = false,
+            AddLabels = Array.Empty<string>(),
+            RemoveLabels = Array.Empty<string>(),
+            CurrentLabels = Array.Empty<string>(),
+            Errors = new[] { gate.Detail },
+            Warnings = Array.Empty<string>(),
+            Summary = gate.Detail,
+            PrNumber = prNumber,
+            EvidenceRequired = Array.Empty<WorkerEvidenceCriterion>(),
+            EvidenceBlocksPresent = Array.Empty<WorkerEvidenceCriterion>(),
+            EvidenceGap = Array.Empty<WorkerEvidenceCriterion>(),
+            VerificationGate = gate,
+        };
+        if (format == FormatJson)
+        {
+            writer.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+        }
+        else
+        {
+            WriteText(writer, result);
+            WorkerVerificationGate.WriteText(writer, gate);
+        }
+        return 2;
     }
 
     /// <summary>

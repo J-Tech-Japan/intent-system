@@ -329,7 +329,8 @@ public sealed class GuideCommandsListCommandTests
                 Assert.Contains("read-only", reference, StringComparison.Ordinal);
                 Assert.Contains("does not change", reference, StringComparison.Ordinal);
                 Assert.Contains("does not authenticate", orchestration, StringComparison.Ordinal);
-                Assert.Contains("worker completion is not gated", ledger, StringComparison.Ordinal);
+                Assert.Contains("This G867 summary alone does not gate worker completion", normalizedLedger, StringComparison.Ordinal);
+                Assert.Contains("G868 is a separate explicit", normalizedLedger, StringComparison.Ordinal);
                 Assert.Contains("advisory. `complete` requires `structural_state=complete`", normalizedLedger, StringComparison.Ordinal);
                 Assert.DoesNotContain("The optional `structural_state=complete`", ledger, StringComparison.Ordinal);
                 Assert.Contains("exits 0 only for complete", reference, StringComparison.Ordinal);
@@ -341,10 +342,106 @@ public sealed class GuideCommandsListCommandTests
                 Assert.Contains("read-only", reference, StringComparison.Ordinal);
                 Assert.Contains("変更しません", reference, StringComparison.Ordinal);
                 Assert.Contains("認証", orchestration, StringComparison.Ordinal);
-                Assert.Contains("gate", ledger, StringComparison.Ordinal);
+                Assert.Contains("G868", ledger, StringComparison.Ordinal);
+                Assert.Contains("worker completion を gate せず", ledger, StringComparison.Ordinal);
                 Assert.Contains("exit 0", reference, StringComparison.Ordinal);
                 Assert.Contains("exit 1", orchestration, StringComparison.Ordinal);
                 Assert.Contains("exit 1", ledger, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void G868OptInGateIsReachableFromAllGuideRoutesAndSixDocs()
+    {
+        const string marker = "--require-verification";
+        const string unit = "--verification-unit";
+        const string domain = "--verification-domain";
+        const string team = "--verification-team";
+        const string head = "--verification-head-sha";
+        const string packet = "--verification-packet-sha256";
+        const string evidence = "--evidence <proof-id>=<record-id>";
+        const string firstOutcome = "issue/pr-created";
+        const string secondOutcome = "pr/repair-pushed";
+        const string fullGateExample = "intent-cli worker complete --kind issue --number <issue> --outcome pr-created --pr <target-pr> --repo <owner/repo> --require-verification --verification-unit <unit> --verification-domain <domain> --verification-team <team> --verification-head-sha <40-lowerhex> --verification-packet-sha256 <64-lowerhex> --evidence P1=E1 --dry-run --format json";
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var catalogWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "commands", "list", "--format", format], CreateContext(), catalogWriter));
+            string workerPurpose;
+            if (format == "json")
+            {
+                using var catalog = JsonDocument.Parse(catalogWriter.ToString());
+                workerPurpose = catalog.RootElement.GetProperty("groups").EnumerateArray()
+                    .Single(group => group.GetProperty("name").GetString() == "worker")
+                    .GetProperty("purpose").GetString()!;
+            }
+            else workerPurpose = catalogWriter.ToString();
+
+            using var soloWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", format], CreateContext(), soloWriter));
+            string soloInstruction;
+            if (format == "json")
+            {
+                using var solo = JsonDocument.Parse(soloWriter.ToString());
+                soloInstruction = solo.RootElement.GetProperty("loop").EnumerateArray()
+                    .Single(item => item.GetProperty("id").GetString() == "packet-draft-and-validate")
+                    .GetProperty("instruction").GetString()!;
+            }
+            else soloInstruction = soloWriter.ToString();
+
+            using var workflowWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "workflow", "task", "issue-publish", "--format", format], CreateContext(), workflowWriter));
+            string workflowInvariants;
+            if (format == "json")
+            {
+                using var workflow = JsonDocument.Parse(workflowWriter.ToString());
+                workflowInvariants = string.Join(" ", workflow.RootElement.GetProperty("invariants").EnumerateArray()
+                    .Select(item => item.GetString()));
+            }
+            else workflowInvariants = workflowWriter.ToString();
+
+            foreach (var route in new[] { workerPurpose, soloInstruction, workflowInvariants })
+            {
+                Assert.Contains(marker, route, StringComparison.Ordinal);
+                Assert.Contains(unit, route, StringComparison.Ordinal);
+                Assert.Contains(domain, route, StringComparison.Ordinal);
+                Assert.Contains(team, route, StringComparison.Ordinal);
+                Assert.Contains(head, route, StringComparison.Ordinal);
+                Assert.Contains(packet, route, StringComparison.Ordinal);
+                Assert.Contains(evidence, route, StringComparison.Ordinal);
+                Assert.Contains(firstOutcome, route, StringComparison.Ordinal);
+                Assert.Contains(secondOutcome, route, StringComparison.Ordinal);
+                Assert.Contains("--github-only", route, StringComparison.Ordinal);
+                Assert.Contains("G785", route, StringComparison.Ordinal);
+                Assert.Contains("non-atomic", route, StringComparison.Ordinal);
+                Assert.Contains(fullGateExample, route, StringComparison.Ordinal);
+                Assert.Contains("worker result-summary --verification-report ... --verification-evidence P1=E1", route, StringComparison.Ordinal);
+                Assert.Contains("--verification-evidence", route, StringComparison.Ordinal);
+                Assert.Contains("is distinct", route, StringComparison.Ordinal);
+                Assert.DoesNotContain("worker enforcement remains open", route, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        var root = RepoVersionPolicySource.RepoRoot();
+        foreach (var language in new[] { "en", "ja" })
+        {
+            foreach (var documentName in new[] { "08-command-reference.md", "12-agent-message-orchestration.md", "1.0-compatibility-ledger.md" })
+            {
+                var document = File.ReadAllText(Path.Combine(root, "docs", language, documentName));
+                Assert.Contains("G868", document, StringComparison.Ordinal);
+                Assert.Contains(marker, document, StringComparison.Ordinal);
+                Assert.Contains(unit, document, StringComparison.Ordinal);
+                Assert.Contains(domain, document, StringComparison.Ordinal);
+                Assert.Contains(team, document, StringComparison.Ordinal);
+                Assert.Contains(head, document, StringComparison.Ordinal);
+                Assert.Contains(packet, document, StringComparison.Ordinal);
+                Assert.Contains(evidence, document, StringComparison.Ordinal);
+                Assert.Contains(firstOutcome, document, StringComparison.Ordinal);
+                Assert.Contains(secondOutcome, document, StringComparison.Ordinal);
+                Assert.Contains("--github-only", document, StringComparison.Ordinal);
+                Assert.Contains("G785", document, StringComparison.Ordinal);
+                Assert.Contains("#1866", document, StringComparison.Ordinal);
             }
         }
     }

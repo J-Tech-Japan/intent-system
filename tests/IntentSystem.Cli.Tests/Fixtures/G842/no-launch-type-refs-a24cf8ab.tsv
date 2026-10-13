@@ -1333,13 +1333,13 @@ src/IntentSystem.Cli/Commands/WorkerCompleteAnalyzer.cs	Labels	16
 src/IntentSystem.Cli/Commands/WorkerCompleteAnalyzer.cs	WorkerCompleteAnalyzer	2
 src/IntentSystem.Cli/Commands/WorkerCompleteAnalyzer.cs	WorkerResultSummaryAnalyzer	2
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	GhCliGitHubIssueLookup	4
-src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	GhCliGitHubLabelMutator	6
+src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	GhCliGitHubLabelMutator	7
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	GhCliGitHubPrLookup	2
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	GitHubAutomationLabel	2
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	IGitHubIssueLookup	4
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	IGitHubLabelMutator	4
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	IGitHubPrLookup	3
-src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	Kinds	4
+src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	Kinds	5
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	Labels	4
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	QueueDomainCandidate	3
 src/IntentSystem.Cli/Commands/WorkerCompleteCommand.cs	WorkerCompleteAnalyzer	1
@@ -1430,6 +1430,9 @@ src/IntentSystem.Cli/Commands/WorkerSignalContract.cs	Labels	17
 src/IntentSystem.Cli/Commands/WorkerSignalContract.cs	SignalLabelPlan	5
 src/IntentSystem.Cli/Commands/WorkerSignalContract.cs	Targets	7
 src/IntentSystem.Cli/Commands/WorkerSignalContract.cs	WorkerSignalContract	1
+src/IntentSystem.Cli/Commands/WorkerVerificationGate.cs	GhCliGitHubLabelMutator	3
+src/IntentSystem.Cli/Commands/WorkerVerificationGate.cs	Kinds	2
+src/IntentSystem.Cli/Commands/WorkerVerificationGate.cs	Options	4
 src/IntentSystem.Cli/Commands/WorkflowLabelPaletteAnalyzer.cs	GitHubLabelMetadata	2
 src/IntentSystem.Cli/Commands/WorkflowLabelPaletteAnalyzer.cs	IGitHubLabelLister	1
 src/IntentSystem.Cli/Commands/WorkspaceGuardSubmoduleEditClassifier.cs	Classifications	6

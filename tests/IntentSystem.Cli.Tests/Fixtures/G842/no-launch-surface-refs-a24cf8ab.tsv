@@ -130,3 +130,6 @@ src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEviden
 src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceCriterion	2
 src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceStore	1
 src/IntentSystem.Cli/Commands/VerificationEvidenceCoverage.cs	VerificationEvidenceStoreRead	1
+src/IntentSystem.Cli/Commands/WorkerVerificationGate.cs	GhCliGitHubLabelMutator	3
+src/IntentSystem.Cli/Commands/WorkerVerificationGate.cs	Kinds	2
+src/IntentSystem.Cli/Commands/WorkerVerificationGate.cs	Options	4
