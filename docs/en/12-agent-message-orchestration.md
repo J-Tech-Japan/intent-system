@@ -5107,8 +5107,8 @@ only; execution stays `not-observed`. It never runs the listed command, checks
 evidence, establishes publication or authority, or gates a later step. Unknown
 deferral/evidence-pointer/authority fields are unsupported. G866/G867 provide
 local supplied-TRX binding and read-only coverage. Hosted evidence, deferral,
-design-prompt integration, and worker enforcement remain broader open work
-under source #1866; #1866, #1867, and #1857 remain open. See the
+design-prompt integration remain broader open work
+under source #1866; G868 separately adds the explicit worker-completion gate; #1866, #1867, and #1857 remain open. See the
 [packet command reference](08-command-reference.md) for the full schema example.
 
 ## Local supplied TRX evidence (G866 — preview-through-1.x)
@@ -5145,4 +5145,33 @@ label actions, or exit. A valid summary report therefore leaves its existing
 exit code unchanged. Omitting the marker preserves the existing result-summary
 output. Raw TRX and test names are not rendered by the coverage report;
 the local G866 artifact still contains supplied bytes, which may include test
-names, stdout, or machine paths.
+names, stdout, or machine paths. This G867 summary alone does not gate worker
+completion; G868 is a separate explicit opt-in gate.
+
+## Opt-in worker-completion verification gate (G868 — preview-through-1.x)
+
+`intent-cli worker complete` remains on its legacy path unless the caller supplies
+the value-free `--require-verification` marker. It supports only `issue/pr-created`
+and `pr/repair-pushed`, with `--verification-unit`, `--verification-domain`,
+`--verification-team`, `--verification-head-sha <40-lowerhex>`,
+`--verification-packet-sha256 <64-lowerhex>`, and zero to sixteen repeated
+`--evidence <proof-id>=<record-id>` references, in addition to the existing
+`--repo`. Both the G865 packet and G866 local records must exist under the selected
+repository root even in `--github-only` mode.
+
+The gate calls G867 typed coverage directly and accepts only complete passing
+local-required proof rows with no hosted-required proofs. It observes the live
+target PR head, runs existing read-only lifecycle checks, then re-reads the head
+and re-evaluates typed coverage immediately before the first lifecycle write.
+Syntax errors exit 1; well-formed gate refusals exit 2. Without the marker, the
+legacy output and provider-call budgets remain unchanged. G785 remains an
+independent requirement; its reason cannot bypass this gate.
+
+This is a bounded observation, not an atomic transaction: later partial
+publication is not rolled back. It does not authenticate command execution or a
+producer, assess semantic acceptance, verify publication, or establish that the
+evidence checkout is the PR checkout. To preserve target PR head H1, keep a
+committed record on a separate evidence ref/root; committing it to the target PR
+branch changes the head and makes the H1 binding stale. Hosted evidence, deferral,
+execution authentication, and semantic AC evaluation remain unsupported. The
+broader source issues #1866, #1867, and #1857 stay open.

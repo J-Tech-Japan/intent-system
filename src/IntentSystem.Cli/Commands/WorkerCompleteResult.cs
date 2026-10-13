@@ -155,4 +155,9 @@ internal sealed record WorkerCompleteResult
     /// </summary>
     [JsonPropertyName("evidence_gap_accepted")]
     public string? EvidenceGapAccepted { get; init; }
+
+    /// <summary>G868: explicit local verification observation for opted-in worker completion.</summary>
+    [JsonPropertyName("verification_gate")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public WorkerVerificationGate.Result? VerificationGate { get; init; }
 }

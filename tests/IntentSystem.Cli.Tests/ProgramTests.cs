@@ -791,6 +791,234 @@ public sealed class ProgramTests
         }
     }
 
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_WorkerCompleteVerificationGateRunsFromMetadataFreeNestedCheckout(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var checkout = tempDirectory.CreateDirectory("child-checkout");
+            var nested = tempDirectory.CreateDirectory(Path.Combine("child-checkout", "src", "feature"));
+            Assert.False(Directory.Exists(Path.Combine(checkout, ".intent-cli")));
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nested);
+
+            var exit = Program.Main(
+            [
+                "worker", "complete", "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "pr", "--number", "1900", "--outcome", "repair-pushed",
+                "--github-only", "--require-verification",
+                "--verification-unit", "G868", "--verification-domain", "intent-cli",
+                "--verification-team", "intent-cli-dev",
+                "--verification-head-sha", VerificationEvidenceCommandTests.Head,
+                "--verification-packet-sha256", new string('0', 64),
+                "--evidence", "P1=E1", "--dry-run", "--format", format,
+            ]);
+
+            Assert.Equal(2, exit);
+            Assert.Equal(string.Empty, console.Error.ToString());
+            Assert.False(Directory.Exists(Path.Combine(checkout, ".intent-cli")));
+            var output = console.Out.ToString();
+            if (format == "json")
+            {
+                using var result = JsonDocument.Parse(output);
+                var gate = result.RootElement.GetProperty("verification_gate");
+                Assert.Equal("unavailable", gate.GetProperty("state").GetString());
+                Assert.Equal("worker-verification-coverage-unavailable", gate.GetProperty("cause").GetString());
+                Assert.Equal("initial", gate.GetProperty("phase").GetString());
+                Assert.Equal("observed-before-first-lifecycle-write-not-atomic", gate.GetProperty("guarantee").GetString());
+            }
+            else
+            {
+                Assert.Contains("## Verification gate", output, StringComparison.Ordinal);
+                Assert.Contains("worker-verification-coverage-unavailable", output, StringComparison.Ordinal);
+                Assert.Contains("phase: initial", output, StringComparison.Ordinal);
+                Assert.Contains("guarantee: observed-before-first-lifecycle-write-not-atomic", output, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("json", true)]
+    [InlineData("json", false)]
+    [InlineData("markdown", true)]
+    [InlineData("markdown", false)]
+    public void Main_WorkerVerificationArgumentRefusalKeepsRecognizedFormatInEitherOrder(
+        string format, bool formatBeforeMalformedValue)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var checkout = tempDirectory.CreateDirectory("child-checkout");
+            var nested = tempDirectory.CreateDirectory(Path.Combine("child-checkout", "src", "feature"));
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nested);
+
+            var args = new List<string>
+            {
+                "worker", "complete", "--repo", "J-Tech-Japan/intent-system",
+                "--kind", "pr", "--number", "1900", "--outcome", "repair-pushed",
+                "--github-only", "--require-verification",
+                "--verification-unit", "G868", "--verification-domain", "intent-cli",
+                "--verification-team", "intent-cli-dev",
+                "--verification-head-sha", "not-a-head",
+                "--verification-packet-sha256", new string('0', 64),
+                "--evidence", "P1=E1",
+            };
+            if (formatBeforeMalformedValue)
+            {
+                args.Insert(args.IndexOf("--verification-head-sha"), "--format");
+                args.Insert(args.IndexOf("--verification-head-sha"), format);
+            }
+            else args.AddRange(["--format", format]);
+
+            var exit = Program.Main(args.ToArray());
+
+            Assert.Equal(1, exit);
+            Assert.Equal(string.Empty, console.Error.ToString());
+            Assert.False(Directory.Exists(Path.Combine(checkout, ".intent-cli")));
+            if (format == "json")
+            {
+                using var document = JsonDocument.Parse(console.Out.ToString());
+                var gate = document.RootElement.GetProperty("verification_gate");
+                Assert.Equal("invalid", gate.GetProperty("state").GetString());
+                Assert.Equal("worker-verification-invalid-arguments", gate.GetProperty("cause").GetString());
+                Assert.Equal("arguments", gate.GetProperty("phase").GetString());
+                Assert.False(document.RootElement.GetProperty("proceed").GetBoolean());
+                Assert.False(document.RootElement.GetProperty("applied").GetBoolean());
+            }
+            else
+            {
+                Assert.Contains("worker-verification-invalid-arguments", console.Out.ToString(), StringComparison.Ordinal);
+                Assert.Contains("phase: arguments", console.Out.ToString(), StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void Main_WorkerHelpAndLegacyCompletionRemainReachableWithoutVerificationOptIn()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var checkout = tempDirectory.CreateDirectory("child-checkout");
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(checkout);
+            var mutator = new WorkerCompleteCommandTests.FakeMutator
+            {
+                Labels = [WorkerNextActionConstants.Labels.IntentPrUpdateInProgress],
+            };
+            WorkerCompleteCommand.MutatorFactory = () => mutator;
+            try
+            {
+                var helpExit = Program.Main(["worker", "--help"]);
+                Assert.Equal(0, helpExit);
+                Assert.Contains("Usage: intent-cli worker", console.Out.ToString(), StringComparison.Ordinal);
+                Assert.False(Directory.Exists(Path.Combine(checkout, ".intent-cli")));
+
+                console.Out.GetStringBuilder().Clear();
+                var legacyExit = Program.Main(
+                [
+                    "worker", "complete", "--repo", "J-Tech-Japan/intent-system",
+                    "--kind", "pr", "--number", "1900", "--outcome", "repair-pushed",
+                    "--github-only", "--dry-run", "--format", "json",
+                ]);
+                Assert.Equal(0, legacyExit);
+                using var document = JsonDocument.Parse(console.Out.ToString());
+                Assert.True(document.RootElement.GetProperty("proceed").GetBoolean());
+                Assert.Null(document.RootElement.TryGetProperty("verification_gate", out var gate)
+                    ? gate.ValueKind == JsonValueKind.Null ? null : gate.ToString()
+                    : null);
+                Assert.Empty(mutator.AppliedTransitions);
+                Assert.False(Directory.Exists(Path.Combine(checkout, ".intent-cli")));
+            }
+            finally
+            {
+                WorkerCompleteCommand.MutatorFactory = null;
+                WorkerCompleteCommand.PrLookupFactory = null;
+                WorkerCompleteCommand.IssueLookupFactory = null;
+                WorkerCompleteCommand.NestedProviderLauncher = null;
+            }
+        }
+    }
+
+    [Fact]
+    public void Main_WorkerCompleteWithoutMarkerKeepsG785RefusalBytesAndAlreadyCreatedDryRunRoute()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var checkout = tempDirectory.CreateDirectory("child-checkout");
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(checkout);
+            var mutator = new WorkerCompleteCommandTests.FakeMutator
+            {
+                Labels = ["intent-target", "intent-issue-in-progress"],
+            };
+            WorkerCompleteCommand.MutatorFactory = () => mutator;
+            WorkerCompleteCommand.PrLookupFactory = () => new WorkerCompleteCommandTests.StubPrLookup
+            {
+                Body = "Closes #525\n\n## Validation\nAll checks passed.\n",
+                ClosingIssuesReferences = [new GitHubPrClosingIssueReference { Number = 525, Repository = null }],
+            };
+            WorkerCompleteCommand.IssueLookupFactory = () => new WorkerCompleteCommandTests.StubIssueLookup
+            {
+                Body = "## Acceptance Criteria\n- Criterion one — actual output pasted.\n- Criterion two — actual counts pasted.\n",
+            };
+            try
+            {
+                var refusal = Program.Main(
+                [
+                    "worker", "complete", "--repo", "J-Tech-Japan/intent-system",
+                    "--kind", "issue", "--number", "525", "--outcome", "pr-created",
+                    "--pr", "764", "--github-only", "--dry-run", "--format", "json",
+                ]);
+                Assert.Equal(1, refusal);
+                var refusalBytes = console.Out.ToString();
+                Assert.Contains("evidence gap (G785)", refusalBytes, StringComparison.Ordinal);
+                Assert.Empty(mutator.AppliedTransitions);
+
+                console.Out.GetStringBuilder().Clear();
+                mutator = new WorkerCompleteCommandTests.FakeMutator
+                {
+                    Labels = ["intent-target", WorkerResultSummaryConstants.Labels.IntentPrCreated],
+                };
+                WorkerCompleteCommand.MutatorFactory = () => mutator;
+                WorkerCompleteCommand.PrLookupFactory = () => new WorkerCompleteCommandTests.StubPrLookup
+                {
+                    Body = "Closes #525",
+                    ClosingIssuesReferences = [new GitHubPrClosingIssueReference { Number = 525, Repository = null }],
+                };
+                WorkerCompleteCommand.IssueLookupFactory = () => new WorkerCompleteCommandTests.StubIssueLookup
+                {
+                    Body = "## Acceptance Criteria\n- Preserve the documented behavior.\n",
+                };
+                var alreadyCreated = Program.Main(
+                [
+                    "worker", "complete", "--repo", "J-Tech-Japan/intent-system",
+                    "--kind", "issue", "--number", "525", "--outcome", "pr-created",
+                    "--pr", "764", "--github-only", "--dry-run", "--format", "json",
+                ]);
+                Assert.Equal(2, alreadyCreated);
+                using var document = JsonDocument.Parse(console.Out.ToString());
+                Assert.False(document.RootElement.GetProperty("proceed").GetBoolean());
+                Assert.False(document.RootElement.TryGetProperty("verification_gate", out var gate)
+                    && gate.ValueKind != JsonValueKind.Null);
+                Assert.Empty(mutator.AppliedTransitions);
+                Assert.False(Directory.Exists(Path.Combine(checkout, ".intent-cli")));
+            }
+            finally
+            {
+                WorkerCompleteCommand.MutatorFactory = null;
+                WorkerCompleteCommand.PrLookupFactory = null;
+                WorkerCompleteCommand.IssueLookupFactory = null;
+                WorkerCompleteCommand.NestedProviderLauncher = null;
+            }
+        }
+    }
+
     private static string[] EvidenceReadArgs(string operation, string format) =>
     ["verification", "evidence", operation, "E1", "--execution-unit", "G866",
      "--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",

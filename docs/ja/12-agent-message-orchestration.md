@@ -4393,7 +4393,7 @@ packet-local read です。上限は criteria 128、lane 64、proof 256、ID 64 
 execution は `not-observed` のままです。記載された command を実行せず、evidence、publication、operator 権限を
 確立せず、後続手順の gate にもなりません。未知の deferral/evidence-pointer/権限 field は未対応です。
 G866/G867 は supplied TRX bytes の local binding と read-only coverage を提供します。hosted evidence、deferral、
-design-prompt integration、worker enforcement は source #1866 の broader な未完了作業で、
+design-prompt integration は source #1866 の broader な未完了作業です。G868 は別個の明示 worker-completion gate を追加します。
 #1866/#1867/#1857 は open のままです。完全な schema example は
 [packet command reference](08-command-reference.md) を参照してください。
 
@@ -4417,7 +4417,28 @@ record ID を探索しません。missing、stale、failed、skipped、unavailab
 `hosted-required` row は not-applicable / not-observed で、この command は hosted evidence を取得しません。
 `complete` には `structural_state=complete`（G865 の gap なし）と、すべての local-required proof row が current かつ passing であることが必要です。
 単独の coverage command は complete の場合だけ exit 0、incomplete / unavailable / invalid の場合は exit 1 です。
-complete は構造と local coverage のみを示し、producer や command の認証、acceptance 評価、publication 確認、worker completion gate にはなりません。
+complete は構造と local coverage のみを示し、producer や command の認証、acceptance 評価、publication 確認を行いません。この G867 summary 単独では worker completion gate にならず、G868 は別個の明示 opt-in gate です。
 
 任意の `intent-cli worker result-summary --verification-report ...` group は同じ report を追加しますが、lifecycle status、outcome、warnings、推奨 label action、exit は変更しません。有効な summary report は従来の exit code を維持します。
 marker がなければ既存の result-summary output を維持します。coverage report は raw TRX や test name を表示しませんが、G866 local artifact には supplied bytes が残り、test name、stdout、machine path を含む場合があります。
+
+## worker completion の opt-in verification gate（G868 — preview-through-1.x）
+
+値を持たない `--require-verification` marker がある場合だけ `intent-cli worker complete` に gate を追加します。
+対象は `issue/pr-created` と `pr/repair-pushed` です。既存の `--repo` に加え、
+`--verification-unit`、`--verification-domain`、`--verification-team`、
+`--verification-head-sha <40-lowerhex>`、`--verification-packet-sha256 <64-lowerhex>`、
+および 0〜16 個の `--evidence <proof-id>=<record-id>` が必要です。`--github-only` でも選択した
+repository root に G865 packet と G866 local records が必要です。
+
+gate は G867 typed coverage を直接使い、complete/pass の local-required row のみを受け入れ、
+hosted-required proof は拒否します。live target PR head を観測して既存の read-only lifecycle checks を行い、
+最初の lifecycle write 直前に head を再読して typed coverage を再評価します。syntax error は exit 1、
+well-formed gate refusal は exit 2 です。marker がなければ legacy output と provider call budget は不変です。
+G785 は独立したままで、その reason は gate failure を回避しません。
+
+保証は最初の write までの bounded observation であり atomic ではありません。後続の partial publication は `rollback` しません。
+command execution や producer を認証せず、semantic acceptance を評価せず、publication や evidence checkout と
+PR checkout の同一性も証明しません。target PR head H1 を保つには record を別 evidence ref/root に `commit` します。
+target PR branch に commit すれば head が変わり、H1 binding は stale になります。hosted evidence、deferral、
+execution authentication、semantic AC evaluation は未対応です。#1866、#1867、#1857 は引き続き open です。
