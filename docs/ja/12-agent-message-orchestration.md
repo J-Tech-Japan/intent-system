@@ -4392,8 +4392,7 @@ packet-local read です。上限は criteria 128、lane 64、proof 256、ID 64 
 16,384 code unit、packet 1 MiB、YAML collection depth 32 です。complete は宣言構造の coverage だけを示し、
 execution は `not-observed` のままです。記載された command を実行せず、evidence、publication、operator 権限を
 確立せず、後続手順の gate にもなりません。未知の deferral/evidence-pointer/権限 field は未対応です。
-G866/G867 は supplied TRX bytes の local binding と read-only coverage を提供します。hosted evidence、deferral、
-design-prompt integration は source #1866 の broader な未完了作業です。G868 は別個の明示 worker-completion gate を追加します。
+G866/G867 は supplied TRX bytes の local binding と read-only coverage を提供します。hosted evidence と ruling-backed deferral は source #1866 の未完了範囲です。G868 は別個の明示 worker-completion gate を追加し、G869 は下記の任意 design-review selector を追加します。
 #1866/#1867/#1857 は open のままです。完全な schema example は
 [packet command reference](08-command-reference.md) を参照してください。
 
@@ -4442,3 +4441,21 @@ command execution や producer を認証せず、semantic acceptance を評価�
 PR checkout の同一性も証明しません。target PR head H1 を保つには record を別 evidence ref/root に `commit` します。
 target PR branch に commit すれば head が変わり、H1 binding は stale になります。hosted evidence、deferral、
 execution authentication、semantic AC evaluation は未対応です。#1866、#1867、#1857 は引き続き open です。
+
+## safety-critical design-review selector（G869 — preview-through-1.x）
+
+有効な G865 `verification_contract` には、`safety_critical_ac` と `proof_id` を持つ `design_review` mapping を1つ任意で指定できます。
+両値は exact・case-sensitive G865 ID で、選択した proof は criterion を参照していなければなりません。
+request projection は実際の criterion index と text、proof ID、command、lane、evidence class、`execution: not-observed` を返します。
+
+```yaml
+verification_contract:
+  design_review:
+    safety_critical_ac: AC2
+    proof_id: P2
+```
+
+完全で有効な G865 contract に追加します。省略時は従来の design request output と artifact を維持します。
+有効でも incomplete な contract は gap arrays とともに incomplete のままです。`review cross-runtime request --kind design` は同じ captured packet bytes と通常の four-file digest を使い、任意 typed result と inert な prompt section を追加します。新しい artifact はありません。opt-in input が invalid/unavailable の場合は artifact 書き込み前に拒否します。
+
+fact と authored command は信頼しない packet data であり、動的な fence 内に表示します。command は実行しません。execution、producer identity、operator の権限、semantic acceptance、evidence、publication を証明せず、hosted deferral も許可しません。既存 G865 consumer は共有 validation で任意 member の受け入れ可否を判定しますが、design-review projection は出力しません。hosted evidence と ruling-backed deferral は #1866 の未完了範囲です。

@@ -223,6 +223,34 @@ public sealed class ProgramTests
         }
     }
 
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_DesignReviewRequestWithoutHostConfigKeepsExistingHostRootRefusal(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var child = tempDirectory.CreateDirectory("metadata-free-child");
+            var nested = tempDirectory.CreateDirectory(Path.Combine("metadata-free-child", "src", "feature"));
+            var outDir = Path.Combine(child, "design-request-out");
+            Assert.False(File.Exists(Path.Combine(child, ".intent-cli", "config.toml")));
+            using var console = new ConsoleScope();
+            using var cwd = new CurrentDirectoryScope(nested);
+
+            var exit = Program.Main([
+                "review", "cross-runtime", "request", "--kind", "design", "--execution-unit", "G869",
+                "--runtime", "codex", "--out-dir", outDir, "--format", format,
+            ]);
+
+            Assert.Equal(1, exit);
+            Assert.Contains("cross-runtime-review-host-root-required", console.Out.ToString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(outDir));
+            Assert.False(Directory.Exists(Path.Combine(child, ".intent-cli")));
+            Assert.Equal(string.Empty, console.Error.ToString());
+        }
+    }
+
     [Fact]
     public void Main_VerificationEvidencePreviewHelpAndOrderedFormatWorkWithoutConfig()
     {

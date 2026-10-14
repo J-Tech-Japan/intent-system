@@ -170,6 +170,109 @@ public sealed class WorkerCompleteCommandTests : IDisposable
     [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
+    public void G869DesignSelectorLeavesWorkerGateCoveragePolicyUnchanged(string format)
+    {
+        var selectedPacket = G868TwoProofPacket + "\n  design_review:\n    safety_critical_ac: AC1\n    proof_id: P1\n";
+        using (var host = new VerificationEvidenceCommandTests.TempHost(packet: selectedPacket))
+        {
+            WriteG868Record(host, "P1", "E1");
+            WriteG868Record(host, "P2", "E2");
+            var mutatorFactories = 0;
+            WorkerCompleteCommand.MutatorFactory = () =>
+            {
+                mutatorFactories++;
+                return new FakeMutator
+                {
+                    Labels = [WorkerNextActionConstants.Labels.IntentPrUpdateInProgress],
+                };
+            };
+            var headReads = 0;
+            var coverageReads = 0;
+            using var writer = new StringWriter();
+            var exit = WorkerCompleteCommand.Execute(G868Context(host.Root),
+                G868Arguments(host, format, ["--evidence", "P1=E1", "--evidence", "P2=E2"], write: false), writer,
+                new WorkerVerificationGate.Dependencies(
+                    ReadPullRequestHeadSha: (_, _) =>
+                    {
+                        headReads++;
+                        return VerificationEvidenceCommandTests.Head;
+                    },
+                    BeforeCoverageOperation: (_, _) => coverageReads++));
+
+            Assert.Equal(0, exit);
+            Assert.Equal(2, headReads);
+            Assert.True(coverageReads > 0);
+            Assert.Equal(1, mutatorFactories);
+            if (format == "json")
+            {
+                using var output = JsonDocument.Parse(writer.ToString());
+                var gate = output.RootElement.GetProperty("verification_gate");
+                Assert.Equal("satisfied", gate.GetProperty("state").GetString());
+                Assert.Equal("complete", gate.GetProperty("coverage").GetProperty("state").GetString());
+                Assert.Equal("not-observed", gate.GetProperty("coverage").GetProperty("execution").GetString());
+                Assert.False(gate.GetProperty("coverage").TryGetProperty("design_review", out _));
+            }
+            else
+            {
+                Assert.Contains("worker-verification-satisfied", writer.ToString(), StringComparison.Ordinal);
+                Assert.Contains("\"state\": \"complete\"", writer.ToString(), StringComparison.Ordinal);
+                Assert.DoesNotContain("design_review", writer.ToString(), StringComparison.Ordinal);
+            }
+        }
+
+        var invalidPacket = selectedPacket.Replace("proof_id: P1", "proof_id: P9", StringComparison.Ordinal);
+        Assert.NotEqual(selectedPacket, invalidPacket);
+        Assert.Equal("invalid", PacketVerificationContract.Evaluate("G866",
+            ".intent-cli/issues/G866/packet.yaml", Encoding.UTF8.GetBytes(invalidPacket)).State);
+        using (var host = new VerificationEvidenceCommandTests.TempHost(packet: invalidPacket))
+        {
+            SeedG868RefusalSentinels(host.Root);
+            var before = SnapshotG868Tree(host.Root);
+            var headReads = 0;
+            var providers = 0;
+            var coverageReads = 0;
+            WorkerCompleteCommand.MutatorFactory = () => { providers++; return new FakeMutator(); };
+            WorkerCompleteCommand.PrLookupFactory = () => { providers++; return new PermissivePrLookup(); };
+            WorkerCompleteCommand.IssueLookupFactory = () => { providers++; return new StubIssueLookup(); };
+            using var writer = new StringWriter();
+            var exit = WorkerCompleteCommand.Execute(G868Context(host.Root),
+                G868Arguments(host, format, ["--evidence", "P1=E1"], write: false), writer,
+                new WorkerVerificationGate.Dependencies(
+                    ReadPullRequestHeadSha: (_, _) =>
+                    {
+                        headReads++;
+                        return VerificationEvidenceCommandTests.Head;
+                    },
+                    BeforeCoverageOperation: (_, _) => coverageReads++));
+
+            Assert.Equal(2, exit);
+            Assert.Equal(0, headReads);
+            Assert.Equal(0, providers);
+            Assert.True(coverageReads > 0);
+            Assert.Equal(before, SnapshotG868Tree(host.Root));
+            if (format == "json")
+            {
+                using var output = JsonDocument.Parse(writer.ToString());
+                var gate = output.RootElement.GetProperty("verification_gate");
+                Assert.Equal("worker-verification-coverage-unavailable", gate.GetProperty("cause").GetString());
+                Assert.Equal("initial", gate.GetProperty("phase").GetString());
+                Assert.Equal("unavailable", gate.GetProperty("coverage").GetProperty("state").GetString());
+                Assert.Equal("verification-coverage-packet-unavailable",
+                    gate.GetProperty("coverage").GetProperty("cause").GetString());
+                Assert.Empty(gate.GetProperty("coverage").GetProperty("proofs").EnumerateArray());
+            }
+            else
+            {
+                Assert.Contains("worker-verification-coverage-unavailable", writer.ToString(), StringComparison.Ordinal);
+                Assert.Contains("verification-coverage-packet-unavailable", writer.ToString(), StringComparison.Ordinal);
+                Assert.Contains("phase: initial", writer.ToString(), StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
     public void G868ActualWriterSupportsAnOtherwiseValidNonDefaultIdentity(string format)
     {
         const string unit = "G868-OtherUnit";

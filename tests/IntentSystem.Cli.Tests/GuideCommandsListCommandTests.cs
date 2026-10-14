@@ -452,6 +452,79 @@ public sealed class GuideCommandsListCommandTests
         Assert.Contains("出力形式は text、JSON、Markdown です。", japaneseReference, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void G869DesignReviewSelectorIsDiscoverableInAllThreeRoutesAndSixDocs()
+    {
+        foreach (var format in new[] { "json", "markdown" })
+        {
+            using var catalogWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "commands", "list", "--format", format], CreateContext(), catalogWriter));
+            string packetPurpose;
+            if (format == "json")
+            {
+                using var catalog = JsonDocument.Parse(catalogWriter.ToString());
+                packetPurpose = catalog.RootElement.GetProperty("groups").EnumerateArray()
+                    .Single(group => group.GetProperty("name").GetString() == "packet")
+                    .GetProperty("purpose").GetString()!;
+            }
+            else packetPurpose = catalogWriter.ToString();
+
+            using var soloWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "solo-conductor", "--format", format], CreateContext(), soloWriter));
+            string soloInstruction;
+            if (format == "json")
+            {
+                using var solo = JsonDocument.Parse(soloWriter.ToString());
+                soloInstruction = solo.RootElement.GetProperty("loop").EnumerateArray()
+                    .Single(item => item.GetProperty("id").GetString() == "packet-draft-and-validate")
+                    .GetProperty("instruction").GetString()!;
+            }
+            else soloInstruction = soloWriter.ToString();
+
+            using var workflowWriter = new StringWriter();
+            Assert.Equal(0, CommandRouter.Execute(["guide", "workflow", "task", "issue-publish", "--format", format], CreateContext(), workflowWriter));
+            string workflowInvariants;
+            if (format == "json")
+            {
+                using var workflow = JsonDocument.Parse(workflowWriter.ToString());
+                workflowInvariants = string.Join(" ", workflow.RootElement.GetProperty("invariants").EnumerateArray()
+                    .Select(item => item.GetString()));
+            }
+            else workflowInvariants = workflowWriter.ToString();
+
+            foreach (var route in new[] { packetPurpose, soloInstruction, workflowInvariants })
+            {
+                Assert.Contains("G869", route, StringComparison.Ordinal);
+                Assert.Contains("verification_contract.design_review", route, StringComparison.Ordinal);
+                Assert.Contains("safety_critical_ac", route, StringComparison.Ordinal);
+                Assert.Contains("proof_id", route, StringComparison.Ordinal);
+                Assert.Contains("review cross-runtime request --kind design", route, StringComparison.Ordinal);
+                Assert.Contains("inert", route, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("incomplete", route, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("Hosted evidence", route, StringComparison.Ordinal);
+                Assert.Contains("ruling-backed deferral", route, StringComparison.Ordinal);
+            }
+        }
+
+        var root = RepoVersionPolicySource.RepoRoot();
+        foreach (var language in new[] { "en", "ja" })
+        {
+            foreach (var documentName in new[] { "08-command-reference.md", "12-agent-message-orchestration.md", "1.0-compatibility-ledger.md" })
+            {
+                var document = File.ReadAllText(Path.Combine(root, "docs", language, documentName));
+                Assert.Contains("G869", document, StringComparison.Ordinal);
+                Assert.Contains("verification_contract", document, StringComparison.Ordinal);
+                Assert.Contains("design_review", document, StringComparison.Ordinal);
+                Assert.Contains("safety_critical_ac", document, StringComparison.Ordinal);
+                Assert.Contains("proof_id", document, StringComparison.Ordinal);
+                Assert.Contains("review cross-runtime request --kind design", document, StringComparison.Ordinal);
+                Assert.Contains("not-observed", document, StringComparison.Ordinal);
+                Assert.Contains("incomplete", document, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("#1866", document, StringComparison.Ordinal);
+            }
+        }
+    }
+
     private static void AssertPrivacyNoteFragments(string text, string first, string last)
     {
         Assert.Contains(first, text, StringComparison.Ordinal);

@@ -912,7 +912,7 @@ contract key は未対応です。
 schema 件数の超過は invalid、byte/depth 超過は unavailable です。SHA-256 は BOM を含む実際に読んだ bytes に対する値で、zero-byte または
 事前のサイズ拒否には hash がありません。別途、G863 source declaration が absent/empty の場合は既存動作を保ちます。
 G865 は構造を検証し、G866/G867 は supplied TRX bytes の local binding と read-only coverage を提供します。
-hosted evidence、deferral、design-prompt integration は #1866 の broader な未完了作業です。G868 は別個の明示 worker-completion gate を追加します。
+hosted evidence と ruling-backed deferral は #1866 の未完了範囲です。G868 は別個の明示 worker-completion gate を追加し、G869 は下記の任意 design-review selector を追加します。
 #1866 と関連する #1867/#1857 は open のままです。
 
 ### local verification evidence record（G866 — preview-through-1.x）
@@ -1008,6 +1008,26 @@ publication、または evidence checkout と PR checkout の同一性を証明�
 target PR を H1 に保つまま record を共有するには別の evidence ref/root に commit/plain-push します。
 record を target PR branch に載せると head が H2 に変わり、H1 binding は拒否されます。hosted evidence、deferral、
 authenticated execution、semantic acceptance は未対応で、#1866、#1867、#1857 は open のままです。
+
+### safety-critical design-review selector（G869 — preview-through-1.x）
+
+有効な G865 `verification_contract` には、任意で `design_review` mapping を1つだけ追加できます。
+field は `safety_critical_ac` と `proof_id` です。両値は G865 の exact・case-sensitive ID で、選択した proof は
+選択 criterion を含む必要があります。request result は criterion ID、実際の index と text、proof ID、command、lane、evidence class、
+`execution: not-observed` を表示します。index と text は packet 内の実 criterion から取得します。
+
+```yaml
+verification_contract:
+  design_review:
+    safety_critical_ac: AC2
+    proof_id: P2
+```
+
+これは完全で有効な G865 contract に追加する field です。省略すると従来の design-request output と artifact bytes を維持します。
+有効でも incomplete な contract は既存 gap を保持し、この selector は complete や eligible にしません。
+`review cross-runtime request --kind design` は同じ captured `packet.yaml` bytes と既存の four-file digest を使い、任意の typed projection と inert な prompt section を追加します。新しい artifact は作りません。opt-in input が invalid または unavailable の場合、request artifact の書き込み前に拒否します。
+
+packet の command と fact は信頼しない data として、動的に長さを決めた fence 内に表示します。command は実行せず、producer/authority 認証、semantic acceptance、evidence/publication 検証、hosted deferral の許可を意味しません。共有 G865 validator は既存 validator、evidence、coverage、worker-gate consumer でこの任意 field を accept/refuse しますが、それらの surface は `design_review` projection を出力しません。hosted evidence と ruling-backed deferral は #1866 の未完了範囲です。
 
 ### 貼り付け evidence gate（G785）
 

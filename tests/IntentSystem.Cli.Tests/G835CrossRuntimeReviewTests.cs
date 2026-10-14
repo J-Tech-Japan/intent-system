@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
@@ -24,6 +25,30 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     private const string D1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string D2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private const string D3 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    private const string SelectedG869Contract = """
+        verification_contract:
+          version: 1
+          acceptance_criteria:
+            - {id: AC2, criterion_index: 2}
+            - {id: AC1, criterion_index: 1}
+          lanes:
+            - {id: unit, weight: ordinary}
+          affected_lanes: [unit]
+          proofs:
+            - id: P1
+              acceptance_criteria: [AC1]
+              lane: unit
+              command: dotnet test --filter FullyQualifiedName~G869
+              evidence: local-required
+            - id: P2
+              acceptance_criteria: [AC1, AC2]
+              lane: unit
+              command: dotnet test --filter FullyQualifiedName~G869
+              evidence: hosted-required
+          design_review:
+            safety_critical_ac: AC2
+            proof_id: P2
+        """;
 
     private readonly string root = CreateTestRoot();
     private readonly Dictionary<string, string?> claims = new(StringComparer.Ordinal) { [Unit] = Team };
@@ -411,6 +436,762 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     // ── design request ─────────────────────────────────────────────────
 
     [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_ProjectsExactTypedSafetyFactAndLinkedProof(string format)
+    {
+        var packetBytes = WriteDesignReviewPacket("AC2", "P2");
+        var outDir = Path.Combine(root, "design-review-selection-" + format);
+
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+
+        Assert.True(exit == 0, output);
+        using var contract = ReadVerificationContractOutput(output, format);
+        var result = contract.RootElement;
+        Assert.Equal("complete", result.GetProperty("state").GetString());
+        Assert.Equal("not-observed", result.GetProperty("execution").GetString());
+        Assert.Equal(".intent-cli/issues/G835/packet.yaml", result.GetProperty("packet_path").GetString());
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant(),
+            result.GetProperty("packet_sha256").GetString());
+        var selection = result.GetProperty("design_review");
+        Assert.Equal("AC2", selection.GetProperty("safety_critical_ac").GetString());
+        Assert.Equal(2, selection.GetProperty("criterion_index").GetInt32());
+        Assert.Equal("The selected G869 fact comes from the actual acceptance-criteria index.", selection.GetProperty("fact").GetString());
+        Assert.Equal("P2", selection.GetProperty("proof_id").GetString());
+        Assert.Equal("dotnet test --filter FullyQualifiedName~G869", selection.GetProperty("command").GetString());
+        Assert.Equal("unit", selection.GetProperty("lane").GetString());
+        Assert.Equal("hosted-required", selection.GetProperty("evidence").GetString());
+        Assert.Equal("not-observed", selection.GetProperty("execution").GetString());
+        var originalPacketDigest = CurrentDigest();
+        Assert.Contains(originalPacketDigest, output, StringComparison.Ordinal);
+        Assert.Equal("AC1", result.GetProperty("acceptance_criteria")[0].GetProperty("id").GetString());
+        Assert.Equal(1, result.GetProperty("acceptance_criteria")[0].GetProperty("criterion_index").GetInt32());
+        Assert.Equal("The first G869 criterion remains independently indexed.", result.GetProperty("acceptance_criteria")[0].GetProperty("text").GetString());
+        Assert.Equal(new[] { "P1", "P2" }, result.GetProperty("acceptance_criteria")[0].GetProperty("proof_ids").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal("AC2", result.GetProperty("acceptance_criteria")[1].GetProperty("id").GetString());
+        Assert.Equal(2, result.GetProperty("acceptance_criteria")[1].GetProperty("criterion_index").GetInt32());
+        Assert.Equal("The selected G869 fact comes from the actual acceptance-criteria index.", result.GetProperty("acceptance_criteria")[1].GetProperty("text").GetString());
+        Assert.Equal(new[] { "P2" }, result.GetProperty("acceptance_criteria")[1].GetProperty("proof_ids").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal(new[] { "AC1", "AC2" }, result.GetProperty("proofs")[1].GetProperty("acceptance_criteria").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal("P1", result.GetProperty("proofs")[0].GetProperty("id").GetString());
+        Assert.Equal("dotnet test --filter FullyQualifiedName~G869", result.GetProperty("proofs")[0].GetProperty("command").GetString());
+        Assert.Equal("unit", result.GetProperty("proofs")[0].GetProperty("lane").GetString());
+        Assert.Equal("local-required", result.GetProperty("proofs")[0].GetProperty("evidence").GetString());
+        Assert.Equal("P2", result.GetProperty("proofs")[1].GetProperty("id").GetString());
+        Assert.Equal("unit", result.GetProperty("proofs")[1].GetProperty("lane").GetString());
+        Assert.Equal("hosted-required", result.GetProperty("proofs")[1].GetProperty("evidence").GetString());
+        Assert.Equal("unit", result.GetProperty("lanes")[0].GetProperty("id").GetString());
+        Assert.Equal("ordinary", result.GetProperty("lanes")[0].GetProperty("weight").GetString());
+        Assert.True(result.GetProperty("lanes")[0].GetProperty("affected").GetBoolean());
+        Assert.Equal(new[] { "P1", "P2" }, result.GetProperty("lanes")[0].GetProperty("proof_ids").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Empty(result.GetProperty("diagnostics").EnumerateArray());
+
+        var prompt = File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt));
+        Assert.Contains("## Safety-critical fact and intended proof", prompt, StringComparison.Ordinal);
+        Assert.Contains(selection.GetProperty("fact").GetString()!, prompt, StringComparison.Ordinal);
+        Assert.Contains(selection.GetProperty("command").GetString()!, prompt, StringComparison.Ordinal);
+        Assert.Contains("No command is executed automatically", prompt, StringComparison.Ordinal);
+        Assert.Equal(new[] { "invocation.txt", "prompt.md", "verdict.schema.json" },
+            Directory.EnumerateFileSystemEntries(outDir).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var alternatePacket = Encoding.UTF8.GetString(packetBytes)
+            .Replace("safety_critical_ac: AC2", "safety_critical_ac: AC1", StringComparison.Ordinal)
+            .Replace("proof_id: P2", "proof_id: P1", StringComparison.Ordinal);
+        Assert.NotEqual(Encoding.UTF8.GetString(packetBytes), alternatePacket);
+        var alternateBytes = Encoding.UTF8.GetBytes(alternatePacket);
+        File.WriteAllBytes(packetPath, alternateBytes);
+        var alternateOutDir = Path.Combine(root, "design-review-selection-alternate-" + format);
+        var (alternateExit, alternateOutput) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", alternateOutDir), "--format", format,
+        ]);
+        Assert.Equal(0, alternateExit);
+        using var alternateContract = ReadVerificationContractOutput(alternateOutput, format);
+        var alternateResult = alternateContract.RootElement;
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(alternateBytes)).ToLowerInvariant(),
+            alternateResult.GetProperty("packet_sha256").GetString());
+        var alternatePacketDigest = CurrentDigest();
+        Assert.NotEqual(originalPacketDigest, alternatePacketDigest);
+        Assert.Contains(alternatePacketDigest, alternateOutput, StringComparison.Ordinal);
+        Assert.Equal("AC1", alternateResult.GetProperty("design_review").GetProperty("safety_critical_ac").GetString());
+        Assert.Equal("P1", alternateResult.GetProperty("design_review").GetProperty("proof_id").GetString());
+        Assert.Equal("The first G869 criterion remains independently indexed.", alternateResult.GetProperty("design_review").GetProperty("fact").GetString());
+        Assert.Equal("local-required", alternateResult.GetProperty("design_review").GetProperty("evidence").GetString());
+    }
+
+    [Theory]
+    [InlineData("fact-only", "json")]
+    [InlineData("fact-only", "markdown")]
+    [InlineData("command-only", "json")]
+    [InlineData("command-only", "markdown")]
+    [InlineData("reversed-index", "json")]
+    [InlineData("reversed-index", "markdown")]
+    public void DesignRequest_SelectionTracksOnlyItsCapturedFactCommandAndCriterionIndex(string mutation, string format)
+    {
+        var baseline = WriteDesignReviewPacket("AC2", "P2");
+        var baselineDigest = CurrentDigest();
+        var yaml = Encoding.UTF8.GetString(baseline);
+        string expectedFact;
+        string expectedCommand = "dotnet test --filter FullyQualifiedName~G869";
+        int expectedIndex = 2;
+        switch (mutation)
+        {
+            case "fact-only":
+                yaml = yaml.Replace(
+                    "The selected G869 fact comes from the actual acceptance-criteria index.",
+                    "A separately captured safety fact for the design review.", StringComparison.Ordinal);
+                expectedFact = "A separately captured safety fact for the design review.";
+                break;
+            case "command-only":
+                const string originalCommand = "command: dotnet test --filter FullyQualifiedName~G869";
+                var selectedCommandPosition = yaml.LastIndexOf(originalCommand, StringComparison.Ordinal);
+                Assert.True(selectedCommandPosition >= 0);
+                yaml = yaml[..selectedCommandPosition] +
+                    "command: dotnet test --filter FullyQualifiedName~G869 --no-build" +
+                    yaml[(selectedCommandPosition + originalCommand.Length)..];
+                expectedCommand += " --no-build";
+                expectedFact = "The selected G869 fact comes from the actual acceptance-criteria index.";
+                break;
+            case "reversed-index":
+                yaml = yaml.Replace("{id: AC2, criterion_index: 2}", "{id: AC2, criterion_index: 1}", StringComparison.Ordinal)
+                    .Replace("{id: AC1, criterion_index: 1}", "{id: AC1, criterion_index: 2}", StringComparison.Ordinal);
+                expectedIndex = 1;
+                expectedFact = "The first G869 criterion remains independently indexed.";
+                break;
+            default:
+                throw new InvalidOperationException($"Unexpected mutation: {mutation}");
+        }
+
+        Assert.NotEqual(Encoding.UTF8.GetString(baseline), yaml);
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var changedBytes = Encoding.UTF8.GetBytes(yaml);
+        File.WriteAllBytes(packetPath, changedBytes);
+        var expectedDigest = CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDir(Unit));
+        Assert.NotEqual(baselineDigest, expectedDigest);
+        var firstOut = Path.Combine(root, $"g869-selection-{mutation}-first-{format}");
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", firstOut), "--format", format]);
+        Assert.Equal(0, exit);
+        using var result = ReadVerificationContractOutput(output, format);
+        var selection = result.RootElement.GetProperty("design_review");
+        Assert.Equal(expectedIndex, selection.GetProperty("criterion_index").GetInt32());
+        Assert.Equal(expectedFact, selection.GetProperty("fact").GetString());
+        Assert.Equal(expectedCommand, selection.GetProperty("command").GetString());
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(changedBytes)).ToLowerInvariant(),
+            result.RootElement.GetProperty("packet_sha256").GetString());
+        Assert.Equal(expectedDigest, CurrentDigest());
+        Assert.Contains(expectedDigest, output, StringComparison.Ordinal);
+        Assert.DoesNotContain(baselineDigest, output, StringComparison.Ordinal);
+        var firstPrompt = File.ReadAllText(Path.Combine(firstOut, CrossRuntimeReviewFiles.Prompt));
+        Assert.Contains(expectedFact, firstPrompt, StringComparison.Ordinal);
+        Assert.Contains(expectedCommand, firstPrompt, StringComparison.Ordinal);
+
+        var repeatOut = Path.Combine(root, $"g869-selection-{mutation}-repeat-{format}");
+        var (repeatExit, repeatOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", repeatOut), "--format", format]);
+        Assert.Equal(0, repeatExit);
+        using var repeated = ReadVerificationContractOutput(repeatOutput, format);
+        Assert.Equal(result.RootElement.GetRawText(), repeated.RootElement.GetRawText());
+        Assert.Equal(firstPrompt, File.ReadAllText(Path.Combine(repeatOut, CrossRuntimeReviewFiles.Prompt)));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_SelectedOpenCodeContractKeepsItsExistingIsolationArtifacts(string format)
+    {
+        var packetBytes = WriteDesignReviewPacket("AC2", "P2");
+        var outDir = Path.Combine(root, "design-review-opencode-" + format);
+
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("opencode", outDir, "github-copilot/gpt-5.6-sol"),
+            "--format", format,
+        ]);
+
+        Assert.Equal(0, exit);
+        using var result = ReadVerificationContractOutput(output, format);
+        var rootResult = result.RootElement;
+        Assert.Equal("complete", rootResult.GetProperty("state").GetString());
+        var selection = rootResult.GetProperty("design_review");
+        Assert.Equal("AC2", selection.GetProperty("safety_critical_ac").GetString());
+        Assert.Equal("P2", selection.GetProperty("proof_id").GetString());
+        Assert.Equal("hosted-required", selection.GetProperty("evidence").GetString());
+        Assert.Equal("not-observed", selection.GetProperty("execution").GetString());
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(packetBytes)).ToLowerInvariant(),
+            rootResult.GetProperty("packet_sha256").GetString());
+        Assert.Equal(
+            CrossRuntimeReviewFiles.RenderedFor("opencode", CrossRuntimeReviewRecord.KindDesign, hasClone: false)
+                .Order(StringComparer.Ordinal),
+            Directory.EnumerateFileSystemEntries(outDir).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(
+            Directory.EnumerateFileSystemEntries(outDir).Select(Path.GetFileName),
+            name => name is not null && name.Contains("design_review", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_InConfiguredGitCloneReadsTrackedPacketWithoutChangingClone(string format)
+    {
+        var sourceRepo = Path.Combine(root, "g869-clone-source");
+        var clone = Path.Combine(root, "g869-configured-clone");
+        Directory.CreateDirectory(sourceRepo);
+        RunGit(sourceRepo, "init", "--quiet", "--initial-branch=main");
+        RunGit(sourceRepo, "config", "user.name", "intent-cli-g869-test");
+        RunGit(sourceRepo, "config", "user.email", "intent-cli-g869@example.invalid");
+
+        var sourcePacketBytes = WriteDesignReviewPacket("AC2", "P2");
+        var sourcePacketDirectory = Path.Combine(sourceRepo, ".intent-cli", "issues", Unit);
+        Directory.CreateDirectory(sourcePacketDirectory);
+        foreach (var fileName in CrossRuntimeDesignReviewDigest.PacketFileNames)
+            File.Copy(Path.Combine(PacketDir(Unit), fileName), Path.Combine(sourcePacketDirectory, fileName), overwrite: true);
+        File.WriteAllBytes(Path.Combine(sourcePacketDirectory, "packet.yaml"), sourcePacketBytes);
+        var configPath = Path.Combine(sourceRepo, ".intent-cli", "config.toml");
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        File.WriteAllText(configPath, "default_domain = \"intent-cli\"\nartifact_root = \".intent-cli\"\n");
+        RunGit(sourceRepo, "add", "--", ".intent-cli/config.toml", $".intent-cli/issues/{Unit}");
+        RunGit(sourceRepo, "commit", "--quiet", "-m", "seed configured G869 packet clone");
+        RunGit(root, "clone", "--quiet", sourceRepo, clone);
+
+        // A request has no reason to contact the clone's origin. Make that
+        // boundary observable while keeping the tracked host config/packet real.
+        var unreachableOrigin = Path.Combine(root, "g869-unreachable-origin.git");
+        RunGit(clone, "remote", "set-url", "origin", unreachableOrigin);
+        Assert.Equal(sourcePacketBytes, File.ReadAllBytes(Path.Combine(clone, ".intent-cli", "issues", Unit, "packet.yaml")));
+        Assert.True(File.Exists(Path.Combine(clone, ".intent-cli", "config.toml")));
+
+        var filesBefore = SnapshotCloneTree(clone);
+        var indexBefore = File.ReadAllBytes(Path.Combine(clone, ".git", "index"));
+        var headBefore = RunGit(clone, "rev-parse", "HEAD");
+        var refsBefore = RunGit(clone, "show-ref", "--head");
+        var statusBefore = RunGit(clone, "status", "--porcelain", "--untracked-files=all");
+        var originBefore = RunGit(clone, "remote", "get-url", "origin");
+        var outDir = Path.Combine(root, "g869-clone-request-out-" + format);
+
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ], Context() with { RepoRoot = clone });
+
+        Assert.Equal(0, exit);
+        using var result = ReadVerificationContractOutput(output, format);
+        Assert.Equal("complete", result.RootElement.GetProperty("state").GetString());
+        Assert.Equal("AC2", result.RootElement.GetProperty("design_review").GetProperty("safety_critical_ac").GetString());
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(sourcePacketBytes)).ToLowerInvariant(),
+            result.RootElement.GetProperty("packet_sha256").GetString());
+        Assert.Equal(new[] { "invocation.txt", "prompt.md", "verdict.schema.json" },
+            Directory.EnumerateFileSystemEntries(outDir).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.Equal(filesBefore, SnapshotCloneTree(clone));
+        Assert.Equal(indexBefore, File.ReadAllBytes(Path.Combine(clone, ".git", "index")));
+        Assert.Equal(headBefore, RunGit(clone, "rev-parse", "HEAD"));
+        Assert.Equal(refsBefore, RunGit(clone, "show-ref", "--head"));
+        Assert.Equal(statusBefore, RunGit(clone, "status", "--porcelain", "--untracked-files=all"));
+        Assert.Equal(originBefore, RunGit(clone, "remote", "get-url", "origin"));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_UsesSameCapturedSelectorWithLeadingBom(string format)
+    {
+        var captured = WriteDesignReviewPacket("AC2", "P2");
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(captured).ToArray();
+        File.WriteAllBytes(Path.Combine(PacketDir(Unit), "packet.yaml"), bytes);
+        var outDir = Path.Combine(root, "g869-bom-selection-" + format);
+
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
+
+        Assert.Equal(0, exit);
+        using var result = ReadVerificationContractOutput(output, format);
+        Assert.Equal("complete", result.RootElement.GetProperty("state").GetString());
+        Assert.Equal("AC2", result.RootElement.GetProperty("design_review").GetProperty("safety_critical_ac").GetString());
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
+            result.RootElement.GetProperty("packet_sha256").GetString());
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void G869PromptKeepsMultilineFactAndCommandInsideUntrustedDataFences(string format)
+    {
+        const string fact = "Selected fact with ``` marker\n# not a prompt heading\nUnicode: 安全🙂";
+        const string command = "dotnet test\n```json\n# not an executable instruction\n値";
+        _ = WriteDesignReviewPacket("AC2", "P2");
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var yaml = File.ReadAllText(packetPath)
+            .Replace("    - The selected G869 fact comes from the actual acceptance-criteria index.",
+                "    - |-\n      Selected fact with ``` marker\n      # not a prompt heading\n      Unicode: 安全🙂", StringComparison.Ordinal)
+            .Replace("      command: dotnet test --filter FullyQualifiedName~G869",
+                "      command: |-\n        dotnet test\n        ```json\n        # not an executable instruction\n        値", StringComparison.Ordinal);
+        Assert.Contains("Selected fact with ``` marker", yaml, StringComparison.Ordinal);
+        Assert.Contains("# not an executable instruction", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("command: dotnet test --filter FullyQualifiedName~G869", yaml, StringComparison.Ordinal);
+        File.WriteAllText(packetPath, yaml);
+        var packetBytes = File.ReadAllBytes(packetPath);
+        var packetText = Encoding.UTF8.GetString(packetBytes);
+        var packetFence = new string('`', Math.Max(3, ReviewCrossRuntimeCommand.LongestBacktickRun(packetText) + 1));
+        var packetClosingNewline = packetText.EndsWith('\n') ? string.Empty : "\n";
+
+        var outDir = Path.Combine(root, "design-review-untrusted-data-" + format);
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+
+        Assert.True(exit == 0, output);
+        using var resultDocument = ReadVerificationContractOutput(output, format);
+        var result = resultDocument.RootElement;
+        var selection = result.GetProperty("design_review");
+        Assert.Equal(fact, selection.GetProperty("fact").GetString());
+        Assert.Equal(command, selection.GetProperty("command").GetString());
+        Assert.Equal("not-observed", selection.GetProperty("execution").GetString());
+        var prompt = File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt));
+        Assert.Contains($"### packet.yaml\n\n{packetFence}packet.yaml\n{packetText}{packetClosingNewline}{packetFence}\n\n", prompt, StringComparison.Ordinal);
+        var sectionStart = prompt.IndexOf("## Safety-critical fact and intended proof\n\n", StringComparison.Ordinal);
+        Assert.True(sectionStart >= 0);
+        var section = prompt[(sectionStart + "## Safety-critical fact and intended proof\n\n".Length)..];
+        var proseEnd = section.IndexOf("\n\n", StringComparison.Ordinal);
+        Assert.True(proseEnd > 0);
+        var openingEnd = section.IndexOf('\n', proseEnd + 2);
+        Assert.True(openingEnd > proseEnd);
+        var opening = section[(proseEnd + 2)..openingEnd];
+        Assert.EndsWith("json", opening, StringComparison.Ordinal);
+        var fence = opening[..^"json".Length];
+        var jsonStart = openingEnd + 1;
+        var closing = section.IndexOf("\n" + fence, jsonStart, StringComparison.Ordinal);
+        Assert.True(closing > jsonStart);
+        var projectionJson = section[jsonStart..closing];
+        Assert.True(fence.Length > ReviewCrossRuntimeCommand.LongestBacktickRun(projectionJson));
+        using var promptProjection = JsonDocument.Parse(projectionJson);
+        Assert.Equal(fact, promptProjection.RootElement.GetProperty("design_review").GetProperty("fact").GetString());
+        Assert.Equal(command, promptProjection.RootElement.GetProperty("design_review").GetProperty("command").GetString());
+        Assert.Contains("No command is executed automatically", section, StringComparison.Ordinal);
+        Assert.DoesNotContain(command, File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Invocation)), StringComparison.Ordinal);
+        Assert.Equal(new[] { "invocation.txt", "prompt.md", "verdict.schema.json" },
+            Directory.EnumerateFileSystemEntries(outDir).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_UnrelatedDesignReviewTextAndKeysDoNotOptIn(string format)
+    {
+        CopyFixturePacket(Unit);
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var packet = File.ReadAllText(packetPath).TrimEnd('\r', '\n')
+            + "\n# verification_contract.design_review is only a comment\n"
+            + "unrelated_metadata:\n  design_review:\n    safety_critical_ac: AC1\n    proof_id: P1\n";
+        var packetBytes = Encoding.UTF8.GetBytes(packet);
+        Assert.False(PacketVerificationContract.HasDesignReviewDeclaration(packetBytes));
+        File.WriteAllBytes(packetPath, packetBytes);
+        var outDir = Path.Combine(root, "design-review-unrelated-" + format);
+
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+
+        Assert.Equal(0, exit);
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            Assert.False(result.RootElement.TryGetProperty("verification_contract", out _));
+        }
+        else Assert.DoesNotContain("## verification_contract", output, StringComparison.Ordinal);
+        var prompt = File.ReadAllText(Path.Combine(outDir, CrossRuntimeReviewFiles.Prompt));
+        Assert.DoesNotContain("## Safety-critical fact and intended proof", prompt, StringComparison.Ordinal);
+        Assert.Equal(new[] { "invocation.txt", "prompt.md", "verdict.schema.json" },
+            Directory.EnumerateFileSystemEntries(outDir).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_ProjectsSelectedLocalProofAndIncompleteCoverageWithoutUpgradingIt(string format)
+    {
+        _ = WriteDesignReviewPacket("AC1", "P1");
+        var outDir = Path.Combine(root, "design-review-local-" + format);
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+
+        Assert.Equal(0, exit);
+        using (var complete = ReadVerificationContractOutput(output, format))
+        {
+            var result = complete.RootElement;
+            var selection = result.GetProperty("design_review");
+            Assert.Equal("AC1", selection.GetProperty("safety_critical_ac").GetString());
+            Assert.Equal("P1", selection.GetProperty("proof_id").GetString());
+            Assert.Equal("local-required", selection.GetProperty("evidence").GetString());
+            Assert.Equal("complete", result.GetProperty("state").GetString());
+            Assert.Equal("not-observed", selection.GetProperty("execution").GetString());
+        }
+
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var incompleteYaml = File.ReadAllText(packetPath).Replace(
+            "acceptance_criteria: [AC1, AC2]",
+            "acceptance_criteria: [AC1]",
+            StringComparison.Ordinal);
+        Assert.NotEqual(File.ReadAllText(packetPath), incompleteYaml);
+        File.WriteAllText(packetPath, incompleteYaml);
+        var incompleteOutDir = Path.Combine(root, "design-review-incomplete-" + format);
+        var (incompleteExit, incompleteOutput) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", incompleteOutDir), "--format", format,
+        ]);
+
+        Assert.Equal(0, incompleteExit);
+        using var incomplete = ReadVerificationContractOutput(incompleteOutput, format);
+        var incompleteResult = incomplete.RootElement;
+        Assert.Equal("incomplete", incompleteResult.GetProperty("state").GetString());
+        Assert.Equal("verification-contract-incomplete", incompleteResult.GetProperty("cause").GetString());
+        Assert.Equal(new[] { "AC2" }, incompleteResult.GetProperty("missing_acceptance_criteria").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Empty(incompleteResult.GetProperty("missing_lanes").EnumerateArray());
+        Assert.Empty(incompleteResult.GetProperty("missing_local_required_lanes").EnumerateArray());
+        Assert.Equal("P1", incompleteResult.GetProperty("design_review").GetProperty("proof_id").GetString());
+        Assert.DoesNotContain("execution is verified", incompleteResult.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_InvalidOptedInSelectorRefusesBeforeCreatingOutput(string format)
+    {
+        _ = WriteDesignReviewPacket("AC1", "missing-proof");
+        var outDir = Path.Combine(root, "design-review-invalid-" + format);
+
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+
+        Assert.Equal(1, exit);
+        Assert.False(Directory.Exists(outDir));
+        using var contract = ReadVerificationContractOutput(output, format);
+        Assert.Equal("invalid", contract.RootElement.GetProperty("state").GetString());
+        Assert.Equal("verification-contract-invalid", contract.RootElement.GetProperty("cause").GetString());
+        Assert.False(contract.RootElement.TryGetProperty("design_review", out _));
+        Assert.Empty(contract.RootElement.GetProperty("acceptance_criteria").EnumerateArray());
+        Assert.Empty(contract.RootElement.GetProperty("proofs").EnumerateArray());
+    }
+
+    [Theory]
+    [InlineData("null", "json")]
+    [InlineData("null", "markdown")]
+    [InlineData("empty-scalar", "json")]
+    [InlineData("empty-scalar", "markdown")]
+    [InlineData("empty-map", "json")]
+    [InlineData("sequence", "markdown")]
+    [InlineData("missing-member", "json")]
+    [InlineData("missing-safety-critical-ac", "markdown")]
+    [InlineData("extra-member", "markdown")]
+    [InlineData("bad-id", "json")]
+    [InlineData("unknown-ac", "markdown")]
+    [InlineData("case-mismatched-ac", "json")]
+    [InlineData("unknown-proof", "markdown")]
+    [InlineData("unlinked-proof", "json")]
+    [InlineData("duplicate-member", "markdown")]
+    [InlineData("aliased-value", "json")]
+    [InlineData("proof-case-mismatch", "markdown")]
+    [InlineData("safety-null", "json")]
+    [InlineData("safety-map", "markdown")]
+    [InlineData("safety-sequence", "json")]
+    [InlineData("proof-null", "markdown")]
+    [InlineData("proof-map", "json")]
+    [InlineData("proof-sequence", "markdown")]
+    [InlineData("aliased-selector-key", "json")]
+    [InlineData("aliased-root-contract", "markdown")]
+    [InlineData("tagged-value", "markdown")]
+    public void DesignRequest_RefusesInvalidSelectorShapesWithoutPartialSelection(string mutation, string format)
+    {
+        var original = Encoding.UTF8.GetString(WriteDesignReviewPacket("AC2", "P2"));
+        const string selector = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P2\n";
+        var replacements = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["null"] = "  design_review: null\n",
+            ["empty-scalar"] = "  design_review: \"\"\n",
+            ["empty-map"] = "  design_review: {}\n",
+            ["sequence"] = "  design_review: []\n",
+            ["missing-member"] = "  design_review:\n    safety_critical_ac: AC2\n",
+            ["missing-safety-critical-ac"] = "  design_review:\n    proof_id: P2\n",
+            ["extra-member"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P2\n    extra: refused\n",
+            ["bad-id"] = "  design_review:\n    safety_critical_ac: \"bad id\"\n    proof_id: P2\n",
+            ["unknown-ac"] = "  design_review:\n    safety_critical_ac: AC9\n    proof_id: P2\n",
+            ["case-mismatched-ac"] = "  design_review:\n    safety_critical_ac: ac2\n    proof_id: P2\n",
+            ["proof-case-mismatch"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: p2\n",
+            ["safety-null"] = "  design_review:\n    safety_critical_ac: null\n    proof_id: P2\n",
+            ["safety-map"] = "  design_review:\n    safety_critical_ac: {id: AC2}\n    proof_id: P2\n",
+            ["safety-sequence"] = "  design_review:\n    safety_critical_ac: [AC2]\n    proof_id: P2\n",
+            ["proof-null"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: null\n",
+            ["proof-map"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: {id: P2}\n",
+            ["proof-sequence"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: [P2]\n",
+            ["unknown-proof"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P9\n",
+            ["unlinked-proof"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P1\n",
+            ["duplicate-member"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P2\n    proof_id: P2\n",
+            ["aliased-value"] = "  design_review:\n    safety_critical_ac: &selected AC2\n    proof_id: *selected\n",
+            ["aliased-selector-key"] = "  ? *selected_selector_key\n  :\n    safety_critical_ac: AC2\n    proof_id: P2\n",
+            ["aliased-root-contract"] = original.Replace(
+                "verification_contract:\n", "verification_contract_copy: &contract\n", StringComparison.Ordinal)
+                + "verification_contract: *contract\n",
+            ["tagged-value"] = "  design_review:\n    safety_critical_ac: ! AC2\n    proof_id: P2\n",
+        };
+        var changed = original.Replace(selector, replacements[mutation], StringComparison.Ordinal);
+        if (mutation == "aliased-selector-key")
+            changed = "selector_key: &selected_selector_key design_review\n" + changed;
+        Assert.NotEqual(original, changed);
+        var changedBytes = Encoding.UTF8.GetBytes(changed);
+        var evaluated = PacketVerificationContract.Evaluate(Unit, $".intent-cli/issues/{Unit}/packet.yaml", changedBytes);
+        Assert.True(evaluated.State == "invalid", $"{mutation}: {evaluated.State}/{evaluated.Cause}: {string.Join("; ", evaluated.Diagnostics.Select(item => item.Detail))}");
+        Assert.Equal("verification-contract-invalid", evaluated.Cause);
+        Assert.Null(evaluated.DesignReview);
+        Assert.Empty(evaluated.AcceptanceCriteria);
+        Assert.Empty(evaluated.Lanes);
+        Assert.Empty(evaluated.Proofs);
+        File.WriteAllBytes(Path.Combine(PacketDir(Unit), "packet.yaml"), changedBytes);
+        var outDir = Path.Combine(root, "design-review-shape-" + mutation + "-" + format);
+
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+
+        Assert.Equal(1, exit);
+        Assert.False(Directory.Exists(outDir));
+        if (output.Contains("scope_sources", StringComparison.Ordinal))
+        {
+            // G863 may intercept duplicate keys/aliases before the G869
+            // selector projection. The direct typed result above pins the
+            // G869 classification without changing that established priority.
+            Assert.DoesNotContain("## verification_contract", output, StringComparison.Ordinal);
+            using var g863 = ReadScopeSourcesOutput(output, format);
+            var expectedCause = mutation switch
+            {
+                "duplicate-member" => "scope-sources-packet-unavailable",
+                "aliased-root-contract" => "scope-sources-identity-mismatch",
+                _ => throw new InvalidOperationException($"Unexpected G863 interception for {mutation}: {output}"),
+            };
+            Assert.Equal(expectedCause, g863.RootElement.GetProperty("cause").GetString());
+            return;
+        }
+        using var result = ReadVerificationContractOutput(output, format);
+        Assert.Equal("invalid", result.RootElement.GetProperty("state").GetString());
+        Assert.Equal("verification-contract-invalid", result.RootElement.GetProperty("cause").GetString());
+        Assert.False(result.RootElement.TryGetProperty("design_review", out _));
+        Assert.Empty(result.RootElement.GetProperty("acceptance_criteria").EnumerateArray());
+        Assert.Empty(result.RootElement.GetProperty("lanes").EnumerateArray());
+        Assert.Empty(result.RootElement.GetProperty("proofs").EnumerateArray());
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_ObservedSelectorStillRefusesLaterMalformedYaml(string format)
+    {
+        _ = WriteDesignReviewPacket("AC2", "P2");
+        File.AppendAllText(Path.Combine(PacketDir(Unit), "packet.yaml"), "\n: [\n");
+        var packetBytes = File.ReadAllBytes(Path.Combine(PacketDir(Unit), "packet.yaml"));
+        Assert.True(PacketVerificationContract.HasDesignReviewDeclaration(packetBytes));
+        var evaluation = PacketVerificationContract.Evaluate(Unit, $".intent-cli/issues/{Unit}/packet.yaml", packetBytes);
+        Assert.Equal("unavailable", evaluation.State);
+        Assert.Equal("verification-contract-unavailable", evaluation.Cause);
+        Assert.Null(evaluation.DesignReview);
+        Assert.Empty(evaluation.AcceptanceCriteria);
+        var outDir = Path.Combine(root, "design-review-later-parse-error-" + format);
+
+        var (exit, output) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+        ]);
+
+        Assert.Equal(1, exit);
+        Assert.False(Directory.Exists(outDir));
+        // The existing G863 parser sees the same malformed captured bytes first
+        // and retains its source-refusal priority. The direct typed evaluation
+        // above proves the observed selector itself cannot fall back to legacy.
+        Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("missing", "json")]
+    [InlineData("missing", "markdown")]
+    [InlineData("locked", "json")]
+    [InlineData("locked", "markdown")]
+    public void DesignRequest_ValidCapturedSelectorKeepsExistingMissingOrUnreadablePacketRefusal(string mutation, string format)
+    {
+        var bytes = WriteDesignReviewPacket("AC2", "P2");
+        Assert.Equal("complete", PacketVerificationContract.Evaluate(Unit,
+            $".intent-cli/issues/{Unit}/packet.yaml", bytes).State);
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var outDir = Path.Combine(root, $"g869-captured-{mutation}-{format}");
+        if (mutation == "missing")
+        {
+            File.Delete(packetPath);
+            var (missingExit, missingOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
+            Assert.Equal(1, missingExit);
+            Assert.Contains(CrossRuntimeReviewCauses.PacketMissing, missingOutput, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(outDir));
+            return;
+        }
+
+        using var packetLock = new FileStream(packetPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Assert.Throws<IOException>(() => File.ReadAllBytes(packetPath));
+        var (unreadableExit, unreadableOutput) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
+        Assert.Equal(1, unreadableExit);
+        Assert.Contains(CrossRuntimeReviewCauses.PacketMissing, unreadableOutput, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(outDir));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_AppliesExistingG865ByteLimitOnlyAfterSelectorOptIn(string format)
+    {
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var selectedBytes = WriteDesignReviewPacket("AC1", "P1");
+        var selectedPadding = selectedBytes.Concat(Encoding.UTF8.GetBytes("\n#" + new string('x', PacketVerificationContract.MaximumBytes + 1 - selectedBytes.Length))).ToArray();
+        Assert.True(selectedPadding.Length > PacketVerificationContract.MaximumBytes);
+        File.WriteAllBytes(packetPath, selectedPadding);
+        var refusedDir = Path.Combine(root, "design-review-oversize-" + format);
+
+        var (refusedExit, refusedOutput) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", refusedDir), "--format", format,
+        ]);
+
+        Assert.Equal(1, refusedExit);
+        Assert.False(Directory.Exists(refusedDir));
+        using (var refused = ReadVerificationContractOutput(refusedOutput, format))
+        {
+            var result = refused.RootElement;
+            Assert.Equal("unavailable", result.GetProperty("state").GetString());
+            Assert.Equal("verification-contract-unavailable", result.GetProperty("cause").GetString());
+            Assert.Equal("resource-limit", result.GetProperty("diagnostics")[0].GetProperty("cause").GetString());
+            Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(selectedPadding)).ToLowerInvariant(),
+                result.GetProperty("packet_sha256").GetString());
+            Assert.Empty(result.GetProperty("acceptance_criteria").EnumerateArray());
+            Assert.Empty(result.GetProperty("proofs").EnumerateArray());
+        }
+
+        var legacyYaml = Encoding.UTF8.GetString(selectedBytes).Replace(
+            "  design_review:\n    safety_critical_ac: AC1\n    proof_id: P1\n",
+            string.Empty,
+            StringComparison.Ordinal);
+        var legacyBytes = Encoding.UTF8.GetBytes(legacyYaml);
+        var legacyPadding = legacyBytes.Concat(Encoding.UTF8.GetBytes("\n#" + new string('x', PacketVerificationContract.MaximumBytes + 1 - legacyBytes.Length))).ToArray();
+        Assert.True(legacyPadding.Length > PacketVerificationContract.MaximumBytes);
+        File.WriteAllBytes(packetPath, legacyPadding);
+        var legacyDir = Path.Combine(root, "design-review-legacy-oversize-" + format);
+        var (legacyExit, legacyOutput) = Route([
+            "review", "cross-runtime", .. DesignRequestArgs("codex", legacyDir), "--format", format,
+        ]);
+
+        Assert.Equal(0, legacyExit);
+        if (format == "json")
+        {
+            using var legacy = JsonDocument.Parse(legacyOutput);
+            Assert.False(legacy.RootElement.TryGetProperty("verification_contract", out _));
+        }
+        else
+        {
+            Assert.DoesNotContain("## verification_contract", legacyOutput, StringComparison.Ordinal);
+        }
+        Assert.True(Directory.Exists(legacyDir));
+    }
+
+    [Theory]
+    [InlineData("absent", "json")]
+    [InlineData("absent", "markdown")]
+    [InlineData("existing-valid-no-selector", "json")]
+    [InlineData("existing-valid-no-selector", "markdown")]
+    [InlineData("existing-semantic-invalid", "json")]
+    [InlineData("existing-semantic-invalid", "markdown")]
+    public void DesignRequest_NoSelectorMatchesDetachedBaseGoldenAndKeepsLegacyBudgets(string scenario, string format)
+    {
+        CopyFixturePacket(Unit);
+        if (scenario == "existing-semantic-invalid")
+        {
+            File.AppendAllText(Path.Combine(PacketDir(Unit), "packet.yaml"),
+                "\nverification_contract:\n  unknown_member: retained by the legacy request path\n");
+        }
+        else if (scenario == "existing-valid-no-selector")
+        {
+            File.AppendAllText(Path.Combine(PacketDir(Unit), "packet.yaml"), "\n" + $$"""
+                  source_execution_unit: G835
+                  acceptance_criteria:
+                    - The valid G865 contract remains legacy request input without a selector.
+                verification_contract:
+                  version: 1
+                  acceptance_criteria:
+                    - {id: AC1, criterion_index: 1}
+                  lanes:
+                    - {id: unit, weight: ordinary}
+                  affected_lanes: [unit]
+                  proofs:
+                    - id: P1
+                      acceptance_criteria: [AC1]
+                      lane: unit
+                      command: dotnet test
+                      evidence: hosted-required
+                """ + "\n");
+        }
+
+        var outDir = Path.Combine(root, $"g869-baseline-{scenario}-{format}");
+        var originalClaimReader = CrossRuntimeReviewTeamResolver.ClaimReader!;
+        var claimReads = 0;
+        CrossRuntimeReviewTeamResolver.ClaimReader = (repoRoot, scope) =>
+        {
+            claimReads++;
+            return originalClaimReader(repoRoot, scope);
+        };
+        var beforeClock = clock;
+        try
+        {
+            var (exit, output) = Route([
+                "review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format,
+            ]);
+
+            Assert.Equal(0, exit);
+            Assert.Equal(beforeClock, clock);
+            Assert.Equal(0, claimReads);
+            Assert.Equal(new[] { "invocation.txt", "prompt.md", "verdict.schema.json" },
+                Directory.EnumerateFileSystemEntries(outDir).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+            if (format == "json")
+            {
+                using var result = JsonDocument.Parse(output);
+                Assert.False(result.RootElement.TryGetProperty("verification_contract", out _));
+            }
+            else
+            {
+                Assert.DoesNotContain("## verification_contract", output, StringComparison.Ordinal);
+            }
+
+            using var goldens = ReadG869BaseGoldens();
+            Assert.Equal("c4d84407e122c3632b38265a0cd6735df07c16c6", goldens.RootElement.GetProperty("baselineCommit").GetString());
+            Assert.Equal("c579719a7d5b59193f1320b3fc1195337e5daf2965bc8af69f11a1fcae572053",
+                goldens.RootElement.GetProperty("captureHarnessSha256").GetString());
+            var golden = goldens.RootElement.GetProperty("cases").EnumerateArray()
+                .Single(item => item.GetProperty("key").GetString() == $"{scenario}-{format}");
+            AssertGolden("request", Encoding.UTF8.GetBytes(output.Replace(root, "$ROOT", StringComparison.Ordinal)));
+            foreach (var file in new[] { "prompt", "schema", "invocation" })
+            {
+                var fileName = file switch
+                {
+                    "prompt" => CrossRuntimeReviewFiles.Prompt,
+                    "schema" => CrossRuntimeReviewFiles.Schema,
+                    _ => CrossRuntimeReviewFiles.Invocation,
+                };
+                var current = Encoding.UTF8.GetBytes(File.ReadAllText(Path.Combine(outDir, fileName), Encoding.UTF8)
+                    .Replace(root, "$ROOT", StringComparison.Ordinal));
+                AssertGolden(file, current);
+            }
+
+            void AssertGolden(string name, byte[] actual)
+            {
+                var encoded = golden.GetProperty(name + "Base64").GetString();
+                Assert.Equal(encoded, Convert.ToBase64String(actual));
+                Assert.Equal(golden.GetProperty(name + "Sha256").GetString(),
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(actual)).ToLowerInvariant());
+            }
+        }
+        finally
+        {
+            CrossRuntimeReviewTeamResolver.ClaimReader = originalClaimReader;
+        }
+    }
+
+    [Theory]
     [InlineData("codex")]
     [InlineData("claude")]
     [InlineData("cursor")]
@@ -549,7 +1330,7 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
 
         var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
 
-        Assert.Equal(1, exit);
+        Assert.True(exit == 1, output);
         Assert.False(Directory.Exists(outDir));
         if (format == "json")
         {
@@ -688,8 +1469,13 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     public void DesignRequest_OptedInFirstDocumentWithLaterDocumentIsUnavailable(string format)
     {
         _ = WritePinnedSourcePacket();
-        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var packetPath = AppendSelectedG869ContractToPinnedPacket();
         File.AppendAllText(packetPath, "\n---\nunrelated: metadata\n");
+        var bytes = File.ReadAllBytes(packetPath);
+        Assert.True(PacketVerificationContract.HasDesignReviewDeclaration(bytes));
+        var typed = PacketVerificationContract.Evaluate(Unit, $".intent-cli/issues/{Unit}/packet.yaml", bytes);
+        Assert.Equal("unavailable", typed.State);
+        Assert.Null(typed.DesignReview);
         var outDir = Path.Combine(root, "opted-multidocument-request");
 
         var (exit, output) = Route([
@@ -702,6 +1488,67 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         Assert.Equal("unavailable", source.RootElement.GetProperty("state").GetString());
         Assert.Equal("scope-sources-packet-unavailable", source.RootElement.GetProperty("cause").GetString());
         AssertNullOrMissing(source.RootElement, "provenance");
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_ObservedSelectorWithInvalidUtf8RetainsG863RefusalPriority(string format)
+    {
+        _ = WritePinnedSourcePacket();
+        var packetPath = AppendSelectedG869ContractToPinnedPacket();
+        var validBytes = File.ReadAllBytes(packetPath);
+        Assert.True(PacketVerificationContract.HasDesignReviewDeclaration(validBytes));
+        var valid = PacketVerificationContract.Evaluate(Unit, $".intent-cli/issues/{Unit}/packet.yaml", validBytes);
+        Assert.True(valid.State == "complete", $"{valid.State}/{valid.Cause}: {string.Join("; ", valid.Diagnostics.Select(item => item.Detail))}");
+        var selectedButUnreadable = validBytes.Concat(new byte[] { 0xFF }).ToArray();
+        File.WriteAllBytes(packetPath, selectedButUnreadable);
+        var typed = PacketVerificationContract.Evaluate(Unit, $".intent-cli/issues/{Unit}/packet.yaml", selectedButUnreadable);
+        Assert.Equal("unavailable", typed.State);
+        Assert.Null(typed.DesignReview);
+        var outDir = Path.Combine(root, "g869-invalid-utf8-selector-" + format);
+
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
+
+        Assert.Equal(1, exit);
+        Assert.False(Directory.Exists(outDir));
+        Assert.Contains("scope-sources-packet-unavailable", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void DesignRequest_InvalidPinnedSourcePrecedesOtherwiseValidSelector(string format)
+    {
+        _ = WritePinnedSourcePacket();
+        var packetPath = AppendSelectedG869ContractToPinnedPacket();
+        var selectedBytes = File.ReadAllBytes(packetPath);
+        var typed = PacketVerificationContract.Evaluate(Unit, $".intent-cli/issues/{Unit}/packet.yaml", selectedBytes);
+        Assert.True(typed.State == "complete", $"{typed.State}/{typed.Cause}: {string.Join("; ", typed.Diagnostics.Select(item => item.Detail))}");
+        var bodyPath = Path.Combine(PacketDir(Unit), "github-body.md");
+        var originalBody = File.ReadAllText(bodyPath);
+        var changedBody = originalBody.Replace("R-G863-PINNED", "R-G863-OTHER", StringComparison.Ordinal);
+        Assert.NotEqual(originalBody, changedBody);
+        File.WriteAllText(bodyPath, changedBody);
+        var invalidSource = PacketScopeSources.Evaluate(root, Unit, selectedBytes, Encoding.UTF8.GetBytes(changedBody), clock);
+        Assert.Equal("scope-sources-provenance-mismatch", invalidSource.Cause);
+        var outDir = Path.Combine(root, "g869-source-before-selector-" + format);
+
+        var (exit, output) = Route(["review", "cross-runtime", .. DesignRequestArgs("codex", outDir), "--format", format]);
+
+        Assert.Equal(1, exit);
+        Assert.False(Directory.Exists(outDir));
+        if (format == "json")
+        {
+            using var refusal = JsonDocument.Parse(output);
+            Assert.Equal("scope-sources-provenance-mismatch", refusal.RootElement.GetProperty("scope_sources").GetProperty("cause").GetString());
+            Assert.False(refusal.RootElement.TryGetProperty("verification_contract", out _));
+        }
+        else
+        {
+            Assert.Contains("scope-sources-provenance-mismatch", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("## verification_contract", output, StringComparison.Ordinal);
+        }
     }
 
     [Theory]
@@ -1512,6 +2359,63 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         return (exit, writer.ToString());
     }
 
+    private byte[] WriteDesignReviewPacket(string selectedAc, string proofId)
+    {
+        var path = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var yaml = File.ReadAllText(path).TrimEnd('\r', '\n') + "\n";
+        const string repoLine = "  target_repo: J-Tech-Japan/intent-system\n";
+        Assert.Contains(repoLine, yaml, StringComparison.Ordinal);
+        yaml = yaml.Replace(repoLine, repoLine + "  source_execution_unit: G835\n" +
+            "  acceptance_criteria:\n" +
+            "    - The first G869 criterion remains independently indexed.\n" +
+            "    - The selected G869 fact comes from the actual acceptance-criteria index.\n",
+            StringComparison.Ordinal);
+        yaml += $$"""
+            verification_contract:
+              version: 1
+              acceptance_criteria:
+                - {id: AC2, criterion_index: 2}
+                - {id: AC1, criterion_index: 1}
+              lanes:
+                - {id: unit, weight: ordinary}
+              affected_lanes: [unit]
+              proofs:
+                - id: P1
+                  acceptance_criteria: [AC1]
+                  lane: unit
+                  command: dotnet test --filter FullyQualifiedName~G869
+                  evidence: local-required
+                - id: P2
+                  acceptance_criteria: [AC1, AC2]
+                  lane: unit
+                  command: dotnet test --filter FullyQualifiedName~G869
+                  evidence: hosted-required
+              design_review:
+                safety_critical_ac: {{selectedAc}}
+                proof_id: {{proofId}}
+            """ + "\n";
+        var bytes = Encoding.UTF8.GetBytes(yaml);
+        File.WriteAllBytes(path, bytes);
+        return bytes;
+    }
+
+    private static JsonDocument ReadVerificationContractOutput(string output, string format)
+    {
+        if (format == "json")
+        {
+            using var result = JsonDocument.Parse(output);
+            return JsonDocument.Parse(result.RootElement.GetProperty("verification_contract").GetRawText());
+        }
+
+        const string marker = "## verification_contract\n\n```json\n";
+        var start = output.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, output);
+        start += marker.Length;
+        var end = output.IndexOf("\n```", start, StringComparison.Ordinal);
+        Assert.True(end > start, output);
+        return JsonDocument.Parse(output[start..end]);
+    }
+
     private string[] DesignRequestArgs(string runtime, string outDir, string? model = null, string? clone = null)
     {
         var args = new List<string>
@@ -1751,6 +2655,47 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
 
     private string CurrentDigest() => CrossRuntimeDesignReviewDigest.ComputeFromDirectory(PacketDir(Unit));
 
+    private static JsonDocument ReadG869BaseGoldens()
+    {
+        using var stream = typeof(G835CrossRuntimeReviewTests).Assembly
+            .GetManifestResourceStream("g869-no-marker-base-goldens.json");
+        Assert.NotNull(stream);
+        return JsonDocument.Parse(stream!);
+    }
+
+    private static string[] SnapshotCloneTree(string cloneRoot) => Directory
+        .EnumerateFileSystemEntries(cloneRoot, "*", SearchOption.AllDirectories)
+        .Where(path => !Path.GetRelativePath(cloneRoot, path).Split(Path.DirectorySeparatorChar)[0].Equals(".git", StringComparison.Ordinal))
+        .Select(path =>
+        {
+            var relative = Path.GetRelativePath(cloneRoot, path).Replace(Path.DirectorySeparatorChar, '/');
+            var attributes = File.GetAttributes(path);
+            return (attributes & FileAttributes.Directory) != 0
+                ? $"directory:{relative}"
+                : $"file:{relative}:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant()}";
+        })
+        .Order(StringComparer.Ordinal)
+        .ToArray();
+
+    private static string RunGit(string workingDirectory, params string[] arguments)
+    {
+        var start = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start G869 git fixture command.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(string.Empty, stderr);
+        return stdout.Trim();
+    }
+
     private static JsonDocument ReadScopeSourcesOutput(string output, string format)
     {
         if (format == "json")
@@ -1869,6 +2814,20 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
         var verified = PacketScopeSources.Evaluate(root, Unit, Encoding.UTF8.GetBytes(packetYaml), File.ReadAllBytes(bodyPath), recordedAt);
         Assert.Equal("satisfied", verified.State);
         return (digest, canonicalJson, artifactPath);
+    }
+
+    private string AppendSelectedG869ContractToPinnedPacket()
+    {
+        var packetPath = Path.Combine(PacketDir(Unit), "packet.yaml");
+        var yaml = File.ReadAllText(packetPath);
+        const string teamLine = "  team: " + Team + "\n";
+        Assert.Contains(teamLine, yaml, StringComparison.Ordinal);
+        yaml = yaml.Replace(teamLine, teamLine +
+            "  acceptance_criteria:\n" +
+            "    - The first G869 criterion remains independently indexed.\n" +
+            "    - The selected G869 fact comes from the actual acceptance-criteria index.\n", StringComparison.Ordinal);
+        File.WriteAllText(packetPath, yaml + "\n" + SelectedG869Contract);
+        return packetPath;
     }
 
     private (string Digest, string CanonicalJson) WriteSuccessorRuling(string id, IReadOnlyList<string> supersedes)

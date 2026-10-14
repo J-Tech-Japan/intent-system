@@ -105,6 +105,47 @@ public sealed class VerificationEvidenceCommandTests
     [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
+    public void G869DesignSelectorIsAcceptedOrRefusedByTheExistingEvidenceWriter(string format)
+    {
+        var selectedPacket = ValidPacket + "\n  design_review:\n    safety_critical_ac: AC1\n    proof_id: P1\n";
+        using (var host = new TempHost(packet: selectedPacket))
+        {
+            var trx = ReadSmallVstest();
+            host.WriteTrx("capture.trx", trx);
+            var (exit, output) = Invoke(host,
+                RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"));
+            var result = Result(output, format);
+            Assert.Equal(0, exit);
+            Assert.Equal("current", Text(result, "state"));
+            Assert.Equal("P1", Text(result.GetProperty("binding"), "proof_id"));
+            Assert.Equal("AC1", Text(result.GetProperty("binding").GetProperty("acceptance_criteria")[0], "id"));
+            Assert.False(result.TryGetProperty("design_review", out _));
+            Assert.False(Directory.Exists(host.EvidenceRoot));
+        }
+
+        var invalidPacket = selectedPacket.Replace("proof_id: P1", "proof_id: P9", StringComparison.Ordinal);
+        Assert.NotEqual(selectedPacket, invalidPacket);
+        using (var host = new TempHost(packet: invalidPacket))
+        {
+            var trx = ReadSmallVstest();
+            host.WriteTrx("capture.trx", trx);
+            var operations = new List<string>();
+            var (exit, output) = Invoke(host,
+                RecordArgs(host, format, Hash(host.PacketBytes), "capture.trx"),
+                (operation, _) => operations.Add(operation));
+            var result = Result(output, format);
+            Assert.Equal(1, exit);
+            Assert.Equal("invalid", Text(result, "state"));
+            Assert.Equal("verification-evidence-packet-invalid", Text(result, "cause"));
+            Assert.Contains("packet-read", operations);
+            Assert.DoesNotContain("trx-read", operations);
+            Assert.False(Directory.Exists(host.EvidenceRoot));
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
     public void CallerPacketDigestMismatchRefusesBeforeTrxRead(string format)
     {
         using var host = new TempHost();
