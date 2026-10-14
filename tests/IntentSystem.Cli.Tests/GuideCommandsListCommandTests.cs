@@ -507,11 +507,14 @@ public sealed class GuideCommandsListCommandTests
         }
 
         var root = RepoVersionPolicySource.RepoRoot();
+        const string englishProjectionDistinction = "`packet validate-verification` emits the optional typed `design_review` selection. Evidence and coverage results and worker-gate output do not add that projection; `review cross-runtime request --kind design` adds it to the request and inert prompt.";
+        const string japaneseProjectionDistinction = "`packet validate-verification` は任意の typed `design_review` selection を出力します。evidence/coverage result と worker-gate output はその projection を追加しません。`review cross-runtime request --kind design` は request と inert prompt に追加します。";
         foreach (var language in new[] { "en", "ja" })
         {
             foreach (var documentName in new[] { "08-command-reference.md", "12-agent-message-orchestration.md", "1.0-compatibility-ledger.md" })
             {
                 var document = File.ReadAllText(Path.Combine(root, "docs", language, documentName));
+                var normalizedDocument = string.Join(" ", document.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
                 Assert.Contains("G869", document, StringComparison.Ordinal);
                 Assert.Contains("verification_contract", document, StringComparison.Ordinal);
                 Assert.Contains("design_review", document, StringComparison.Ordinal);
@@ -521,6 +524,12 @@ public sealed class GuideCommandsListCommandTests
                 Assert.Contains("not-observed", document, StringComparison.Ordinal);
                 Assert.Contains("incomplete", document, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains("#1866", document, StringComparison.Ordinal);
+                Assert.Contains(language == "en" ? englishProjectionDistinction : japaneseProjectionDistinction,
+                    normalizedDocument, StringComparison.Ordinal);
+                Assert.DoesNotContain(language == "en"
+                    ? "those surfaces do not emit a `design_review` projection"
+                    : "それらの surface は `design_review` projection を出力しません",
+                    normalizedDocument, StringComparison.Ordinal);
             }
         }
     }

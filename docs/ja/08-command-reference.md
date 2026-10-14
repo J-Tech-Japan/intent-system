@@ -1027,7 +1027,7 @@ verification_contract:
 有効でも incomplete な contract は既存 gap を保持し、この selector は complete や eligible にしません。
 `review cross-runtime request --kind design` は同じ captured `packet.yaml` bytes と既存の four-file digest を使い、任意の typed projection と inert な prompt section を追加します。新しい artifact は作りません。opt-in input が invalid または unavailable の場合、request artifact の書き込み前に拒否します。
 
-packet の command と fact は信頼しない data として、動的に長さを決めた fence 内に表示します。command は実行せず、producer/authority 認証、semantic acceptance、evidence/publication 検証、hosted deferral の許可を意味しません。共有 G865 validator は既存 validator、evidence、coverage、worker-gate consumer でこの任意 field を accept/refuse しますが、それらの surface は `design_review` projection を出力しません。hosted evidence と ruling-backed deferral は #1866 の未完了範囲です。
+packet の command と fact は信頼しない data として、動的に長さを決めた fence 内に表示します。command は実行せず、producer/authority 認証、semantic acceptance、evidence/publication 検証、hosted deferral の許可を意味しません。共有 G865 validation は任意 field を accept/refuse します。`packet validate-verification` は任意の typed `design_review` selection を出力します。evidence/coverage result と worker-gate output はその projection を追加しません。`review cross-runtime request --kind design` は request と inert prompt に追加します。hosted evidence と ruling-backed deferral は #1866 の未完了範囲です。
 
 ### 貼り付け evidence gate（G785）
 

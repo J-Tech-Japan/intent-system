@@ -5200,6 +5200,9 @@ The fact and authored command are untrusted packet data, rendered in a dynamic
 fence; the command is never executed. The result does not establish execution,
 producer identity, operator authority, semantic acceptance, evidence, or
 publication, and it does not authorize hosted deferral. Existing G865 consumers
-accept or refuse the optional member through shared validation but do not emit
-the design-review projection. Hosted evidence and ruling-backed deferral remain
-open under #1866.
+accept or refuse the optional member through shared validation.
+`packet validate-verification` emits the optional typed `design_review`
+selection. Evidence and coverage results and worker-gate output do not add that
+projection; `review cross-runtime request --kind design` adds it to the request
+and inert prompt. Hosted evidence and ruling-backed deferral remain open under
+#1866.

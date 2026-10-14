@@ -1257,9 +1257,11 @@ The authored command and fact are untrusted data in a dynamically fenced
 section. The command is never executed, and the result does not authenticate a
 producer or authority, assess semantic acceptance, verify evidence/publication,
 or authorize hosted deferral. Shared G865 validation accepts or rejects the
-optional member in existing validator, evidence, coverage, and worker-gate
-consumers; those surfaces do not emit a `design_review` projection. Hosted
-evidence and ruling-backed deferral remain open under #1866.
+optional member. `packet validate-verification` emits the optional typed
+`design_review` selection. Evidence and coverage results and worker-gate output
+do not add that projection; `review cross-runtime request --kind design` adds
+it to the request and inert prompt. Hosted evidence and ruling-backed deferral
+remain open under #1866.
 
 ### Pasted-evidence gate (G785)
 
