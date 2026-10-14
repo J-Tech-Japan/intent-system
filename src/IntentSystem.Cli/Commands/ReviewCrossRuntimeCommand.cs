@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -478,6 +479,43 @@ internal static class ReviewCrossRuntimeCommand
             }
         }
         else scopeSources = null;
+
+        PacketVerificationContract.Result? verificationContract = null;
+        if (PacketVerificationContract.HasDesignReviewDeclaration(packet.PacketYaml))
+        {
+            var verificationPacketPath = $".intent-cli/issues/{unit}/packet.yaml";
+            if (packet.PacketYaml.Length > PacketVerificationContract.MaximumBytes)
+            {
+                var packetSha256 = Convert.ToHexString(SHA256.HashData(packet.PacketYaml)).ToLowerInvariant();
+                verificationContract = PacketVerificationContract.Unavailable(
+                    unit,
+                    verificationPacketPath,
+                    packetSha256,
+                    "resource-limit",
+                    $"packet.yaml exceeds the existing {PacketVerificationContract.MaximumBytes}-byte verification-contract limit");
+            }
+            else
+            {
+                verificationContract = PacketVerificationContract.Evaluate(
+                    unit,
+                    verificationPacketPath,
+                    packet.PacketYaml);
+            }
+            if (verificationContract.State is "invalid" or "unavailable")
+            {
+                var cause = verificationContract.State == "invalid"
+                    ? "verification-contract-invalid"
+                    : "verification-contract-unavailable";
+                var detail = verificationContract.State == "invalid"
+                    ? "the opted-in design-review verification contract is invalid; inspect verification_contract.diagnostics."
+                    : "the opted-in design-review verification contract could not be evaluated; inspect verification_contract.diagnostics.";
+                return Refuse(writer, format, "request", cause, detail,
+                    "repair the selected design_review declaration and its packet structure.",
+                    scopeSources: scopeSources,
+                    verificationContract: verificationContract);
+            }
+        }
+
         if (File.Exists(outDir))
         {
             return Refuse(writer, format, "request", CrossRuntimeReviewCauses.PathInvalid,
@@ -522,7 +560,7 @@ internal static class ReviewCrossRuntimeCommand
         string prompt;
         try
         {
-            prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument), scopeSources);
+            prompt = RenderDesignPrompt(unit, digest, packet, !string.IsNullOrWhiteSpace(cloneArgument), scopeSources, verificationContract);
         }
         catch (DecoderFallbackException exception)
         {
@@ -590,6 +628,7 @@ internal static class ReviewCrossRuntimeCommand
             NoExecutionBoundary = NoExecutionBoundary,
             Terms = TermsNotice,
             ScopeSources = scopeSources,
+            VerificationContract = verificationContract,
         };
 
         WriteDesignRequestResult(writer, format, result);
@@ -709,6 +748,7 @@ internal static class ReviewCrossRuntimeCommand
             writer.WriteLine(result.NoExecutionBoundary);
             writer.WriteLine(result.Terms);
             WriteScopeSourcesMarkdown(writer, result.ScopeSources);
+            WriteVerificationContractMarkdown(writer, result.VerificationContract);
         }
     }
 
@@ -812,7 +852,8 @@ internal static class ReviewCrossRuntimeCommand
         string packetDigest,
         CrossRuntimeDesignReviewDigest.PacketBytes packet,
         bool cloneGiven,
-        PacketScopeSources.Result? scopeSources = null)
+        PacketScopeSources.Result? scopeSources = null,
+        PacketVerificationContract.Result? verificationContract = null)
     {
         var builder = new StringBuilder();
         builder.Append($"# Design review: {unit}\n\n");
@@ -831,6 +872,7 @@ internal static class ReviewCrossRuntimeCommand
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[1], packet.GithubBody);
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[2], packet.ReviewContext);
         AppendEmbeddedFile(builder, CrossRuntimeDesignReviewDigest.PacketFileNames[3], packet.Implementation);
+        AppendVerificationContractPrompt(builder, verificationContract);
         if (scopeSources is { State: "satisfied", Provenance: { Count: > 0 } sources })
         {
             builder.Append("## Bound ruling sources\n\n");
@@ -858,6 +900,46 @@ internal static class ReviewCrossRuntimeCommand
         builder.Append(CrossRuntimeReviewVerdict.DesignSchemaJson);
         builder.Append("```\n");
         return builder.ToString();
+    }
+
+    private static void AppendVerificationContractPrompt(StringBuilder builder, PacketVerificationContract.Result? result)
+    {
+        if (result?.DesignReview is null) return;
+
+        var projection = new
+        {
+            state = result.State,
+            execution = result.Execution,
+            design_review = result.DesignReview,
+            missing_acceptance_criteria = result.MissingAcceptanceCriteria,
+            missing_lanes = result.MissingLanes,
+            missing_local_required_lanes = result.MissingLocalRequiredLanes,
+            diagnostics = result.Diagnostics,
+        };
+        var json = JsonSerializer.Serialize(projection, new JsonSerializerOptions { WriteIndented = true });
+        var fence = new string('`', Math.Max(3, LongestBacktickRun(json) + 1));
+        builder.Append("## Safety-critical fact and intended proof\n\n");
+        builder.Append("This is an authored verification target only. No command is executed automatically; execution, producer identity, operator authority, and semantic truth of the acceptance criterion are not established.\n\n");
+        builder.Append(fence).Append("json\n");
+        builder.Append(json).Append('\n');
+        builder.Append(fence).Append("\n\n");
+    }
+
+    private static void WriteVerificationContractMarkdown(TextWriter writer, PacketVerificationContract.Result? result)
+    {
+        if (result is null) return;
+        writer.WriteLine();
+        writer.WriteLine("## verification_contract");
+        writer.WriteLine();
+        WriteJsonFence(writer, JsonSerializer.Serialize(result, RequestJsonOptions));
+    }
+
+    private static void WriteJsonFence(TextWriter writer, string json)
+    {
+        var fence = new string('`', Math.Max(3, LongestBacktickRun(json) + 1));
+        writer.WriteLine(fence + "json");
+        writer.WriteLine(json);
+        writer.WriteLine(fence);
     }
 
     private static void AppendEmbeddedFile(StringBuilder builder, string fileName, byte[] bytes)
@@ -2289,7 +2371,8 @@ internal static class ReviewCrossRuntimeCommand
         string detail,
         string fix,
         CrossRuntimeReviewResolution? resolution = null,
-        PacketScopeSources.Result? scopeSources = null)
+        PacketScopeSources.Result? scopeSources = null,
+        PacketVerificationContract.Result? verificationContract = null)
     {
         var refusal = new CrossRuntimeReviewRefusal
         {
@@ -2300,6 +2383,7 @@ internal static class ReviewCrossRuntimeCommand
             Fix = fix,
             Resolution = resolution,
             ScopeSources = scopeSources,
+            VerificationContract = verificationContract,
         };
 
         if (format == FormatJson)
@@ -2320,6 +2404,7 @@ internal static class ReviewCrossRuntimeCommand
                 writer.WriteLine($"- missing: {resolution.Missing}");
             }
             WriteScopeSourcesMarkdown(writer, scopeSources);
+            WriteVerificationContractMarkdown(writer, verificationContract);
         }
 
         return 1;
@@ -2364,6 +2449,9 @@ internal sealed record CrossRuntimeReviewRefusal
     [JsonPropertyName("scope_sources")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PacketScopeSources.Result? ScopeSources { get; init; }
+    [JsonPropertyName("verification_contract")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketVerificationContract.Result? VerificationContract { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewImplementationRequestResult
@@ -2436,6 +2524,9 @@ internal sealed record CrossRuntimeReviewRequestResult
     [JsonPropertyName("scope_sources")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PacketScopeSources.Result? ScopeSources { get; init; }
+    [JsonPropertyName("verification_contract")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PacketVerificationContract.Result? VerificationContract { get; init; }
 }
 
 internal sealed record CrossRuntimeReviewRecordResult

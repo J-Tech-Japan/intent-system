@@ -1107,9 +1107,7 @@ invalid; byte/depth excess is unavailable. The SHA-256 is over the exact bytes
 read, including a BOM; zero-byte and pre-read size refusals have no hash.
 Separately, absent or explicit empty G863 source declarations retain existing
 packet behavior. G865 validates structure; G866/G867 provide local supplied-TRX
-binding and read-only coverage. Hosted evidence, deferral, and design-prompt
-integration remain broader open work under #1866; G868 separately adds the explicit worker-completion gate;
-#1866 and related #1867/#1857 remain open.
+binding and read-only coverage. Hosted evidence and ruling-backed deferral remain broader open work under #1866; G868 separately adds the explicit worker-completion gate; G869 adds the optional design-review selector below; #1866 and related #1867/#1857 remain open.
 
 ### Local verification evidence record (G866 — preview-through-1.x)
 
@@ -1230,6 +1228,40 @@ plain-push it on a separate evidence ref/root; do not commit that record onto
 the target PR branch, which changes its head. Hosted evidence, deferral,
 execution authentication, and semantic acceptance remain unsupported; broader
 #1866, #1867, and #1857 remain open.
+
+### Safety-critical design-review selector (G869 — preview-through-1.x)
+
+An otherwise-valid G865 `verification_contract` may optionally add exactly one
+`design_review` mapping with `safety_critical_ac` and `proof_id`. Both values
+are exact, case-sensitive G865 IDs, and the selected proof must include the
+selected criterion. The request result exposes the bound criterion ID, actual
+index and text, proof ID, command, lane, evidence class, and
+`execution: not-observed`; index and text come from the actual packet criterion.
+
+```yaml
+verification_contract:
+  design_review:
+    safety_critical_ac: AC2
+    proof_id: P2
+```
+
+This is an addition to a complete valid G865 contract. Omission preserves the
+prior design-request output and artifact bytes. A valid but incomplete contract
+keeps its structural gaps; the selector does not make it complete or eligible.
+The design `review cross-runtime request --kind design` uses the same captured
+`packet.yaml` bytes and existing four-file digest, adds the optional typed
+projection and an inert prompt section, and writes no new artifact. Invalid or
+unavailable opted-in input refuses before request artifacts are written.
+
+The authored command and fact are untrusted data in a dynamically fenced
+section. The command is never executed, and the result does not authenticate a
+producer or authority, assess semantic acceptance, verify evidence/publication,
+or authorize hosted deferral. Shared G865 validation accepts or rejects the
+optional member. `packet validate-verification` emits the optional typed
+`design_review` selection. Evidence and coverage results and worker-gate output
+do not add that projection; `review cross-runtime request --kind design` adds
+it to the request and inert prompt. Hosted evidence and ruling-backed deferral
+remain open under #1866.
 
 ### Pasted-evidence gate (G785)
 

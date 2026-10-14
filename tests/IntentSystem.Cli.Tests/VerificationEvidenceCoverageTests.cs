@@ -207,6 +207,69 @@ public sealed class VerificationEvidenceCoverageTests
     [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
+    public void G869DesignSelectorDoesNotChangeCoverageEligibility(string format)
+    {
+        var selectedPacket = Packet + "\n  design_review:\n    safety_critical_ac: AC1\n    proof_id: P1\n";
+        using (var host = new VerificationEvidenceCommandTests.TempHost(Unit, selectedPacket))
+        {
+            var trx = VerificationEvidenceCommandTests.ReadSmallVstest();
+            host.WriteTrx("capture.trx", trx);
+            var packetSha = VerificationEvidenceCommandTests.Hash(host.PacketBytes);
+            var (writeExit, writeOutput) = VerificationEvidenceCommandTests.Invoke(host,
+                [.. VerificationEvidenceCommandTests.RecordArgs(host, "json", packetSha, "capture.trx",
+                    id: "E1", unit: Unit, proof: "P1"), "--write"]);
+            Assert.Equal(0, writeExit);
+            using (var write = JsonDocument.Parse(writeOutput))
+            {
+                Assert.Equal("recorded", Text(write.RootElement, "disposition"));
+                Assert.False(write.RootElement.TryGetProperty("design_review", out _));
+            }
+            var (secondWriteExit, secondWriteOutput) = VerificationEvidenceCommandTests.Invoke(host,
+                [.. VerificationEvidenceCommandTests.RecordArgs(host, "json", packetSha, "capture.trx",
+                    id: "E2", unit: Unit, proof: "P2"), "--write"]);
+            Assert.Equal(0, secondWriteExit);
+            using (var secondWrite = JsonDocument.Parse(secondWriteOutput))
+            {
+                Assert.Equal("recorded", Text(secondWrite.RootElement, "disposition"));
+                Assert.False(secondWrite.RootElement.TryGetProperty("design_review", out _));
+            }
+
+            var reads = new List<string>();
+            var coverage = RunCoverage(host.Root,
+                CoverageArgs(host, packetSha, ["--evidence", "P1=E1", "--evidence", "P2=E2"]), format,
+                (operation, _) => reads.Add(operation));
+            var report = ParseCoverage(coverage.Output, format);
+            Assert.Equal(0, coverage.Exit);
+            Assert.Equal("complete", Text(report, "structural_state"));
+            Assert.Equal("complete", Text(report, "state"));
+            Assert.Equal(new[] { "P1", "P2" }, report.GetProperty("present_proof_ids").EnumerateArray()
+                .Select(value => value.GetString()).ToArray());
+            Assert.Contains("packet-read", reads);
+            Assert.Contains("stored-read", reads);
+        }
+
+        var invalidPacket = selectedPacket.Replace("proof_id: P1", "proof_id: P9", StringComparison.Ordinal);
+        Assert.NotEqual(selectedPacket, invalidPacket);
+        Assert.Equal("invalid", PacketVerificationContract.Evaluate(Unit,
+            $".intent-cli/issues/{Unit}/packet.yaml", Encoding.UTF8.GetBytes(invalidPacket)).State);
+        using (var host = new VerificationEvidenceCommandTests.TempHost(Unit, invalidPacket))
+        {
+            var reads = new List<string>();
+            var coverage = RunCoverage(host.Root,
+                CoverageArgs(host, VerificationEvidenceCommandTests.Hash(host.PacketBytes), []), format,
+                (operation, _) => reads.Add(operation));
+            var report = ParseCoverage(coverage.Output, format);
+            Assert.Equal(1, coverage.Exit);
+            Assert.Equal("unavailable", Text(report, "state"));
+            Assert.Equal("verification-coverage-packet-unavailable", Text(report, "cause"));
+            Assert.Empty(report.GetProperty("proofs").EnumerateArray());
+            Assert.Equal(new[] { "packet-read" }, reads);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
     public void StaleHeadAndPacketBindingsRetainOnlyVerifiedHistoricalFacts(string format)
     {
         using var host = new VerificationEvidenceCommandTests.TempHost(Unit, Packet);

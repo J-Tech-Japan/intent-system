@@ -34,6 +34,7 @@ public sealed class PacketVerificationContractTests
         Assert.Equal(PacketRelativePath, root.GetProperty("packet_path").GetString());
         Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), root.GetProperty("packet_sha256").GetString());
         Assert.Equal("not-observed", root.GetProperty("execution").GetString());
+        Assert.False(root.TryGetProperty("design_review", out _));
         Assert.Contains("execution, publication, and authority are not observed or verified", root.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.Equal(2, root.GetProperty("acceptance_criteria").GetArrayLength());
         Assert.Equal("AC1", root.GetProperty("acceptance_criteria")[0].GetProperty("id").GetString());
@@ -61,6 +62,51 @@ public sealed class PacketVerificationContractTests
         var (repeatExitCode, repeatOutput) = Run(workspace.Root, format);
         Assert.Equal(exitCode, repeatExitCode);
         Assert.Equal(output, repeatOutput);
+    }
+
+    [Theory]
+    [InlineData("complete", "json")]
+    [InlineData("complete", "markdown")]
+    [InlineData("invalid", "json")]
+    [InlineData("invalid", "markdown")]
+    public void ActualCommandSerializesDesignReviewSelectionInBothFormats(string state, string format)
+    {
+        using var workspace = new TemporaryWorkspace();
+        var packet = CompletePacket.Replace(
+            "  proofs:\n", "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P2\n  proofs:\n", StringComparison.Ordinal);
+        if (state == "invalid")
+            packet = packet.Replace("proof_id: P2", "proof_id: P9", StringComparison.Ordinal);
+        var bytes = Encoding.UTF8.GetBytes(packet);
+        workspace.WritePacket(bytes);
+
+        var (exit, output) = Run(workspace.Root, format);
+
+        var expectedExit = state == "complete" ? 0 : 1;
+        Assert.Equal(expectedExit, exit);
+        using var result = JsonDocument.Parse(StructuredJson(output, format));
+        var root = result.RootElement;
+        Assert.Equal(state, root.GetProperty("state").GetString());
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), root.GetProperty("packet_sha256").GetString());
+        if (state == "complete")
+        {
+            var selection = root.GetProperty("design_review");
+            Assert.Equal("AC2", selection.GetProperty("safety_critical_ac").GetString());
+            Assert.Equal(2, selection.GetProperty("criterion_index").GetInt32());
+            Assert.Equal("Preserve legacy output", selection.GetProperty("fact").GetString());
+            Assert.Equal("P2", selection.GetProperty("proof_id").GetString());
+            Assert.Equal("dotnet test", selection.GetProperty("command").GetString());
+            Assert.Equal("unit", selection.GetProperty("lane").GetString());
+            Assert.Equal("hosted-required", selection.GetProperty("evidence").GetString());
+            Assert.Equal("not-observed", selection.GetProperty("execution").GetString());
+        }
+        else
+        {
+            Assert.False(root.TryGetProperty("design_review", out _));
+            Assert.Empty(root.GetProperty("acceptance_criteria").EnumerateArray());
+            Assert.Empty(root.GetProperty("lanes").EnumerateArray());
+            Assert.Empty(root.GetProperty("proofs").EnumerateArray());
+            Assert.Equal("verification-contract-invalid", root.GetProperty("cause").GetString());
+        }
     }
 
     [Fact]
@@ -99,6 +145,77 @@ public sealed class PacketVerificationContractTests
             Assert.Contains(language == "en" ? "gates a later step" : "gate にもなりません", orchestration, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(language == "en" ? "does not gate" : "gate にもならない", ledger, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void DesignReviewSelectorDetectionIsStructuralAcrossAliasesAndParticipatingTags()
+    {
+        const string selected = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P2\n";
+        var valid = CompletePacket + "\n" + selected;
+        var validBytes = Encoding.UTF8.GetBytes(valid);
+        Assert.True(PacketVerificationContract.HasDesignReviewDeclaration(validBytes));
+        var validResult = PacketVerificationContract.Evaluate(Unit, PacketRelativePath, validBytes);
+        Assert.Equal("complete", validResult.State);
+        Assert.Equal("AC2", validResult.DesignReview?.SafetyCriticalAc);
+        Assert.Equal(2, validResult.DesignReview?.CriterionIndex);
+        Assert.Equal("Preserve legacy output", validResult.DesignReview?.Fact);
+        Assert.Equal("P2", validResult.DesignReview?.ProofId);
+
+        // Keep the aliased value equal to an existing proof ID so rejection is
+        // attributable to alias participation rather than an unknown reference.
+        var aliasValue = "selector: &selection P2\n" + valid.Replace(
+            "proof_id: P2", "proof_id: *selection", StringComparison.Ordinal);
+        var aliasMapValue = "selector: &selection\n  safety_critical_ac: AC2\n  proof_id: P2\n" +
+            CompletePacket + "\n  design_review: *selection\n";
+        var aliasedContractMap = valid
+            .Replace("verification_contract:", "verification_contract_copy: &contract", StringComparison.Ordinal)
+            + "verification_contract: *contract\n";
+        var aliasKey = "proof_key: &proof_key proof_id\n" + valid.Replace(
+            "    proof_id: P2\n", "    *proof_key: P2\n", StringComparison.Ordinal);
+        var selectorKeyAlias = "selector_key: &selector_key design_review\n" + valid.Replace(
+            "  design_review:\n", "  *selector_key:\n", StringComparison.Ordinal);
+        var rootContractAlias = valid.Replace(
+            "verification_contract:\n", "verification_contract_copy: &contract\n", StringComparison.Ordinal)
+            + "verification_contract: *contract\n";
+        var taggedValue = valid.Replace(
+            "safety_critical_ac: AC2", "safety_critical_ac: ! AC2", StringComparison.Ordinal);
+        var taggedSelectorMap = valid.Replace(
+            "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P2",
+            "  design_review: ! {safety_critical_ac: AC2, proof_id: P2}", StringComparison.Ordinal);
+        var taggedSelectorKey = valid.Replace(
+            "safety_critical_ac: AC2", "! safety_critical_ac: AC2", StringComparison.Ordinal);
+
+        foreach (var (name, yaml) in new[]
+        {
+            ("alias-value", aliasValue),
+            ("alias-map-value", aliasMapValue),
+            ("alias-contract-map", aliasedContractMap),
+            ("alias-key", aliasKey),
+            ("alias-design-review-key", selectorKeyAlias),
+            ("alias-root-contract", rootContractAlias),
+            ("tagged-value", taggedValue),
+            ("tagged-selector-map", taggedSelectorMap),
+            ("tagged-selector-key", taggedSelectorKey),
+        })
+        {
+            Assert.NotEqual(valid, yaml);
+            var bytes = Encoding.UTF8.GetBytes(yaml);
+            if (!PacketVerificationContract.HasDesignReviewDeclaration(bytes))
+                throw new InvalidOperationException($"selector was not structurally observed for {name}");
+            var result = PacketVerificationContract.Evaluate(Unit, PacketRelativePath, bytes);
+            Assert.Equal("invalid", result.State);
+            Assert.Equal("verification-contract-invalid", result.Cause);
+            Assert.Null(result.DesignReview);
+            Assert.Empty(result.AcceptanceCriteria);
+            Assert.Empty(result.Lanes);
+            Assert.Empty(result.Proofs);
+        }
+
+        var unrelated = CompletePacket[..CompletePacket.IndexOf("verification_contract:", StringComparison.Ordinal)] +
+            "metadata:\n  design_review: {safety_critical_ac: AC2, proof_id: P2}\n# verification_contract.design_review\n";
+        var unrelatedBytes = Encoding.UTF8.GetBytes(unrelated);
+        Assert.False(PacketVerificationContract.HasDesignReviewDeclaration(unrelatedBytes));
+        Assert.Equal("not-declared", PacketVerificationContract.Evaluate(Unit, PacketRelativePath, unrelatedBytes).State);
     }
 
     [Theory]

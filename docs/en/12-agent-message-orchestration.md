@@ -5106,9 +5106,7 @@ of packet bytes, and YAML collection depth 32. Complete means declared structure
 only; execution stays `not-observed`. It never runs the listed command, checks
 evidence, establishes publication or authority, or gates a later step. Unknown
 deferral/evidence-pointer/authority fields are unsupported. G866/G867 provide
-local supplied-TRX binding and read-only coverage. Hosted evidence, deferral,
-design-prompt integration remain broader open work
-under source #1866; G868 separately adds the explicit worker-completion gate; #1866, #1867, and #1857 remain open. See the
+local supplied-TRX binding and read-only coverage. Hosted evidence and ruling-backed deferral remain broader open work under source #1866; G868 separately adds the explicit worker-completion gate, and G869 adds the optional design-review selector below; #1866, #1867, and #1857 remain open. See the
 [packet command reference](08-command-reference.md) for the full schema example.
 
 ## Local supplied TRX evidence (G866 — preview-through-1.x)
@@ -5175,3 +5173,36 @@ committed record on a separate evidence ref/root; committing it to the target PR
 branch changes the head and makes the H1 binding stale. Hosted evidence, deferral,
 execution authentication, and semantic AC evaluation remain unsupported. The
 broader source issues #1866, #1867, and #1857 stay open.
+
+## Safety-critical design-review selector (G869 — preview-through-1.x)
+
+An otherwise-valid G865 `verification_contract` may optionally include one
+`design_review` mapping with exact, case-sensitive `safety_critical_ac` and
+`proof_id` values. The selected proof must reference the selected criterion.
+The request projection carries the actual criterion index and text, proof ID,
+command, lane, evidence class, and `execution: not-observed`.
+
+```yaml
+verification_contract:
+  design_review:
+    safety_critical_ac: AC2
+    proof_id: P2
+```
+
+Add this to a complete valid G865 contract. Omission preserves the old design
+request output and artifacts. A valid incomplete contract remains incomplete
+with its gap arrays. `review cross-runtime request --kind design` uses the same
+captured packet bytes and ordinary four-file digest; it adds an optional typed
+result and an inert prompt section, with no new artifact. Invalid or unavailable
+opted-in input refuses before artifacts are written.
+
+The fact and authored command are untrusted packet data, rendered in a dynamic
+fence; the command is never executed. The result does not establish execution,
+producer identity, operator authority, semantic acceptance, evidence, or
+publication, and it does not authorize hosted deferral. Existing G865 consumers
+accept or refuse the optional member through shared validation.
+`packet validate-verification` emits the optional typed `design_review`
+selection. Evidence and coverage results and worker-gate output do not add that
+projection; `review cross-runtime request --kind design` adds it to the request
+and inert prompt. Hosted evidence and ruling-backed deferral remain open under
+#1866.

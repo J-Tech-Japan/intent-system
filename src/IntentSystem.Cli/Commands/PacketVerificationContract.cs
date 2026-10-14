@@ -41,6 +41,16 @@ internal static class PacketVerificationContract
         [property: JsonPropertyName("path")] string? Path,
         [property: JsonPropertyName("detail")] string Detail);
 
+    internal sealed record DesignReviewSelection(
+        [property: JsonPropertyName("safety_critical_ac")] string SafetyCriticalAc,
+        [property: JsonPropertyName("criterion_index")] int CriterionIndex,
+        [property: JsonPropertyName("fact")] string Fact,
+        [property: JsonPropertyName("proof_id")] string ProofId,
+        [property: JsonPropertyName("command")] string Command,
+        [property: JsonPropertyName("lane")] string Lane,
+        [property: JsonPropertyName("evidence")] string Evidence,
+        [property: JsonPropertyName("execution")] string Execution = "not-observed");
+
     internal sealed record Result(
         [property: JsonPropertyName("execution_unit")] string ExecutionUnit,
         [property: JsonPropertyName("state")] string State,
@@ -55,7 +65,35 @@ internal static class PacketVerificationContract
         [property: JsonPropertyName("missing_acceptance_criteria")] IReadOnlyList<string> MissingAcceptanceCriteria,
         [property: JsonPropertyName("missing_lanes")] IReadOnlyList<string> MissingLanes,
         [property: JsonPropertyName("missing_local_required_lanes")] IReadOnlyList<string> MissingLocalRequiredLanes,
-        [property: JsonPropertyName("diagnostics")] IReadOnlyList<Diagnostic> Diagnostics);
+        [property: JsonPropertyName("diagnostics")] IReadOnlyList<Diagnostic> Diagnostics,
+        [property: JsonPropertyName("design_review")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        DesignReviewSelection? DesignReview = null);
+
+    /// <summary>
+    /// Returns true only when the YAML event stream positively observes the
+    /// optional root verification_contract.design_review member. This structural
+    /// probe is not byte-size bounded: request callers use the existing legacy
+    /// read path, then apply G865's byte limit only after opt-in is observed. It
+    /// intentionally survives a later parse error so an observed opt-in cannot
+    /// fall through to the legacy request path.
+    /// </summary>
+    internal static bool HasDesignReviewDeclaration(byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        string yaml;
+        try
+        {
+            yaml = StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+
+        if (yaml.Length > 0 && yaml[0] == '\uFEFF') yaml = yaml[1..];
+        return ScanYaml(yaml).RootDesignReviewObserved;
+    }
 
     internal static Result Evaluate(string executionUnit, string packetPath, byte[] bytes)
     {
@@ -168,7 +206,7 @@ internal static class PacketVerificationContract
 
         if (contractPair.Value is not YamlMappingNode contract || HasExplicitTag(contract))
             return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "verification_contract must be a mapping");
-        if (!TryExactMapping(contract, ["version", "acceptance_criteria", "lanes", "affected_lanes", "proofs"], packetPath, out var contractFields, out var failure))
+        if (!TryExactMapping(contract, ["version", "acceptance_criteria", "lanes", "affected_lanes", "proofs"], ["design_review"], packetPath, out var contractFields, out var failure))
             return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", failure);
 
         if (!TryText(contractFields["version"], out var version) || version != "1")
@@ -251,6 +289,32 @@ internal static class PacketVerificationContract
             foreach (var acId in proof.AcceptanceCriteria) proofIdsByAc[acId].Add(proof.Id);
             proofIdsByLane[proof.Lane].Add(proof.Id);
         }
+
+        DesignReviewSelection? designReview = null;
+        if (contractFields.TryGetValue("design_review", out var designReviewNode))
+        {
+            if (!TryMapping(designReviewNode, ["safety_critical_ac", "proof_id"], out var designReviewFields, out failure))
+                return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "verification_contract.design_review: " + failure);
+
+            if (!TryText(designReviewFields["safety_critical_ac"], out var selectedAc) || !IsIdentifier(selectedAc)
+                || !TryText(designReviewFields["proof_id"], out var selectedProofId) || !IsIdentifier(selectedProofId))
+                return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "design_review safety_critical_ac and proof_id must be canonical textual identifiers");
+
+            var selectedCriterion = acRegistrations.FirstOrDefault(item => StringComparer.Ordinal.Equals(item.Id, selectedAc));
+            var selectedProof = proofs.FirstOrDefault(item => StringComparer.Ordinal.Equals(item.Id, selectedProofId));
+            if (selectedCriterion.Id is null || selectedProof is null
+                || !selectedProof.AcceptanceCriteria.Contains(selectedAc, StringComparer.Ordinal))
+                return InvalidWithBytes(executionUnit, packetPath, sha256, "invalid-schema", "design_review must select an existing criterion and a proof linked to that exact criterion ID");
+
+            designReview = new DesignReviewSelection(
+                selectedAc,
+                selectedCriterion.Index,
+                actualCriteria[selectedCriterion.Index - 1],
+                selectedProof.Id,
+                selectedProof.Command,
+                selectedProof.Lane,
+                selectedProof.Evidence);
+        }
         var criteriaResults = acRegistrations
             .Select(item => new AcceptanceCriterion(item.Id, item.Index, actualCriteria[item.Index - 1], proofIdsByAc[item.Id].Order(StringComparer.Ordinal).ToArray()))
             .OrderBy(item => item.Id, StringComparer.Ordinal).ToArray();
@@ -274,7 +338,8 @@ internal static class PacketVerificationContract
                 ? "Structural coverage only: all registered criteria and affected lanes have structural proof coverage; execution, publication, and authority are not observed or verified."
                 : "Structural coverage only: one or more structural coverage requirements are missing; execution, publication, and authority are not observed or verified.",
             packetPath, sha256, "not-observed", criteriaResults, laneResults, sortedProofs,
-            missingAcs, missingLanes, missingLocal, diagnostics.OrderBy(item => item.Cause, StringComparer.Ordinal).ThenBy(item => item.Path, StringComparer.Ordinal).ThenBy(item => item.Detail, StringComparer.Ordinal).ToArray());
+            missingAcs, missingLanes, missingLocal, diagnostics.OrderBy(item => item.Cause, StringComparer.Ordinal).ThenBy(item => item.Path, StringComparer.Ordinal).ThenBy(item => item.Detail, StringComparer.Ordinal).ToArray(),
+            designReview);
     }
 
     internal static Result NotDeclared(string executionUnit, string packetPath, string sha256) =>
@@ -295,13 +360,15 @@ internal static class PacketVerificationContract
             packetPath, sha256, "not-observed", [], [], [], [], [], [], diagnostics);
 
     private sealed record ScanResult(int DocumentCount, bool DepthExceeded, bool DuplicateParticipatingKey,
-        HashSet<string> AliasPaths, HashSet<string> ExplicitTagPaths, string? ParseError);
+        HashSet<string> AliasPaths, HashSet<string> ExplicitTagPaths, bool RootDesignReviewObserved, string? ParseError);
 
-    private sealed class EventFrame(bool mapping, string path)
+    private sealed class EventFrame(bool mapping, string path, string? anchor)
     {
         public bool IsMapping { get; } = mapping;
         public string Path { get; } = path;
+        public string? Anchor { get; } = anchor;
         public HashSet<string> SeenKeys { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> MappingKeys { get; } = new(StringComparer.Ordinal);
         public int NextIndex { get; set; }
         public bool ExpectingKey { get; set; } = mapping;
         public string? CurrentKey { get; set; }
@@ -311,12 +378,14 @@ internal static class PacketVerificationContract
     {
         var stack = new Stack<EventFrame>();
         var anchors = new Dictionary<string, string>(StringComparer.Ordinal);
+        var mappingAnchors = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var aliases = new HashSet<string>(StringComparer.Ordinal);
         var explicitTags = new HashSet<string>(StringComparer.Ordinal);
         var documents = 0;
         var collectionDepth = 0;
         var tooDeep = false;
         var duplicate = false;
+        var rootDesignReviewObserved = false;
         try
         {
             var parser = new Parser(new StringReader(yaml));
@@ -332,8 +401,9 @@ internal static class PacketVerificationContract
                         var path = ConsumeNode(stack, null);
                         if (!((MappingStart)parser.Current).IsImplicit && IsExplicitTagPathRelevant(path)) explicitTags.Add(path);
                         collectionDepth++;
-                        if (collectionDepth > MaximumDepth) { tooDeep = true; return new(documents, true, duplicate, aliases, explicitTags, null); }
-                        stack.Push(new EventFrame(true, path));
+                        if (collectionDepth > MaximumDepth) { tooDeep = true; return new(documents, true, duplicate, aliases, explicitTags, rootDesignReviewObserved, null); }
+                        var anchor = ((MappingStart)parser.Current).Anchor.ToString();
+                        stack.Push(new EventFrame(true, path, anchor.Length == 0 ? null : anchor));
                         break;
                     }
                     case SequenceStart:
@@ -341,8 +411,9 @@ internal static class PacketVerificationContract
                         var path = ConsumeNode(stack, null);
                         if (!((SequenceStart)parser.Current).IsImplicit && IsExplicitTagPathRelevant(path)) explicitTags.Add(path);
                         collectionDepth++;
-                        if (collectionDepth > MaximumDepth) { tooDeep = true; return new(documents, true, duplicate, aliases, explicitTags, null); }
-                        stack.Push(new EventFrame(false, path));
+                        if (collectionDepth > MaximumDepth) { tooDeep = true; return new(documents, true, duplicate, aliases, explicitTags, rootDesignReviewObserved, null); }
+                        var anchor = ((SequenceStart)parser.Current).Anchor.ToString();
+                        stack.Push(new EventFrame(false, path, anchor.Length == 0 ? null : anchor));
                         break;
                     }
                     case Scalar scalar:
@@ -364,6 +435,10 @@ internal static class PacketVerificationContract
                         if (keyPosition && key is not null)
                         {
                             var mapPath = stack.Peek().Path;
+                            stack.Peek().MappingKeys.Add(key);
+                            if (StringComparer.Ordinal.Equals(mapPath, "/verification_contract")
+                                && StringComparer.Ordinal.Equals(key, "design_review"))
+                                rootDesignReviewObserved = true;
                             if (IsDuplicateRelevantKeyPath(mapPath, key) && !stack.Peek().SeenKeys.Add(key)) duplicate = true;
                         }
                         ConsumeNode(stack, key);
@@ -382,22 +457,41 @@ internal static class PacketVerificationContract
                         }
                         else path = CurrentChildPath(stack);
                         if (IsAliasPathRelevant(path)) aliases.Add(path);
-                        if (keyPosition && key is not null && IsDuplicateRelevantKeyPath(CurrentMapPath(stack), key) && !stack.Peek().SeenKeys.Add(key)) duplicate = true;
+                        if (keyPosition && key is not null)
+                        {
+                            var mapPath = CurrentMapPath(stack);
+                            stack.Peek().MappingKeys.Add(key);
+                            if (StringComparer.Ordinal.Equals(mapPath, "/verification_contract")
+                                && StringComparer.Ordinal.Equals(key, "design_review"))
+                                rootDesignReviewObserved = true;
+                            if (IsDuplicateRelevantKeyPath(mapPath, key) && !stack.Peek().SeenKeys.Add(key)) duplicate = true;
+                        }
+                        else if (StringComparer.Ordinal.Equals(path, "/verification_contract")
+                            && mappingAnchors.TryGetValue(anchorName, out var aliasedContractKeys)
+                            && aliasedContractKeys.Contains("design_review"))
+                        {
+                            rootDesignReviewObserved = true;
+                        }
                         ConsumeNode(stack, key);
                         break;
                     }
                     case MappingEnd:
                     case SequenceEnd:
-                        if (stack.Count > 0) stack.Pop();
+                        if (stack.Count > 0)
+                        {
+                            var ended = stack.Pop();
+                            if (ended.IsMapping && ended.Anchor is not null)
+                                mappingAnchors[ended.Anchor] = ended.MappingKeys;
+                        }
                         collectionDepth--;
                         break;
                 }
             }
-            return new(documents, tooDeep, duplicate, aliases, explicitTags, null);
+            return new(documents, tooDeep, duplicate, aliases, explicitTags, rootDesignReviewObserved, null);
         }
         catch (Exception exception) when (exception is YamlException or InvalidOperationException or ArgumentException)
         {
-            return new(documents, tooDeep, duplicate, aliases, explicitTags, exception.Message);
+            return new(documents, tooDeep, duplicate, aliases, explicitTags, rootDesignReviewObserved, exception.Message);
         }
     }
 
@@ -477,7 +571,11 @@ internal static class PacketVerificationContract
     }
 
     private static bool TryExactMapping(YamlNode node, IReadOnlyCollection<string> required, string packetPath,
-        out Dictionary<string, YamlNode> fields, out string error)
+        out Dictionary<string, YamlNode> fields, out string error) =>
+        TryExactMapping(node, required, [], packetPath, out fields, out error);
+
+    private static bool TryExactMapping(YamlNode node, IReadOnlyCollection<string> required, IReadOnlyCollection<string> optional,
+        string packetPath, out Dictionary<string, YamlNode> fields, out string error)
     {
         fields = new Dictionary<string, YamlNode>(StringComparer.Ordinal);
         error = "mapping is required";
@@ -489,7 +587,7 @@ internal static class PacketVerificationContract
                 error = "mapping keys must be untagged textual scalars";
                 return false;
             }
-            if (!required.Contains(key, StringComparer.Ordinal))
+            if (!required.Contains(key, StringComparer.Ordinal) && !optional.Contains(key, StringComparer.Ordinal))
             {
                 error = $"unknown field '{key}'";
                 return false;
