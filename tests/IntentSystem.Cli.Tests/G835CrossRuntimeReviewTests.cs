@@ -887,6 +887,7 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     [InlineData("unlinked-proof", "json")]
     [InlineData("duplicate-member", "markdown")]
     [InlineData("aliased-value", "json")]
+    [InlineData("aliased-value", "markdown")]
     [InlineData("proof-case-mismatch", "markdown")]
     [InlineData("safety-null", "json")]
     [InlineData("safety-map", "markdown")]
@@ -896,6 +897,7 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
     [InlineData("proof-sequence", "markdown")]
     [InlineData("aliased-selector-key", "json")]
     [InlineData("aliased-root-contract", "markdown")]
+    [InlineData("aliased-root-contract", "json")]
     [InlineData("tagged-value", "markdown")]
     public void DesignRequest_RefusesInvalidSelectorShapesWithoutPartialSelection(string mutation, string format)
     {
@@ -923,21 +925,46 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             ["unknown-proof"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P9\n",
             ["unlinked-proof"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P1\n",
             ["duplicate-member"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: P2\n    proof_id: P2\n",
-            ["aliased-value"] = "  design_review:\n    safety_critical_ac: &selected AC2\n    proof_id: *selected\n",
+            ["aliased-value"] = "  design_review:\n    safety_critical_ac: AC2\n    proof_id: *selected\n",
             ["aliased-selector-key"] = "  ? *selected_selector_key\n  :\n    safety_critical_ac: AC2\n    proof_id: P2\n",
             ["aliased-root-contract"] = original.Replace(
                 "verification_contract:\n", "verification_contract_copy: &contract\n", StringComparison.Ordinal)
                 + "verification_contract: *contract\n",
             ["tagged-value"] = "  design_review:\n    safety_critical_ac: ! AC2\n    proof_id: P2\n",
         };
-        var changed = original.Replace(selector, replacements[mutation], StringComparison.Ordinal);
+        var changed = mutation == "aliased-root-contract"
+            ? replacements[mutation]
+            : original.Replace(selector, replacements[mutation], StringComparison.Ordinal);
         if (mutation == "aliased-selector-key")
             changed = "selector_key: &selected_selector_key design_review\n" + changed;
+        if (mutation == "aliased-value")
+        {
+            var lines = changed.Split('\n');
+            var proofRow = -1;
+            for (var index = 0; index < lines.Length - 1; index++)
+            {
+                if (lines[index].Trim() == "- id: P2"
+                    && lines[index + 1].Trim() == "acceptance_criteria: [AC1, AC2]")
+                {
+                    proofRow = index;
+                    break;
+                }
+            }
+            Assert.True(proofRow >= 0, "the otherwise-valid P2 proof row was not found to anchor its ID");
+            lines[proofRow] = lines[proofRow].Replace("- id: P2", "- id: &selected P2", StringComparison.Ordinal);
+            changed = string.Join('\n', lines);
+        }
         Assert.NotEqual(original, changed);
         var changedBytes = Encoding.UTF8.GetBytes(changed);
         var evaluated = PacketVerificationContract.Evaluate(Unit, $".intent-cli/issues/{Unit}/packet.yaml", changedBytes);
         Assert.True(evaluated.State == "invalid", $"{mutation}: {evaluated.State}/{evaluated.Cause}: {string.Join("; ", evaluated.Diagnostics.Select(item => item.Detail))}");
         Assert.Equal("verification-contract-invalid", evaluated.Cause);
+        if (mutation == "aliased-value")
+        {
+            Assert.Contains(
+                evaluated.Diagnostics,
+                diagnostic => diagnostic.Detail == "verification_contract and its participating nodes must not use aliases or explicit tags");
+        }
         Assert.Null(evaluated.DesignReview);
         Assert.Empty(evaluated.AcceptanceCriteria);
         Assert.Empty(evaluated.Lanes);
@@ -961,7 +988,6 @@ public sealed class G835CrossRuntimeReviewTests : IDisposable
             var expectedCause = mutation switch
             {
                 "duplicate-member" => "scope-sources-packet-unavailable",
-                "aliased-root-contract" => "scope-sources-identity-mismatch",
                 _ => throw new InvalidOperationException($"Unexpected G863 interception for {mutation}: {output}"),
             };
             Assert.Equal(expectedCause, g863.RootElement.GetProperty("cause").GetString());
