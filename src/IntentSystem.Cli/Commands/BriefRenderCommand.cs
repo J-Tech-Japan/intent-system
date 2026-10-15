@@ -423,22 +423,23 @@ internal static class BriefRenderCommand
         }
 
         var created = false;
-        var ownershipUncertain = false;
         try
         {
             var share = observationHook is null ? FileShare.None : FileShare.ReadWrite | FileShare.Delete;
             using (var output = new FileStream(full, FileMode.CreateNew, FileAccess.Write, share))
             {
                 created = true;
-                if (observationHook is not null)
+                observationHook?.Invoke("output-created", full);
+                if (observationHook is null)
+                    output.Write(artifact);
+                else
                 {
-                    // A callback can rename the opened file and replace its path.
-                    // If it throws or writes fail afterward, cleanup cannot claim
-                    // that the path still denotes this newly created file.
-                    ownershipUncertain = true;
-                    observationHook("output-created", full);
+                    var prefixLength = Math.Clamp(artifact.Length / 2, 1, artifact.Length);
+                    output.Write(artifact, 0, prefixLength);
+                    output.Flush(flushToDisk: false);
+                    observationHook("output-partial-write", full);
+                    output.Write(artifact, prefixLength, artifact.Length - prefixLength);
                 }
-                output.Write(artifact);
                 output.Flush(flushToDisk: true);
             }
 
@@ -455,49 +456,15 @@ internal static class BriefRenderCommand
         {
             if (created)
             {
-                if (ownershipUncertain)
-                {
-                    failure = new("brief-output-cleanup-incomplete", "output ownership became uncertain; no path was deleted");
-                    return false;
-                }
-
-                try
-                {
-                    if (!CanSafelyDeletePartialOutput(full, chainRoot, segments, parent, leaf))
-                    {
-                        failure = new("brief-output-cleanup-incomplete", "partial output path is unsafe or changed; no path was deleted");
-                        return false;
-                    }
-                    File.Delete(full);
-                }
-                catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or ArgumentException)
-                {
-                    failure = new("brief-output-cleanup-incomplete", "a confirmed partial output could not be removed");
-                    return false;
-                }
+                // After the handle closes, the path can be replaced before a
+                // pathname-based delete. Without a portable way to prove file
+                // identity, preserve the path and report incomplete cleanup.
+                try { observationHook?.Invoke("output-write-failed", full); }
+                catch (Exception observer) when (observer is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
+                failure = new("brief-output-cleanup-incomplete", "output ownership could not be re-established after the write failed; cleanup was not attempted");
+                return false;
             }
             failure = new("brief-output-unavailable", "the new output could not be safely created or written");
-            return false;
-        }
-    }
-
-    private static bool CanSafelyDeletePartialOutput(string full, string chainRoot,
-        IReadOnlyList<string> segments, string parent, string leaf)
-    {
-        if (!VerificationEvidenceCommand.TryCheckDirectoryChain(chainRoot, segments, out _, out _)
-            || !VerificationEvidenceCommand.TryCheckSiblingName(parent, leaf, out var exists, out _, out _)
-            || !exists)
-            return false;
-
-        try
-        {
-            var file = new FileInfo(full);
-            if (!file.Exists || file.LinkTarget is not null) return false;
-            var attributes = File.GetAttributes(full);
-            return (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
             return false;
         }
     }

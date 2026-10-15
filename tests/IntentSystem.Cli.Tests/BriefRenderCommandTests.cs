@@ -1059,6 +1059,96 @@ public sealed class BriefRenderCommandTests
     }
 
     [Theory]
+    [InlineData("json", "none")]
+    [InlineData("json", "foreign")]
+    [InlineData("json", "empty")]
+    [InlineData("markdown", "none")]
+    [InlineData("markdown", "foreign")]
+    [InlineData("markdown", "empty")]
+    public void PostCreateWriteFailureNeverDeletesByPath(string format, string replacementKind)
+    {
+        using var workspace = new BriefWorkspace();
+        workspace.WritePacket(ValidPacketWithoutRuling());
+        workspace.Write("github-body.md", "# No ruling pins are declared.\n");
+        workspace.Write("review-context.md", "G870 source review context.\n");
+        workspace.Write("implementation.md", "Builder-only implementation notes.\n");
+        var destination = Path.Combine(workspace.Root, "brief.out");
+        var moved = destination + ".moved";
+        var sentinel = replacementKind == "empty" ? Array.Empty<byte>() : Encoding.UTF8.GetBytes("foreign replacement\n");
+        var before = workspace.Snapshot();
+        var (baselineExit, baselineOutput) = Render(workspace.Root, Args("builder", format));
+        Assert.Equal(0, baselineExit);
+        var fullArtifact = new UTF8Encoding(false, true).GetBytes(baselineOutput);
+        byte[]? partialBytes = null;
+        string? partialSnapshot = null;
+        string? expectedAfter = null;
+        var partialWriteReached = false;
+        var closedStreamFailureReached = false;
+
+        var args = Args("builder", format).Concat(["--out", destination]).ToArray();
+        var (exit, text) = Render(workspace.Root, args, (operation, path) =>
+        {
+            if (operation is not ("output-created" or "output-partial-write" or "output-write-failed")) return;
+            Assert.Equal(destination, path);
+            if (operation == "output-created")
+            {
+                var destinationEntry = Path.GetFileName(destination) + ":";
+                var withoutDestination = string.Join("\n", workspace.Snapshot().Split('\n')
+                    .Where(entry => !entry.StartsWith(destinationEntry, StringComparison.Ordinal)));
+                Assert.Equal(before, withoutDestination);
+                return;
+            }
+
+            if (operation == "output-partial-write")
+            {
+                partialWriteReached = true;
+                partialBytes = File.ReadAllBytes(destination);
+                Assert.NotEmpty(partialBytes);
+                Assert.True(partialBytes.Length < fullArtifact.Length);
+                Assert.Equal(fullArtifact.AsSpan(0, partialBytes.Length).ToArray(), partialBytes);
+                partialSnapshot = workspace.Snapshot();
+                throw new IOException("injected failure after a real partial write");
+            }
+
+            if (operation == "output-write-failed")
+            {
+                closedStreamFailureReached = true;
+                Assert.NotNull(partialSnapshot);
+                Assert.Equal(partialSnapshot, workspace.Snapshot());
+                if (replacementKind != "none")
+                {
+                    File.Move(destination, moved);
+                    File.WriteAllBytes(destination, sentinel);
+                }
+                expectedAfter = workspace.Snapshot();
+            }
+        });
+
+        Assert.True(partialWriteReached, text);
+        Assert.True(closedStreamFailureReached, text);
+        Assert.NotNull(partialBytes);
+        Assert.NotNull(expectedAfter);
+        Assert.Equal(1, exit);
+        using var refusal = ReadOutput(text, format);
+        Assert.Equal("brief-output-cleanup-incomplete", refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal("output ownership could not be re-established after the write failed; cleanup was not attempted",
+            refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("detail").GetString());
+        Assert.True(refusal.RootElement.GetProperty("diagnostics")[0].TryGetProperty("path", out var outputPath));
+        Assert.Equal(JsonValueKind.Null, outputPath.ValueKind);
+
+        if (replacementKind == "none")
+        {
+            Assert.Equal(partialBytes, File.ReadAllBytes(destination));
+        }
+        else
+        {
+            Assert.Equal(sentinel, File.ReadAllBytes(destination));
+            Assert.Equal(partialBytes, File.ReadAllBytes(moved));
+        }
+        Assert.Equal(expectedAfter, workspace.Snapshot());
+    }
+
+    [Theory]
     [InlineData("json")]
     [InlineData("markdown")]
     public void InvalidRepositoryRootReturnsStructuredRefusal(string format)
