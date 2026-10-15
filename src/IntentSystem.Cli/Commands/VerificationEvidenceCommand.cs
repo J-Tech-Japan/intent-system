@@ -598,9 +598,19 @@ internal static class VerificationEvidenceCommand
         && left.LaneAffected == right.LaneAffected && left.Command == right.Command && left.Evidence == right.Evidence
         && left.AcceptanceCriteria.SequenceEqual(right.AcceptanceCriteria);
 
-    private static bool TryReadIdentity(byte[] bytes, out string domain, out string team, out string targetRepo, out string detail)
+    private static bool TryReadIdentity(byte[] bytes, out string domain, out string team, out string targetRepo, out string detail) =>
+        TryReadIdentityCore(bytes, requireExecutionUnit: false, out _, out domain, out team, out targetRepo, out detail);
+
+    // G870 reuses the exact G866 participating-node scanner and identity rules,
+    // while also requiring the packet unit for its explicit local context.
+    internal static bool TryReadIdentity(byte[] bytes, out string executionUnit, out string domain, out string team,
+        out string targetRepo, out string detail) =>
+        TryReadIdentityCore(bytes, requireExecutionUnit: true, out executionUnit, out domain, out team, out targetRepo, out detail);
+
+    private static bool TryReadIdentityCore(byte[] bytes, bool requireExecutionUnit, out string executionUnit,
+        out string domain, out string team, out string targetRepo, out string detail)
     {
-        domain = team = targetRepo = string.Empty;
+        executionUnit = domain = team = targetRepo = string.Empty;
         detail = "packet identity is missing, aliased, tagged, or malformed";
         string yaml;
         try { yaml = StrictUtf8.GetString(bytes); }
@@ -616,10 +626,12 @@ internal static class VerificationEvidenceCommand
             if (stream.Documents.Count != 1 || stream.Documents[0].RootNode is not YamlMappingNode root) return false;
             var identities = root.Children.Where(pair => KeyText(pair.Key) == "implementation_issue_packet").ToArray();
             if (identities.Length != 1 || identities[0].Value is not YamlMappingNode identity) return false;
-            if (!TryIdentityText(identity, "domain", out domain)
+            if ((requireExecutionUnit && !TryIdentityText(identity, "source_execution_unit", out executionUnit))
+                || !TryIdentityText(identity, "domain", out domain)
                 || !TryIdentityText(identity, "team", out team)
                 || !TryIdentityText(identity, "target_repo", out targetRepo)) return false;
-            if (!RulingArtifact.TryIdentifier(domain, out _)
+            if ((requireExecutionUnit && !RulingArtifact.TryIdentifier(executionUnit, out _))
+                || !RulingArtifact.TryIdentifier(domain, out _)
                 || !RulingArtifact.TryIdentifier(team, out _)
                 || !ValidRepo(targetRepo)) return false;
             detail = string.Empty;
@@ -798,7 +810,7 @@ internal static class VerificationEvidenceCommand
         return TryEnumerateBounded(root, out detail);
     }
 
-    private static bool TryCheckDirectoryChain(string root, IReadOnlyList<string> segments, out string cause, out string detail)
+    internal static bool TryCheckDirectoryChain(string root, IReadOnlyList<string> segments, out string cause, out string detail)
     {
         cause = "verification-evidence-read-unavailable";
         if (!TryCheckRoot(root, out detail)) return false;
@@ -828,7 +840,7 @@ internal static class VerificationEvidenceCommand
         return true;
     }
 
-    private static bool TryCheckSiblingName(string parent, string desired, out bool exists, out string cause, out string detail)
+    internal static bool TryCheckSiblingName(string parent, string desired, out bool exists, out string cause, out string detail)
     {
         exists = false;
         cause = "verification-evidence-read-unavailable";

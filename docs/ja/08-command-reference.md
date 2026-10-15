@@ -1029,6 +1029,22 @@ verification_contract:
 
 packet の command と fact は信頼しない data として、動的に長さを決めた fence 内に表示します。command は実行せず、producer/authority 認証、semantic acceptance、evidence/publication 検証、hosted deferral の許可を意味しません。共有 G865 validation は任意 field を accept/refuse します。`packet validate-verification` は任意の typed `design_review` selection を出力します。evidence/coverage result と worker-gate output はその projection を追加しません。`review cross-runtime request --kind design` は request と inert prompt に追加します。hosted evidence と ruling-backed deferral は #1866 の未完了範囲です。
 
+### deterministic role brief render（G870 — preview-through-1.x）
+
+`intent-cli brief render` は明示された identity、role、supplied full HEAD、UTC evaluation time から
+local の決定論的 brief を作成します。`--out` 以外は各 option を1回だけ指定します。identity、現在時刻、live HEAD、Git、GitHub、provider、transcript、host config は推測・参照しません。builder は `.intent-cli/issues/<unit>/` の `packet.yaml`、`github-body.md`、`review-context.md`、`implementation.md` だけを読みます。reviewer は最初の3ファイルだけを読みます。許可された正確な名前を確認する bounded sibling-name check は行いますが、`implementation.md` や builder material を open または stat しません。ruling は packet が明示的に pin し、G863 が検証した場合だけ含まれます。local `github-body.md` は packet input であり、fetch または検証済みの public PR content ではありません。
+
+```bash
+intent-cli brief render --role reviewer --execution-unit G123 \
+  --domain example --team builders --repo owner/repo \
+  --head-sha <40-lowerhex> --as-of 2026-10-15T12:00:00Z --format markdown
+```
+
+JSON と Markdown は同じ typed G863 / G865 / G869 observation、正確な source manifest hash、framed input digest を含みます。packet manifest row は固定 capture order を保ち、ruling row だけを path 順に並べます。supplied HEAD は未検証、execution は `not-observed`、supplied authority は未認証、publication は未検証、lessons は `not-supported` です。G865 の incomplete coverage はそのまま表示し、success に変換しません。source text と proof command は動的長の Markdown fence 内の inert data です。role instruction は authority を与えず、command も実行しません。任意の `--out` は create-only で、既存の安全な parent directory を必要とし、既存 path または source path は拒否します。directory や他の file は作らず、出力は16 MiB以下です。
+作成後の write または flush が失敗した場合、command は `brief-output-cleanup-incomplete` を返し、cleanup は試みません。そのため部分 file または外部 process に置き換えられた file が残る場合があります。command は file の削除や publication 成功を主張しません。同じ出力 path への retry は既存 path として拒否されます。残った file は別途確認してください。
+
+出力には authored packet と ruling の text が含まれ、名前などの情報が入る場合があります。共有前に内容を確認してください。この command は privacy scan をしません。lessons registry や remote PR integration はなく、広い要件を追跡する #1868 は open のままです。#1866、#1867、#1857 も open です。
+
 ### 貼り付け evidence gate（G785）
 
 Acceptance Criteria の bullet に `actual output pasted` または `actual counts pasted`
@@ -1125,6 +1141,7 @@ closeout / automation / issue）・**child-implementation**（worker）・
 |---------|------|
 | `intent-cli guide …` | Ask-first ガイダンス: コラボレーションモデル、ワークフロー、プロンプトテンプレートカタログ、one-shot プロンプト |
 | `intent-cli status brief` | コンパクトな AI スレッドコンテキスト入力 |
+| `intent-cli brief render` | 明示 packet input から決定論的な local role brief を作成 |
 | `intent-cli clarify draft` / `clarify record` | オーナー clarification フロー |
 | `intent-cli issue validate-body` | Child Issue Contract 単独強制 |
 | `intent-cli issue prepare` / `issue publish-reviewed` | レビュー済み issue body 公開境界（`intent-target` は付与しない） |

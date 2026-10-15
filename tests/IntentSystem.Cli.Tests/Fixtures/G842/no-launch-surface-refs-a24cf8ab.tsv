@@ -34,6 +34,8 @@ src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewRead
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewReader	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewTransitionOutcome	7
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	WriterOperationsHooks	4
+src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	Options	3
+src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	RulingArtifact	3
 src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimCommand	2
 src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimRecord	1
 src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimRequest	1
@@ -118,7 +120,7 @@ src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs	VerificationEviden
 src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs	VerificationEvidenceStoreRead	2
 src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs	VerificationEvidenceStoreWrite	3
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	Options	10
-src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	RulingArtifact	6
+src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	RulingArtifact	7
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceBinding	7
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceCriterion	1
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceDiagnostic	3

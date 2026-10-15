@@ -18,6 +18,7 @@ internal static class CommandRouter
         "clarify",
         "clarification",
         "status",
+        "brief",
         "context",
         "next-slice",
         "automation",
@@ -283,6 +284,10 @@ internal static class CommandRouter
             ["status"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
                 ["brief"] = StatusBriefCommand.Execute
+            },
+            ["brief"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
+            {
+                ["render"] = (context, args, writer) => BriefRenderCommand.Execute(context.RepoRoot, args, writer)
             },
             ["context"] = new Dictionary<string, CommandHandler>(StringComparer.Ordinal)
             {
@@ -763,6 +768,7 @@ internal static class CommandRouter
             ["closeout"] = "`intent-cli closeout pr --pr <n> --repo <r> --pr-merged true --write --format json`.",
             ["queue"] = "`intent-cli queue list --format json`, `intent-cli queue show <id> --format json`.",
             ["status"] = "`intent-cli status brief --format json` (tasking thread brief).",
+            ["brief"] = "`intent-cli brief render --role builder|reviewer --execution-unit <unit> --domain <domain> --team <team> --repo <owner/repo> --head-sha <sha> --as-of <UTC> --format json|markdown` (local explicit-input role brief).",
             ["context"] = "`intent-cli context collect ...` (tasking-thread context).",
             ["next-slice"] = "Prefer `intent-cli intent next-slice --dry-run` for collaborative shaping.",
             ["clarify"] = "`intent-cli clarify open ...` / `list` / `answer` / `draft` / `record`.",

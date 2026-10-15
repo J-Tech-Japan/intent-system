@@ -1263,6 +1263,49 @@ do not add that projection; `review cross-runtime request --kind design` adds
 it to the request and inert prompt. Hosted evidence and ruling-backed deferral
 remain open under #1866.
 
+### Deterministic role brief render (G870 — preview-through-1.x)
+
+`intent-cli brief render` builds a local, deterministic brief from explicit
+identity, role, full supplied HEAD, and UTC evaluation time. Every option except
+`--out` occurs once. It has no default identity, current time, live HEAD, Git,
+GitHub, provider, transcript, or host-config lookup. The builder reads exactly
+`packet.yaml`, `github-body.md`, `review-context.md`, and `implementation.md`
+under `.intent-cli/issues/<unit>`; the reviewer reads only the first three.
+Bounded sibling-name checks enforce exact allowed names, but the reviewer does
+not open or stat `implementation.md` or builder material.
+Rulings are included only when explicitly pinned by the packet and accepted by
+G863. The local `github-body.md` is packet input, not fetched or verified public
+PR content.
+
+```bash
+intent-cli brief render --role reviewer --execution-unit G123 \
+  --domain example --team builders --repo owner/repo \
+  --head-sha <40-lowerhex> --as-of 2026-10-15T12:00:00Z --format markdown
+```
+
+JSON and Markdown carry the same typed G863 and G865/G869 observations, exact
+source manifest hashes, and a framed input digest. Packet manifest rows stay in
+fixed capture order; only ruling rows are sorted by path. The supplied HEAD is not
+verified; execution is `not-observed`; supplied authority is not authenticated;
+publication is not verified; lessons remain `not-supported`. Incomplete G865
+coverage remains visible and is not converted to success. Rendered source text
+and proof commands are inert data inside dynamically sized Markdown fences.
+The fixed role instructions do not grant authority or execute commands.
+Optional `--out` is create-only, requires an existing safe parent, and refuses
+existing/source paths; no directories or other files are written. Output is
+bounded to 16 MiB.
+If a write or flush fails after creation, the command returns
+`brief-output-cleanup-incomplete`; cleanup was not attempted, so a partial file
+or foreign replacement may remain. The command makes no claim that it deleted
+the file or that publication succeeded. A retry to the same output path is
+refused as existing; inspect any residual separately.
+
+Review rendered files before sharing: they contain authored packet and ruling
+text, and may include names or other sensitive information. The command does
+not scan content for privacy. It does not provide a lessons registry or remote
+PR integration; #1868 remains open for those broader needs, as do #1866,
+#1867, and #1857.
+
 ### Pasted-evidence gate (G785)
 
 An Acceptance Criteria bullet can make collected PR-body evidence a contract by
@@ -1369,6 +1412,7 @@ to the loop-prompt generators (`guide workflow task implementation-loop` /
 |---------|------|
 | `intent-cli guide …` | Ask-first guidance: collaboration model, workflow, prompt-template catalog, one-shot prompts |
 | `intent-cli status brief` | Compact AI-thread context input |
+| `intent-cli brief render` | Deterministic local role brief from explicit packet inputs |
 | `intent-cli clarify draft` / `clarify record` | Owner clarification flow |
 | `intent-cli issue validate-body` | Standalone Child Issue Contract enforcement |
 | `intent-cli issue prepare` / `issue publish-reviewed` | Reviewed issue body publish boundary (never applies `intent-target`) |

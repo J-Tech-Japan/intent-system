@@ -127,6 +127,54 @@ public sealed class CompatibilityPromiseG612Tests
     }
 
     [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void Ledger_RecordsG870ManifestOrderAndReviewerReadBoundary(string language)
+    {
+        var ledger = Read(language, "1.0-compatibility-ledger.md");
+        var commandReference = Read(language, "08-command-reference.md");
+        var row = Assert.Single(ledger.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            line => line.StartsWith("| deterministic role brief |", StringComparison.Ordinal));
+
+        if (language == "en")
+        {
+            Assert.Contains("Packet manifest rows keep fixed capture order; only ruling rows are sorted by path.", row, StringComparison.Ordinal);
+            Assert.Contains("Bounded sibling-name checks enforce exact allowed input names", row, StringComparison.Ordinal);
+            Assert.Contains("reviewer output does not open or stat `implementation.md`", row, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("packet row は固定 capture order、ruling row だけを path 順", row, StringComparison.Ordinal);
+            Assert.Contains("bounded sibling-name check", row, StringComparison.Ordinal);
+            Assert.Contains("reviewer は `implementation.md` を open/stat しない", row, StringComparison.Ordinal);
+        }
+
+        var normalizedReference = string.Join(' ', commandReference.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var normalizedLedger = string.Join(' ', ledger.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        foreach (var document in new[] { normalizedReference, normalizedLedger })
+        {
+            if (language == "en")
+            {
+                Assert.Contains("`brief-output-cleanup-incomplete`", document, StringComparison.Ordinal);
+                Assert.Contains("cleanup was not attempted", document, StringComparison.Ordinal);
+                Assert.Contains("a partial file or foreign replacement may remain", document, StringComparison.Ordinal);
+                Assert.Contains("makes no claim that it deleted the file or that publication succeeded", document, StringComparison.Ordinal);
+                Assert.Contains("retry to the same output path is refused as existing", document, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("inspect any residual separately", document, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains("`brief-output-cleanup-incomplete`", document, StringComparison.Ordinal);
+                Assert.Contains("cleanup は試みません", document, StringComparison.Ordinal);
+                Assert.Contains("部分 file または外部 process に置き換えられた file が残る場合があります", document, StringComparison.Ordinal);
+                Assert.Contains("file の削除や publication 成功を主張しません", document, StringComparison.Ordinal);
+                Assert.Contains("同じ出力 path", document, StringComparison.Ordinal);
+                Assert.Contains("残った file は別途確認してください", document, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Theory]
     [InlineData("en", "all machine-emitted `cause` values", "Every `cause` value actually emitted")]
     [InlineData("ja", "machine-consumed JSON payload で実際に emit されるすべての `cause` value", "実際に emit されるすべての `cause` value")]
     public void PromiseAndLedger_CoverEveryMachineEmittedCauseValue_G612(

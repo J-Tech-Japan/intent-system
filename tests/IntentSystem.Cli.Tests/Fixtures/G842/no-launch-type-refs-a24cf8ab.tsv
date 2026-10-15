@@ -322,6 +322,8 @@ src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs	ProcessOutputEn
 src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs	ShellGitRunner	3
 src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs	WorkspaceGuardResult	18
 src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs	WorkspaceGuardState	7
+src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	Options	3
+src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	RulingArtifact	3
 src/IntentSystem.Cli/Commands/BugImplementationIssueCommand.cs	BugImplementationIssueCommand	1
 src/IntentSystem.Cli/Commands/BugImplementationIssueCommand.cs	GhQueueDispatchPublisher	1
 src/IntentSystem.Cli/Commands/BugImplementationIssueCommand.cs	GitHubRepositoryTargetResolver	2
@@ -1298,7 +1300,7 @@ src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs	VerificationEviden
 src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs	VerificationEvidenceStoreRead	2
 src/IntentSystem.Cli/Commands/VerificationEvidenceArtifact.cs	VerificationEvidenceStoreWrite	3
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	Options	10
-src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	RulingArtifact	6
+src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	RulingArtifact	7
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceBinding	7
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceCriterion	1
 src/IntentSystem.Cli/Commands/VerificationEvidenceCommand.cs	VerificationEvidenceDiagnostic	3

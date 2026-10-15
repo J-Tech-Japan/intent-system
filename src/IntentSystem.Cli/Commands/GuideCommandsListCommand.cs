@@ -132,6 +132,15 @@ internal static class GuideCommandsListCommand
         },
         new CommandGroupEntry
         {
+            Name = "brief",
+            Role = RoleChildImplementation,
+            Classification = ClassificationSupport,
+            Mutability = MutabilityMixed,
+            RecommendedCaller = CallerImplementationLoop,
+            Purpose = "Local deterministic role brief: `intent-cli brief render --role builder|reviewer --execution-unit <unit> --domain <domain> --team <team> --repo <owner/repo> --head-sha <40-lowerhex> --as-of <YYYY-MM-DDTHH:mm:ssZ> [--out <new-file>] --format json|markdown` combines only the role's fixed packet files with explicitly pinned, verified rulings and typed G865/G869 structure. The supplied head is not verified, execution is not observed, authority is not authenticated, publication is not verified, and lessons remain unsupported. No provider, Git, or GitHub operation occurs."
+        },
+        new CommandGroupEntry
+        {
             Name = "worker",
             Role = RoleChildImplementation,
             Classification = ClassificationPrimary,
