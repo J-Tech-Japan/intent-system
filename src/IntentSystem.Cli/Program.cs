@@ -87,6 +87,19 @@ internal static class Program
                 return PacketValidateSourcesCommand.Execute(validationRoot, args[2..], Console.Out);
             }
 
+            // G870: explicit role briefs are a local render-only surface and
+            // remain available from metadata-free nested repository paths.
+            if (args.Length >= 2
+                && string.Equals(args[0], "brief", StringComparison.Ordinal)
+                && string.Equals(args[1], "render", StringComparison.Ordinal))
+            {
+                return BriefRenderCommand.Execute(args[2..], Console.Out, () =>
+                {
+                    var briefCwd = Directory.GetCurrentDirectory();
+                    return RepoRootResolver.Resolve(briefCwd) ?? briefCwd;
+                });
+            }
+
             // G855: unit status is a read-only historical observation. It
             // must not inherit CreateBootstrapContext's fallback domain when
             // invoked from a metadata-free child checkout, and remains behind

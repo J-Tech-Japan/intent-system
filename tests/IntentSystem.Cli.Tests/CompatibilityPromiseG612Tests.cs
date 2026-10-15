@@ -127,6 +127,29 @@ public sealed class CompatibilityPromiseG612Tests
     }
 
     [Theory]
+    [InlineData("en")]
+    [InlineData("ja")]
+    public void Ledger_RecordsG870ManifestOrderAndReviewerReadBoundary(string language)
+    {
+        var ledger = Read(language, "1.0-compatibility-ledger.md");
+        var row = Assert.Single(ledger.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            line => line.StartsWith("| deterministic role brief |", StringComparison.Ordinal));
+
+        if (language == "en")
+        {
+            Assert.Contains("Packet manifest rows keep fixed capture order; only ruling rows are sorted by path.", row, StringComparison.Ordinal);
+            Assert.Contains("Bounded sibling-name checks enforce exact allowed input names", row, StringComparison.Ordinal);
+            Assert.Contains("reviewer output does not open or stat `implementation.md`", row, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("packet row は固定 capture order、ruling row だけを path 順", row, StringComparison.Ordinal);
+            Assert.Contains("bounded sibling-name check", row, StringComparison.Ordinal);
+            Assert.Contains("reviewer は `implementation.md` を open/stat しない", row, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
     [InlineData("en", "all machine-emitted `cause` values", "Every `cause` value actually emitted")]
     [InlineData("ja", "machine-consumed JSON payload で実際に emit されるすべての `cause` value", "実際に emit されるすべての `cause` value")]
     public void PromiseAndLedger_CoverEveryMachineEmittedCauseValue_G612(

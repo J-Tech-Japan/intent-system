@@ -1047,6 +1047,179 @@ public sealed class ProgramTests
         }
     }
 
+    [Fact]
+    public void Main_BriefRenderHelpAndInvalidArgumentsAreHandledBeforeRootDiscovery()
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory();
+            var checkout = tempDirectory.CreateDirectory("empty-checkout");
+            var nested = tempDirectory.CreateDirectory(Path.Combine("empty-checkout", "src", "feature"));
+            var before = SnapshotTree(checkout);
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nested);
+
+            var helpExit = Program.Main(["brief", "render", "--help"]);
+
+            Assert.Equal(0, helpExit);
+            Assert.Contains("Usage: intent-cli brief render", console.Out.ToString(), StringComparison.Ordinal);
+            Assert.Equal(string.Empty, console.Error.ToString());
+            Assert.Equal(before, SnapshotTree(checkout));
+
+            console.Out.GetStringBuilder().Clear();
+            var invalidExit = Program.Main(["brief", "render", "--role", "builder", "--format", "markdown"]);
+
+            Assert.Equal(1, invalidExit);
+            using var refusal = JsonDocument.Parse(BriefStructuredJson(console.Out.ToString(), "markdown"));
+            Assert.Equal("brief-arguments-invalid", refusal.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(string.Empty, console.Error.ToString());
+            Assert.Equal(before, SnapshotTree(checkout));
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_BriefRenderUsesNestedMetadataFreeFreshCloneWithoutReachableOrigin(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var scratch = tempDirectory.CreateDirectory("scratch");
+            var bare = tempDirectory.CreateDirectory("brief-origin.git");
+            var writerRepo = tempDirectory.CreateDirectory(Path.Combine("repos", "writer"));
+            var clone = tempDirectory.CreateDirectory(Path.Combine("repos", "fresh-clone"));
+            RunGit(scratch, "init", "--bare", "--quiet", "--initial-branch=main", bare);
+            RunGit(writerRepo, "init", "--quiet", "--initial-branch=main");
+            RunGit(writerRepo, "config", "user.name", "intent-cli-g870-test");
+            RunGit(writerRepo, "config", "user.email", "intent-cli-g870@example.invalid");
+            RunGit(writerRepo, "remote", "add", "origin", bare);
+
+            const string rulingId = "R-G870-PROGRAM";
+            var recordedAt = new DateTimeOffset(2026, 10, 15, 11, 50, 0, TimeSpan.Zero);
+            var ruling = new RulingArtifact
+            {
+                Id = rulingId,
+                Domain = "intent-cli",
+                Team = "intent-cli-dev",
+                AuthorityRole = "operator",
+                TargetRepo = "J-Tech-Japan/intent-system",
+                ScopeKind = "execution-units",
+                ExecutionUnits = ["G870"],
+                Decision = "Keep the local brief deterministic.",
+                Rationale = "The pinned source is read locally.",
+                EvidenceRefs = ["https://github.com/J-Tech-Japan/intent-system/issues/1901"],
+                RecordedAt = recordedAt,
+                ExpiresAt = null,
+                Supersedes = [],
+            };
+            var rulingInput = Path.Combine(writerRepo, "ruling-input.json");
+            File.WriteAllBytes(rulingInput, RulingArtifact.Serialize(ruling));
+            var rulingContext = new CliContext
+            {
+                RepoRoot = writerRepo,
+                Config = new CliConfig { Project = new ProjectConfig { Domain = "intent-cli", ArtifactRoot = ".intent-cli" } },
+            };
+            using (var rulingOutput = new StringWriter())
+            {
+                var writeExit = RulingCommand.ExecuteRecord(rulingContext,
+                    ["--id", rulingId, "--domain", "intent-cli", "--team", "intent-cli-dev", "--from-file", rulingInput,
+                     "--authority-role", "operator", "--write", "--format", "json"],
+                    rulingOutput, beforeOperation: null, nowOverride: recordedAt);
+                Assert.Equal(0, writeExit);
+                using var writeResult = JsonDocument.Parse(rulingOutput.ToString());
+                Assert.True(writeResult.RootElement.GetProperty("wrote").GetBoolean());
+            }
+
+            var rulingRelative = $".intent-cli/rulings/intent-cli/intent-cli-dev/{rulingId}.json";
+            var rulingBytes = File.ReadAllBytes(Path.Combine(writerRepo, rulingRelative.Replace('/', Path.DirectorySeparatorChar)));
+            var rulingSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(rulingBytes)).ToLowerInvariant();
+            var packet = $$"""
+                implementation_issue_packet:
+                  domain: intent-cli
+                  team: intent-cli-dev
+                  target_repo: J-Tech-Japan/intent-system
+                  source_execution_unit: G870
+                  acceptance_criteria:
+                    - Render explicitly supplied sources.
+                scope_sources:
+                  - "ruling:{{rulingId}}"
+                scope_source_digests:
+                  "ruling:{{rulingId}}": "{{rulingSha}}"
+                """ + "\n";
+            var packetBytes = new UTF8Encoding(false).GetBytes(packet);
+            var asOf = recordedAt.AddMinutes(10);
+            var initialScope = PacketScopeSources.Evaluate(writerRepo, "G870", packetBytes,
+                Encoding.UTF8.GetBytes("# G870 local issue body\n"), asOf);
+            Assert.Equal("scope-sources-provenance-mismatch", initialScope.Cause);
+            Assert.NotNull(initialScope.ExpectedProvenanceBlock);
+            var body = "# G870 local issue body\n\n" + initialScope.ExpectedProvenanceBlock + "\n";
+            var packetDirectory = Path.Combine(writerRepo, ".intent-cli", "issues", "G870");
+            Directory.CreateDirectory(packetDirectory);
+            File.WriteAllBytes(Path.Combine(packetDirectory, "packet.yaml"), packetBytes);
+            File.WriteAllText(Path.Combine(packetDirectory, "github-body.md"), body, new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(packetDirectory, "review-context.md"), "G870 source review context.\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(writerRepo, "README.md"), "G870 brief fresh-clone fixture\n", new UTF8Encoding(false));
+            RunGit(writerRepo, "add", "--", ".intent-cli/issues/G870/packet.yaml", ".intent-cli/issues/G870/github-body.md",
+                ".intent-cli/issues/G870/review-context.md", ".intent-cli/rulings/intent-cli/intent-cli-dev/" + rulingId + ".json", "README.md");
+            RunGit(writerRepo, "commit", "--quiet", "-m", "publish G870 brief source fixture");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+            RunGit(scratch, "clone", "--quiet", bare, clone);
+            Assert.False(File.Exists(Path.Combine(clone, ".intent-cli", "config.toml")));
+            RunGit(clone, "remote", "set-url", "origin", Path.Combine(scratch, "unreachable-origin.git"));
+            var nested = Directory.CreateDirectory(Path.Combine(clone, "src", "feature")).FullName;
+            var before = SnapshotTree(clone);
+            var indexBefore = File.ReadAllBytes(Path.Combine(clone, ".git", "index"));
+            var headBefore = RunGit(clone, "rev-parse", "HEAD");
+            var refsBefore = RunGit(clone, "show-ref", "--head");
+            var remoteRefsBefore = RunGit(bare, "show-ref", "--head");
+            var commandArgs = new[]
+            {
+                "brief", "render", "--role", "reviewer", "--execution-unit", "G870", "--domain", "intent-cli",
+                "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
+                "--head-sha", "0123456789abcdef0123456789abcdef01234567", "--as-of", "2026-10-15T12:00:00Z",
+                "--format", format,
+            };
+
+            using var console = new ConsoleScope();
+            using var currentDirectory = new CurrentDirectoryScope(nested);
+            var exit = Program.Main(commandArgs);
+
+            Assert.Equal(0, exit);
+            using var result = JsonDocument.Parse(BriefStructuredJson(console.Out.ToString(), format));
+            Assert.Equal("rendered", result.RootElement.GetProperty("state").GetString());
+            Assert.Equal("satisfied", result.RootElement.GetProperty("scope_sources").GetProperty("state").GetString());
+            var rulingRow = Assert.Single(result.RootElement.GetProperty("manifest").EnumerateArray(),
+                row => row.GetProperty("kind").GetString() == "ruling");
+            Assert.Equal(rulingRelative.Replace('\\', '/'), rulingRow.GetProperty("path").GetString());
+            Assert.Equal(rulingSha, rulingRow.GetProperty("sha256").GetString());
+            Assert.DoesNotContain(clone, console.Out.ToString(), StringComparison.Ordinal);
+            Assert.Equal(before, SnapshotTree(clone));
+            Assert.Equal(indexBefore, File.ReadAllBytes(Path.Combine(clone, ".git", "index")));
+            Assert.Equal(headBefore, RunGit(clone, "rev-parse", "HEAD"));
+            Assert.Equal(refsBefore, RunGit(clone, "show-ref", "--head"));
+            Assert.Equal(remoteRefsBefore, RunGit(bare, "show-ref", "--head"));
+        }
+    }
+
+    private static string BriefStructuredJson(string output, string format)
+    {
+        if (format == "json") return output;
+        var normalized = output.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var marker = normalized.IndexOf("## Structured result (same facts as JSON)", StringComparison.Ordinal);
+        if (marker < 0)
+        {
+            marker = normalized.IndexOf("```json", StringComparison.Ordinal);
+            Assert.True(marker >= 0, output);
+        }
+        var opening = normalized.IndexOf("```json", marker, StringComparison.Ordinal);
+        Assert.True(opening >= 0, output);
+        var start = normalized.IndexOf('\n', opening) + 1;
+        var end = normalized.IndexOf("\n```", start, StringComparison.Ordinal);
+        Assert.True(end > start, output);
+        return normalized[start..end];
+    }
+
     private static string[] EvidenceReadArgs(string operation, string format) =>
     ["verification", "evidence", operation, "E1", "--execution-unit", "G866",
      "--domain", "intent-cli", "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
