@@ -1294,6 +1294,11 @@ The fixed role instructions do not grant authority or execute commands.
 Optional `--out` is create-only, requires an existing safe parent, and refuses
 existing/source paths; no directories or other files are written. Output is
 bounded to 16 MiB.
+If a write or flush fails after creation, the command returns
+`brief-output-cleanup-incomplete`; cleanup was not attempted, so a partial file
+or foreign replacement may remain. The command makes no claim that it deleted
+the file or that publication succeeded. A retry to the same output path is
+refused as existing; inspect any residual separately.
 
 Review rendered files before sharing: they contain authored packet and ruling
 text, and may include names or other sensitive information. The command does
