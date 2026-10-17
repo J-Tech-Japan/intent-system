@@ -1202,6 +1202,207 @@ public sealed class ProgramTests
         }
     }
 
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void Main_BriefRenderReadsOnlyThePushedRegistryFromMetadataFreeOfflineFreshClone(string format)
+    {
+        lock (ProcessStateLock)
+        {
+            using var tempDirectory = new TemporaryDirectory(OperatingSystem.IsMacOS() ? "/private/tmp" : null);
+            var scratch = tempDirectory.CreateDirectory("scratch");
+            var bare = tempDirectory.CreateDirectory("brief-lessons-origin.git");
+            var writerRepo = tempDirectory.CreateDirectory(Path.Combine("repos", "writer"));
+            var beforePushClone = tempDirectory.CreateDirectory(Path.Combine("repos", "before-registry-push"));
+            var afterPushClone = tempDirectory.CreateDirectory(Path.Combine("repos", "after-registry-push"));
+            RunGit(scratch, "init", "--bare", "--quiet", "--initial-branch=main", bare);
+            RunGit(writerRepo, "init", "--quiet", "--initial-branch=main");
+            RunGit(writerRepo, "config", "user.name", "intent-cli-g871-test");
+            RunGit(writerRepo, "config", "user.email", "intent-cli-g871@example.invalid");
+            RunGit(writerRepo, "remote", "add", "origin", bare);
+
+            const string rulingId = "R-G871-PROGRAM";
+            const string registryId = "review_lessons";
+            const string unit = "G871";
+            const string domain = "intent-cli";
+            const string team = "intent-cli-dev";
+            const string repo = "J-Tech-Japan/intent-system";
+            var recordedAt = new DateTimeOffset(2026, 10, 16, 10, 0, 0, TimeSpan.Zero);
+            var ruling = new RulingArtifact
+            {
+                Id = rulingId,
+                Domain = domain,
+                Team = team,
+                AuthorityRole = "operator",
+                TargetRepo = repo,
+                ScopeKind = "execution-units",
+                ExecutionUnits = [unit],
+                Decision = "Keep the locally selected lesson explicit.",
+                Rationale = "The captured registry is a caller-pinned local source.",
+                EvidenceRefs = ["https://github.com/J-Tech-Japan/intent-system/issues/1901"],
+                RecordedAt = recordedAt,
+                ExpiresAt = null,
+                Supersedes = [],
+            };
+            var rulingInput = Path.Combine(writerRepo, "ruling-input.json");
+            File.WriteAllBytes(rulingInput, RulingArtifact.Serialize(ruling));
+            var rulingContext = new CliContext
+            {
+                RepoRoot = writerRepo,
+                Config = new CliConfig { Project = new ProjectConfig { Domain = domain, ArtifactRoot = ".intent-cli" } },
+            };
+            using (var rulingOutput = new StringWriter())
+            {
+                var writeExit = RulingCommand.ExecuteRecord(rulingContext,
+                    ["--id", rulingId, "--domain", domain, "--team", team, "--from-file", rulingInput,
+                     "--authority-role", "operator", "--write", "--format", "json"],
+                    rulingOutput, beforeOperation: null, nowOverride: recordedAt);
+                Assert.Equal(0, writeExit);
+                using var writeResult = JsonDocument.Parse(rulingOutput.ToString());
+                Assert.True(writeResult.RootElement.GetProperty("wrote").GetBoolean());
+            }
+
+            var rulingPath = $".intent-cli/rulings/{domain}/{team}/{rulingId}.json";
+            var rulingBytes = File.ReadAllBytes(Path.Combine(writerRepo, rulingPath.Replace('/', Path.DirectorySeparatorChar)));
+            var rulingSha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(rulingBytes)).ToLowerInvariant();
+            var packet = $$"""
+                implementation_issue_packet:
+                  domain: {{domain}}
+                  team: {{team}}
+                  target_repo: {{repo}}
+                  source_execution_unit: {{unit}}
+                  acceptance_criteria:
+                    - Render only the explicitly selected lesson.
+                scope_sources: ["ruling:{{rulingId}}"]
+                scope_source_digests:
+                  "ruling:{{rulingId}}": "{{rulingSha}}"
+                """ + "\n";
+            var packetBytes = new UTF8Encoding(false).GetBytes(packet);
+            var asOf = recordedAt.AddMinutes(10);
+            var firstScope = PacketScopeSources.Evaluate(writerRepo, unit, packetBytes,
+                Encoding.UTF8.GetBytes("# G871 local body\n"), asOf);
+            Assert.Equal("scope-sources-provenance-mismatch", firstScope.Cause);
+            Assert.NotNull(firstScope.ExpectedProvenanceBlock);
+            var body = "# G871 local body\n\n" + firstScope.ExpectedProvenanceBlock + "\n";
+            var packetDirectory = Path.Combine(writerRepo, ".intent-cli", "issues", unit);
+            Directory.CreateDirectory(packetDirectory);
+            File.WriteAllBytes(Path.Combine(packetDirectory, "packet.yaml"), packetBytes);
+            File.WriteAllText(Path.Combine(packetDirectory, "github-body.md"), body, new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(packetDirectory, "review-context.md"), "G871 local review context.\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(writerRepo, "README.md"), "G871 brief lessons clone fixture\n", new UTF8Encoding(false));
+            RunGit(writerRepo, "add", "--", ".intent-cli/issues/G871/packet.yaml", ".intent-cli/issues/G871/github-body.md",
+                ".intent-cli/issues/G871/review-context.md", rulingPath, "README.md");
+            RunGit(writerRepo, "commit", "--quiet", "-m", "publish G871 packet and pinned ruling");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+
+            RunGit(scratch, "clone", "--quiet", bare, beforePushClone);
+            Assert.False(File.Exists(Path.Combine(beforePushClone, ".intent-cli", "config.toml")));
+            RunGit(beforePushClone, "remote", "set-url", "origin", Path.Combine(scratch, "unreachable-before.git"));
+            var beforeNested = Directory.CreateDirectory(Path.Combine(beforePushClone, "src", "feature")).FullName;
+            var beforeSnapshot = SnapshotTree(beforePushClone);
+            var beforeIndex = File.ReadAllBytes(Path.Combine(beforePushClone, ".git", "index"));
+            var beforeHead = RunGit(beforePushClone, "rev-parse", "HEAD");
+            var beforeRefs = RunGit(beforePushClone, "show-ref", "--head");
+            using (var console = new ConsoleScope())
+            using (var currentDirectory = new CurrentDirectoryScope(beforeNested))
+            {
+                var exit = Program.Main(G871BriefArgs(format, G871Hash(Encoding.UTF8.GetBytes(G871ProgramRegistry()))));
+                Assert.Equal(1, exit);
+                using var refusal = JsonDocument.Parse(BriefStructuredJson(console.Out.ToString(), format));
+                Assert.Equal("brief-lessons-unavailable", refusal.RootElement.GetProperty("cause").GetString());
+                Assert.Equal(".intent-cli/lessons/review_lessons.json",
+                    refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("path").GetString());
+                Assert.False(refusal.RootElement.TryGetProperty("manifest", out _));
+                Assert.False(Directory.Exists(Path.Combine(beforePushClone, "brief-output")));
+                Assert.Equal(string.Empty, console.Error.ToString());
+            }
+            Assert.Equal(beforeSnapshot, SnapshotTree(beforePushClone));
+            Assert.Equal(beforeIndex, File.ReadAllBytes(Path.Combine(beforePushClone, ".git", "index")));
+            Assert.Equal(beforeHead, RunGit(beforePushClone, "rev-parse", "HEAD"));
+            Assert.Equal(beforeRefs, RunGit(beforePushClone, "show-ref", "--head"));
+
+            var registryBytes = Encoding.UTF8.GetBytes(G871ProgramRegistry());
+            var registryPath = Path.Combine(writerRepo, ".intent-cli", "lessons", registryId + ".json");
+            Directory.CreateDirectory(Path.GetDirectoryName(registryPath)!);
+            File.WriteAllBytes(registryPath, registryBytes);
+            RunGit(writerRepo, "add", "--", ".intent-cli/lessons/review_lessons.json");
+            RunGit(writerRepo, "commit", "--quiet", "-m", "publish G871 lessons registry");
+            RunGit(writerRepo, "push", "--quiet", "origin", "HEAD:main");
+
+            RunGit(scratch, "clone", "--quiet", bare, afterPushClone);
+            Assert.False(File.Exists(Path.Combine(afterPushClone, ".intent-cli", "config.toml")));
+            RunGit(afterPushClone, "remote", "set-url", "origin", Path.Combine(scratch, "unreachable-after.git"));
+            var afterNested = Directory.CreateDirectory(Path.Combine(afterPushClone, "src", "feature")).FullName;
+            var afterSnapshot = SnapshotTree(afterPushClone);
+            var afterIndex = File.ReadAllBytes(Path.Combine(afterPushClone, ".git", "index"));
+            var afterHead = RunGit(afterPushClone, "rev-parse", "HEAD");
+            var afterRefs = RunGit(afterPushClone, "show-ref", "--head");
+            var remoteRefs = RunGit(bare, "show-ref", "--head");
+            using (var console = new ConsoleScope())
+            using (var currentDirectory = new CurrentDirectoryScope(afterNested))
+            {
+                var exit = Program.Main(G871BriefArgs(format, G871Hash(registryBytes)));
+                Assert.Equal(0, exit);
+                using var success = JsonDocument.Parse(BriefStructuredJson(console.Out.ToString(), format));
+                var result = success.RootElement;
+                Assert.Equal("rendered", result.GetProperty("state").GetString());
+                Assert.Equal("satisfied", result.GetProperty("scope_sources").GetProperty("state").GetString());
+                Assert.Equal("selected", result.GetProperty("lessons_state").GetString());
+                Assert.Equal(new[] { "L-ADVISORY" }, result.GetProperty("lessons").GetProperty("selected_ids")
+                    .EnumerateArray().Select(item => item.GetString()).ToArray());
+                Assert.Contains(result.GetProperty("manifest").EnumerateArray(), row =>
+                    row.GetProperty("kind").GetString() == "lessons-registry"
+                    && row.GetProperty("path").GetString() == ".intent-cli/lessons/review_lessons.json"
+                    && row.GetProperty("sha256").GetString() == G871Hash(registryBytes));
+                Assert.DoesNotContain(afterPushClone, console.Out.ToString(), StringComparison.Ordinal);
+                Assert.Equal(string.Empty, console.Error.ToString());
+            }
+            Assert.Equal(afterSnapshot, SnapshotTree(afterPushClone));
+            Assert.Equal(afterIndex, File.ReadAllBytes(Path.Combine(afterPushClone, ".git", "index")));
+            Assert.Equal(afterHead, RunGit(afterPushClone, "rev-parse", "HEAD"));
+            Assert.Equal(afterRefs, RunGit(afterPushClone, "show-ref", "--head"));
+            Assert.Equal(remoteRefs, RunGit(bare, "show-ref", "--head"));
+        }
+    }
+
+    private static string[] G871BriefArgs(string format, string registrySha) =>
+    [
+        "brief", "render", "--role", "reviewer", "--execution-unit", "G871", "--domain", "intent-cli",
+        "--team", "intent-cli-dev", "--repo", "J-Tech-Japan/intent-system",
+        "--head-sha", "0123456789abcdef0123456789abcdef01234567", "--as-of", "2026-10-16T10:10:00Z",
+        "--format", format, "--lessons-registry", "review_lessons", "--lessons-sha256", registrySha,
+        "--lesson", "L-ADVISORY",
+    ];
+
+    private static string G871Hash(byte[] bytes) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static string G871ProgramRegistry() => """
+        {
+          "schema_version": 1,
+          "registry_id": "review_lessons",
+          "lessons": [{
+            "id": "L-ADVISORY",
+            "source": "The pinned local source supports this advisory.",
+            "applies_to": {
+              "roles": ["reviewer"],
+              "target_repo": "J-Tech-Japan/intent-system",
+              "domain": "intent-cli",
+              "team": "intent-cli-dev",
+              "execution_units": ["G871"]
+            },
+            "rule": "Render only this exact row.",
+            "enforced_by": [],
+            "lifecycle": {
+              "state": "active",
+              "active_from": "2026-10-01T00:00:00Z",
+              "expires_at": null,
+              "superseded_by": null
+            }
+          }]
+        }
+        """;
+
     private static string BriefStructuredJson(string output, string format)
     {
         if (format == "json") return output;

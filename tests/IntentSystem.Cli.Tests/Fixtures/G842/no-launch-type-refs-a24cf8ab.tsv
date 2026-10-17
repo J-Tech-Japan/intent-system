@@ -322,7 +322,7 @@ src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs	ProcessOutputEn
 src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs	ShellGitRunner	3
 src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs	WorkspaceGuardResult	18
 src/IntentSystem.Cli/Commands/AutomationWorkspaceGuardCommand.cs	WorkspaceGuardState	7
-src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	Options	3
+src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	Options	4
 src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	RulingArtifact	3
 src/IntentSystem.Cli/Commands/BugImplementationIssueCommand.cs	BugImplementationIssueCommand	1
 src/IntentSystem.Cli/Commands/BugImplementationIssueCommand.cs	GhQueueDispatchPublisher	1
@@ -801,6 +801,7 @@ src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	IssueSyncBodyCommand	2
 src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	IssueSyncBodyResult	9
 src/IntentSystem.Cli/Commands/IssueSyncBodyCommand.cs	ProcessOutputEncoding	2
 src/IntentSystem.Cli/Commands/KnowledgeWriteBackRecord.cs	Targets	3
+src/IntentSystem.Cli/Commands/LessonsRegistry.cs	RulingArtifact	3
 src/IntentSystem.Cli/Commands/MetadataUpdateCommand.cs	MetadataUpdateCommand	1
 src/IntentSystem.Cli/Commands/MetadataUpdateCommand.cs	MetadataValidateAnalyzer	2
 src/IntentSystem.Cli/Commands/MetadataUpdateCommand.cs	MetadataValidateInputs	3

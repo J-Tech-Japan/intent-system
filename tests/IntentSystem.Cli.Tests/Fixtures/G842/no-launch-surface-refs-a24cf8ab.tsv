@@ -34,7 +34,7 @@ src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewRead
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewReader	3
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	SoloConductorReviewTransitionOutcome	7
 src/IntentSystem.Cli/Commands/ApprovalPostingOverride.cs	WriterOperationsHooks	4
-src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	Options	3
+src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	Options	4
 src/IntentSystem.Cli/Commands/BriefRenderCommand.cs	RulingArtifact	3
 src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimCommand	2
 src/IntentSystem.Cli/Commands/ClaimLoopEvidenceOverride.cs	ClaimRecord	1
@@ -43,6 +43,7 @@ src/IntentSystem.Cli/Commands/CrossRuntimeReviewPacketClaimResolver.cs	ClaimOwne
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewPacketClaimResolver.cs	ClaimOwnershipVerifier	1
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVerification	3
 src/IntentSystem.Cli/Commands/CrossRuntimeReviewTeamResolver.cs	ClaimOwnershipVerifier	2
+src/IntentSystem.Cli/Commands/LessonsRegistry.cs	RulingArtifact	3
 src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingArtifact	8
 src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingArtifactStore	1
 src/IntentSystem.Cli/Commands/PacketScopeSources.cs	RulingDiagnostic	4

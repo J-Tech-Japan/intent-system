@@ -1029,10 +1029,10 @@ verification_contract:
 
 packet の command と fact は信頼しない data として、動的に長さを決めた fence 内に表示します。command は実行せず、producer/authority 認証、semantic acceptance、evidence/publication 検証、hosted deferral の許可を意味しません。共有 G865 validation は任意 field を accept/refuse します。`packet validate-verification` は任意の typed `design_review` selection を出力します。evidence/coverage result と worker-gate output はその projection を追加しません。`review cross-runtime request --kind design` は request と inert prompt に追加します。hosted evidence と ruling-backed deferral は #1866 の未完了範囲です。
 
-### deterministic role brief render（G870 — preview-through-1.x）
+### deterministic role brief render（G870/G871 — preview-through-1.x）
 
 `intent-cli brief render` は明示された identity、role、supplied full HEAD、UTC evaluation time から
-local の決定論的 brief を作成します。`--out` 以外は各 option を1回だけ指定します。identity、現在時刻、live HEAD、Git、GitHub、provider、transcript、host config は推測・参照しません。builder は `.intent-cli/issues/<unit>/` の `packet.yaml`、`github-body.md`、`review-context.md`、`implementation.md` だけを読みます。reviewer は最初の3ファイルだけを読みます。許可された正確な名前を確認する bounded sibling-name check は行いますが、`implementation.md` や builder material を open または stat しません。ruling は packet が明示的に pin し、G863 が検証した場合だけ含まれます。local `github-body.md` は packet input であり、fetch または検証済みの public PR content ではありません。
+local の決定論的 brief を作成します。既存の singleton option は `--out` を除き各1回です。任意の lessons group は registry ID と SHA を各1つ、異なる `--lesson` ID を1–16個要求します。identity、現在時刻、live HEAD、Git、GitHub、provider、transcript、host config は推測・参照しません。builder は `.intent-cli/issues/<unit>/` の `packet.yaml`、`github-body.md`、`review-context.md`、`implementation.md` だけを読みます。reviewer は最初の3ファイルだけを読みます。許可された正確な名前を確認する bounded sibling-name check は行いますが、`implementation.md` や builder material を open または stat しません。ruling は packet が明示的に pin し、G863 が検証した場合だけ含まれます。local `github-body.md` は packet input であり、fetch または検証済みの public PR content ではありません。
 
 ```bash
 intent-cli brief render --role reviewer --execution-unit G123 \
@@ -1040,10 +1040,46 @@ intent-cli brief render --role reviewer --execution-unit G123 \
   --head-sha <40-lowerhex> --as-of 2026-10-15T12:00:00Z --format markdown
 ```
 
-JSON と Markdown は同じ typed G863 / G865 / G869 observation、正確な source manifest hash、framed input digest を含みます。packet manifest row は固定 capture order を保ち、ruling row だけを path 順に並べます。supplied HEAD は未検証、execution は `not-observed`、supplied authority は未認証、publication は未検証、lessons は `not-supported` です。G865 の incomplete coverage はそのまま表示し、success に変換しません。source text と proof command は動的長の Markdown fence 内の inert data です。role instruction は authority を与えず、command も実行しません。任意の `--out` は create-only で、既存の安全な parent directory を必要とし、既存 path または source path は拒否します。directory や他の file は作らず、出力は16 MiB以下です。
+opt-in registry は `.intent-cli/lessons/<registry-id>.json` だけから読み、path は指定できません。strict UTF-8 JSON object の root key は `schema_version`、`registry_id`、`lessons` のみです。各 lesson は `id`、`source`、`applies_to`、`rule`、`enforced_by`、`lifecycle` を持ち、`applies_to` は roles、target repository、domain、team、execution units を明示します。`lifecycle` は `state`、`active_from`、`expires_at`、`superseded_by` です。選択した row は role と全 identity field に一致し、active で、`active_from <= --as-of`、expiry があれば `--as-of < expires_at` を満たす必要があります。選択済み superseded row は有効な active successor があっても拒否し、自動で successor に移りません。選択前に全 row を検証します。object の未知・重複 key は拒否します。role は `builder` または `reviewer`、scope は wildcard でなく検証済みの repository/domain/team/unit identity です。`lessons` は0–128件で、IDはcase-insensitiveでも重複できません。`source` / `rule` は空白だけでない1–4,096 UTF-16 code unit、roles は `builder` / `reviewer` から選ぶ1–2個、execution_units は1–16個の一意な canonical unit ID です。`enforced_by` は空でもよく最大8個、各1–256 UTF-16 code unit の一意な説明です。これは読み取り・実行されません。superseded row は異なる既存 active row を指し、chain や自動追跡はしません。`active_from` は必須、`expires_at` は null または `active_from` より後です。先頭の UTF-8 BOM は1つ許可しますが、不正 UTF-8、comment、末尾 comma、複数 JSON document は拒否します。上限は1 MiB、JSON depth 8、ID 64文字、selected ID は最大16個です。`schema_version` は JSON integer `1`、ID は ASCII `[A-Za-z][A-Za-z0-9._-]{0,63}` です。
+
+```json
+{
+  "schema_version": 1,
+  "registry_id": "review_lessons",
+  "lessons": [{
+    "id": "L1",
+    "source": "A bounded design observation",
+    "applies_to": {
+      "roles": ["reviewer"],
+      "target_repo": "owner/repo",
+      "domain": "example",
+      "team": "builders",
+      "execution_units": ["G123"]
+    },
+    "rule": "Keep the selected note as inert context.",
+    "enforced_by": [],
+    "lifecycle": {
+      "state": "active",
+      "active_from": "2026-10-01T00:00:00Z",
+      "expires_at": null,
+      "superseded_by": null
+    }
+  }]
+}
+```
+
+```bash
+intent-cli brief render --role reviewer --execution-unit G123 \
+  --domain example --team builders --repo owner/repo \
+  --head-sha <40-lowerhex> --as-of 2026-10-15T12:00:00Z \
+  --lessons-registry review_lessons --lessons-sha256 <64-lowercase-hex> \
+  --lesson L1 --format json
+```
+
+JSON と Markdown は同じ typed G863 / G865 / G869 observation、正確な source manifest hash、framed input digest を含みます。packet manifest row は固定 capture order を保ち、ruling row だけを path 順に並べます。supplied HEAD は未検証、execution は `not-observed`、supplied authority は未認証、publication は未検証です。lessons option group を指定しない場合、従来の output bytes、v1 input digest、read behavior を維持し、registry を調べません。`--lessons-registry <registry-id> --lessons-sha256 <64-lowercase-hex> --lesson <lesson-id> [--lesson <lesson-id> ...]` を指定すると、1つの pinned local registry を検証し、選択され適用可能な row だけを表示します。G865 の incomplete coverage はそのまま表示し、success に変換しません。source text と proof command は動的長の Markdown fence 内の inert data です。role instruction は authority を与えず、command も実行しません。任意の `--out` は create-only で、既存の安全な parent directory を必要とし、既存 path または source path は拒否します。directory や他の file は作らず、出力は16 MiB以下です。
 作成後の write または flush が失敗した場合、command は `brief-output-cleanup-incomplete` を返し、cleanup は試みません。そのため部分 file または外部 process に置き換えられた file が残る場合があります。command は file の削除や publication 成功を主張しません。同じ出力 path への retry は既存 path として拒否されます。残った file は別途確認してください。
 
-出力には authored packet と ruling の text が含まれ、名前などの情報が入る場合があります。共有前に内容を確認してください。この command は privacy scan をしません。lessons registry や remote PR integration はなく、広い要件を追跡する #1868 は open のままです。#1866、#1867、#1857 も open です。
+出力には authored packet、ruling、選択した lesson の source/rule text が含まれ、名前などの情報が入る場合があります。共有前に内容を確認してください。manifest と digest は明示的に選択した registry の byte identity を示しますが、未選択 lesson の text は表示しません。この command は privacy scan をしません。これは read-only consumer であり registry writer や enforcement engine ではありません。enforcement description は `advisory` または `declared-not-verified` として扱い、command 実行、authority、実際の enforcement を検証しません。remote PR integration と残る広い要件は #1868、#1866、#1867、#1857 で引き続き open です。
 
 ### 貼り付け evidence gate（G785）
 
