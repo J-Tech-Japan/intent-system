@@ -31,6 +31,9 @@
     <EmbeddedResource Include="Fixtures/G869/no-marker-base-goldens.json">
       <LogicalName>g869-no-marker-base-goldens.json</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="Fixtures/G871/no-marker-base-goldens.json">
+      <LogicalName>g871-no-marker-base-goldens.json</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

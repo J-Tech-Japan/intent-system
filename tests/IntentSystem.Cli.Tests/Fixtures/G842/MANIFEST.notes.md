@@ -94,3 +94,4 @@
 ## G866 local TRX evidence surface pins
 
 - G866 adds only the measured `DllImport` interop count for the bounded native create-only filesystem operations in `VerificationEvidenceArtifact.cs`. The declaration, type-reference, and surface-reference tables pin exact whole-identifier counts for its artifact types and the new source files; no guard logic or base capture was changed.
+- G871 adds only measured whole-identifier references for `BriefRenderCommand.cs`'s `Options` and `RulingArtifact` use and `LessonsRegistry.cs`'s `RulingArtifact` use. Existing guard logic, allowlists, base captures, and unrelated inventory rows are unchanged.

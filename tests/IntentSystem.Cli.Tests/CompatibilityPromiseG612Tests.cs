@@ -129,7 +129,7 @@ public sealed class CompatibilityPromiseG612Tests
     [Theory]
     [InlineData("en")]
     [InlineData("ja")]
-    public void Ledger_RecordsG870ManifestOrderAndReviewerReadBoundary(string language)
+    public void Ledger_RecordsG870G871ManifestOrderAndLessonCompatibility(string language)
     {
         var ledger = Read(language, "1.0-compatibility-ledger.md");
         var commandReference = Read(language, "08-command-reference.md");
@@ -141,12 +141,24 @@ public sealed class CompatibilityPromiseG612Tests
             Assert.Contains("Packet manifest rows keep fixed capture order; only ruling rows are sorted by path.", row, StringComparison.Ordinal);
             Assert.Contains("Bounded sibling-name checks enforce exact allowed input names", row, StringComparison.Ordinal);
             Assert.Contains("reviewer output does not open or stat `implementation.md`", row, StringComparison.Ordinal);
+            Assert.Contains("--lessons-registry", row, StringComparison.Ordinal);
+            Assert.Contains("--lessons-sha256", row, StringComparison.Ordinal);
+            Assert.Contains("repeated `--lesson`", row, StringComparison.Ordinal);
+            Assert.Contains("prior output bytes, v1 digest, and read behavior remain unchanged", row, StringComparison.Ordinal);
+            Assert.Contains("not a registry writer or enforcement engine", row, StringComparison.Ordinal);
+            Assert.DoesNotContain("lessons are unsupported", row, StringComparison.Ordinal);
         }
         else
         {
             Assert.Contains("packet row は固定 capture order、ruling row だけを path 順", row, StringComparison.Ordinal);
             Assert.Contains("bounded sibling-name check", row, StringComparison.Ordinal);
             Assert.Contains("reviewer は `implementation.md` を open/stat しない", row, StringComparison.Ordinal);
+            Assert.Contains("--lessons-registry", row, StringComparison.Ordinal);
+            Assert.Contains("--lessons-sha256", row, StringComparison.Ordinal);
+            Assert.Contains("複数 `--lesson`", row, StringComparison.Ordinal);
+            Assert.Contains("従来の output bytes、v1 digest、read behavior を保ち", row, StringComparison.Ordinal);
+            Assert.Contains("registry writer や enforcement engine ではない", row, StringComparison.Ordinal);
+            Assert.DoesNotContain("lessons は未対応", row, StringComparison.Ordinal);
         }
 
         var normalizedReference = string.Join(' ', commandReference.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
@@ -171,6 +183,41 @@ public sealed class CompatibilityPromiseG612Tests
                 Assert.Contains("同じ出力 path", document, StringComparison.Ordinal);
                 Assert.Contains("残った file は別途確認してください", document, StringComparison.Ordinal);
             }
+        }
+
+        if (language == "en")
+        {
+            Assert.Contains("`.intent-cli/lessons/<registry-id>.json`", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("`active_from <= --as-of`", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("superseded row is refused", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("1 MiB", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("`lessons` has 0–128 rows", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("1–16 distinct repeated `--lesson` IDs", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("--lesson L1", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("is the JSON integer `1`", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("[A-Za-z][A-Za-z0-9._-]{0,63}", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("unknown and duplicate properties", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("source` and `rule` are non-whitespace strings of 1–4,096 UTF-16 units", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("one initial UTF-8 BOM", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("\"schema_version\": 1", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("Without that group, prior output bytes, v1 digest, and read behavior remain unchanged", normalizedLedger, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("`.intent-cli/lessons/<registry-id>.json`", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("`active_from <= --as-of`", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("有効な active successor があっても拒否し", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("1 MiB", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("lessons` は0–128件", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("selected ID は最大16個", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("--lesson L1", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("JSON integer `1`", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("[A-Za-z][A-Za-z0-9._-]{0,63}", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("object の未知・重複 key は拒否", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("source` / `rule` は空白だけでない1–4,096 UTF-16 code unit", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("先頭の UTF-8 BOM は1つ許可", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("\"schema_version\": 1", normalizedReference, StringComparison.Ordinal);
+            Assert.Contains("group を省略すると従来の output bytes、v1 digest、read behavior を保ち", normalizedLedger, StringComparison.Ordinal);
         }
     }
 

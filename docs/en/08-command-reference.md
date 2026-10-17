@@ -1263,11 +1263,13 @@ do not add that projection; `review cross-runtime request --kind design` adds
 it to the request and inert prompt. Hosted evidence and ruling-backed deferral
 remain open under #1866.
 
-### Deterministic role brief render (G870 — preview-through-1.x)
+### Deterministic role brief render (G870/G871 — preview-through-1.x)
 
 `intent-cli brief render` builds a local, deterministic brief from explicit
-identity, role, full supplied HEAD, and UTC evaluation time. Every option except
-`--out` occurs once. It has no default identity, current time, live HEAD, Git,
+identity, role, full supplied HEAD, and UTC evaluation time. Existing singleton
+options occur once except `--out`; the optional lessons group requires one
+registry ID, one SHA, and 1–16 distinct repeated `--lesson` IDs. It has no
+default identity, current time, live HEAD, Git,
 GitHub, provider, transcript, or host-config lookup. The builder reads exactly
 `packet.yaml`, `github-body.md`, `review-context.md`, and `implementation.md`
 under `.intent-cli/issues/<unit>`; the reviewer reads only the first three.
@@ -1283,12 +1285,77 @@ intent-cli brief render --role reviewer --execution-unit G123 \
   --head-sha <40-lowerhex> --as-of 2026-10-15T12:00:00Z --format markdown
 ```
 
+The opt-in registry is read only from
+`.intent-cli/lessons/<registry-id>.json`; a caller cannot supply a path. Its
+strict UTF-8 JSON object has exactly `schema_version`, `registry_id`, and
+`lessons`. Each lesson has exactly `id`, `source`, `applies_to`, `rule`,
+`enforced_by`, and `lifecycle`; `applies_to` names roles, target repository,
+domain, team, and execution units. `lifecycle` carries `state`, `active_from`,
+`expires_at`, and `superseded_by`. A selected row must match the explicit role
+and all supplied identity fields, be active, and satisfy `active_from <= --as-of`
+and `--as-of < expires_at` when an expiry exists. A selected superseded row is
+refused even when it names a valid active successor; successors are never
+followed automatically. All registry rows are validated before selection.
+Objects reject unknown and duplicate properties. Roles are `builder` or
+`reviewer`; scope uses exact validated repository/domain/team/unit identifiers,
+not wildcards. `lessons` has 0–128 rows; row IDs are unique even under
+case-insensitive comparison. `source` and `rule` are non-whitespace strings of
+1–4,096 UTF-16 units. `roles` has 1–2 unique values from `builder` and
+`reviewer`; `execution_units` has 1–16 unique canonical unit IDs.
+`enforced_by` has 0–8 unique non-whitespace descriptions, each 1–256 UTF-16
+units, and is never read or executed. A superseded row must name a different
+existing active row; chains and automatic following are refused. `active_from`
+is required; `expires_at` is null or later than `active_from`. The input accepts
+one initial UTF-8 BOM, but rejects malformed UTF-8, comments, trailing commas,
+and extra JSON documents. Bounds are 1 MiB and JSON depth 8, in addition to the
+row/string limits above. `schema_version` is the JSON integer `1`; IDs are ASCII
+`[A-Za-z][A-Za-z0-9._-]{0,63}`.
+
+```json
+{
+  "schema_version": 1,
+  "registry_id": "review_lessons",
+  "lessons": [{
+    "id": "L1",
+    "source": "A bounded design observation",
+    "applies_to": {
+      "roles": ["reviewer"],
+      "target_repo": "owner/repo",
+      "domain": "example",
+      "team": "builders",
+      "execution_units": ["G123"]
+    },
+    "rule": "Keep the selected note as inert context.",
+    "enforced_by": [],
+    "lifecycle": {
+      "state": "active",
+      "active_from": "2026-10-01T00:00:00Z",
+      "expires_at": null,
+      "superseded_by": null
+    }
+  }]
+}
+```
+
+```bash
+intent-cli brief render --role reviewer --execution-unit G123 \
+  --domain example --team builders --repo owner/repo \
+  --head-sha <40-lowerhex> --as-of 2026-10-15T12:00:00Z \
+  --lessons-registry review_lessons --lessons-sha256 <64-lowercase-hex> \
+  --lesson L1 --format json
+```
+
 JSON and Markdown carry the same typed G863 and G865/G869 observations, exact
 source manifest hashes, and a framed input digest. Packet manifest rows stay in
 fixed capture order; only ruling rows are sorted by path. The supplied HEAD is not
 verified; execution is `not-observed`; supplied authority is not authenticated;
-publication is not verified; lessons remain `not-supported`. Incomplete G865
-coverage remains visible and is not converted to success. Rendered source text
+publication is not verified. Without an explicit lessons option group, the prior
+output bytes, v1 input digest, and read behavior remain unchanged and the
+registry is not inspected. With `--lessons-registry <registry-id>
+--lessons-sha256 <64-lowercase-hex> --lesson <lesson-id> [--lesson <lesson-id> ...]`,
+the command validates one pinned local registry and projects only the selected,
+applicable rows. Incomplete G865 coverage remains visible and is not converted
+to success. Rendered source text
 and proof commands are inert data inside dynamically sized Markdown fences.
 The fixed role instructions do not grant authority or execute commands.
 Optional `--out` is create-only, requires an existing safe parent, and refuses
@@ -1300,11 +1367,14 @@ or foreign replacement may remain. The command makes no claim that it deleted
 the file or that publication succeeded. A retry to the same output path is
 refused as existing; inspect any residual separately.
 
-Review rendered files before sharing: they contain authored packet and ruling
-text, and may include names or other sensitive information. The command does
-not scan content for privacy. It does not provide a lessons registry or remote
-PR integration; #1868 remains open for those broader needs, as do #1866,
-#1867, and #1857.
+Review rendered files before sharing: packet, ruling, and selected lesson source
+or rule text may contain sensitive information. The manifest and digest reveal
+the byte identity of the explicitly selected registry, while unselected lesson
+text is not rendered. The command does not scan content for privacy. This is a
+read-only consumer, not a registry writer or enforcement engine: selected
+enforcement descriptions are `advisory` or `declared-not-verified`; no command
+is run and no authority or actual enforcement is verified. Remote PR integration
+and broader capabilities remain open under #1868, #1866, #1867, and #1857.
 
 ### Pasted-evidence gate (G785)
 

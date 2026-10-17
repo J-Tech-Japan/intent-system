@@ -77,6 +77,13 @@ public sealed class GuideCommandsListCommandTests
         Assert.Contains("fewer dependencies", sessionLayerPurpose, StringComparison.Ordinal);
         Assert.Contains("deprecated `agmsg` + herdr", sessionLayerPurpose, StringComparison.Ordinal); // G829: supersedes "supported, non-retired"
         Assert.DoesNotContain("`agmsg` remains PRIMARY", sessionLayerPurpose, StringComparison.Ordinal);
+
+        var briefPurpose = byName["brief"].GetProperty("purpose").GetString()!;
+        Assert.Contains("--lessons-registry", briefPurpose, StringComparison.Ordinal);
+        Assert.Contains("--lessons-sha256", briefPurpose, StringComparison.Ordinal);
+        Assert.Contains("--lesson <lesson-id> ...", briefPurpose, StringComparison.Ordinal);
+        Assert.Contains("Without the group, existing output and read behavior are unchanged", briefPurpose, StringComparison.Ordinal);
+        Assert.Contains("never verified as authority or enforcement", briefPurpose, StringComparison.Ordinal);
     }
 
     [Fact]

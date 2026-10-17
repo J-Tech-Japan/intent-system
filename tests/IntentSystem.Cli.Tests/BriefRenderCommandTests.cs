@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using IntentSystem.Cli;
 using IntentSystem.Cli.Commands;
 using IntentSystem.Cli.Models;
@@ -93,6 +94,883 @@ public sealed class BriefRenderCommandTests
         Assert.Equal(Encoding.UTF8.GetString(rulingBytes), renderedRuling.GetProperty("text").GetString());
         Assert.DoesNotContain(workspace.Root, output, StringComparison.Ordinal);
         Assert.Equal(before, workspace.Snapshot());
+    }
+
+    [Theory]
+    [InlineData("builder", "json")]
+    [InlineData("builder", "markdown")]
+    [InlineData("reviewer", "json")]
+    [InlineData("reviewer", "markdown")]
+    public void ActualWritersComposeOnlyExplicitlySelectedLessonsAfterExistingValidation(string role, string format)
+    {
+        using var workspace = new BriefWorkspace();
+        var fixture = WritePinnedFixture(workspace);
+        var registryBytes = ValidLessonsRegistryBytes();
+        var registryDirectory = Path.Combine(workspace.Root, ".intent-cli", "lessons");
+        Directory.CreateDirectory(registryDirectory);
+        var registryPath = Path.Combine(registryDirectory, "review_lessons.json");
+        File.WriteAllBytes(registryPath, registryBytes);
+        var before = workspace.Snapshot();
+        var args = Args(role, format).Concat([
+            "--lessons-registry", "review_lessons",
+            "--lessons-sha256", Hash(registryBytes),
+            "--lesson", "L-DECLARED",
+            "--lesson", "L-ADVISORY",
+        ]).ToArray();
+
+        var (exit, output) = Render(workspace.Root, args);
+
+        Assert.True(exit == 0, output);
+        using var document = ReadOutput(output, format);
+        var result = document.RootElement;
+        Assert.Equal("rendered", result.GetProperty("state").GetString());
+        Assert.Equal("selected", result.GetProperty("lessons_state").GetString());
+        Assert.Equal("supplied-not-verified", result.GetProperty("head_verification").GetString());
+        Assert.Equal("not-observed", result.GetProperty("execution").GetString());
+        Assert.Equal("supplied-not-authenticated", result.GetProperty("authority_verification").GetString());
+        Assert.Equal("not-verified", result.GetProperty("publication").GetString());
+
+        var lessons = result.GetProperty("lessons");
+        Assert.Equal("review_lessons", lessons.GetProperty("registry_id").GetString());
+        Assert.Equal(".intent-cli/lessons/review_lessons.json", lessons.GetProperty("registry_path").GetString());
+        Assert.Equal(Hash(registryBytes), lessons.GetProperty("registry_sha256").GetString());
+        Assert.Equal(new[] { "L-ADVISORY", "L-DECLARED" },
+            lessons.GetProperty("selected_ids").EnumerateArray().Select(item => item.GetString()).ToArray());
+        var entries = lessons.GetProperty("entries").EnumerateArray().ToArray();
+        Assert.Equal(new[] { "L-ADVISORY", "L-DECLARED" },
+            entries.Select(item => item.GetProperty("id").GetString()).ToArray());
+        Assert.Equal("The explicit source supports one narrow advisory lesson.", entries[0].GetProperty("source").GetString());
+        Assert.Equal("Use only the exact selected advisory row.", entries[0].GetProperty("rule").GetString());
+        Assert.Equal("advisory", entries[0].GetProperty("enforcement_state").GetString());
+        Assert.Equal(0, entries[0].GetProperty("enforced_by").GetArrayLength());
+        Assert.Equal("declared-not-verified", entries[1].GetProperty("enforcement_state").GetString());
+        Assert.Equal(new[] { "G871 display only" },
+            entries[1].GetProperty("enforced_by").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal("active", entries[0].GetProperty("lifecycle").GetProperty("state").GetString());
+        Assert.Equal("2026-10-01T00:00:00Z", entries[0].GetProperty("lifecycle").GetProperty("active_from").GetString());
+        Assert.Equal(JsonValueKind.Null, entries[0].GetProperty("lifecycle").GetProperty("expires_at").ValueKind);
+        Assert.Equal(JsonValueKind.Null, entries[0].GetProperty("lifecycle").GetProperty("superseded_by").ValueKind);
+        Assert.Equal(new[] { "builder", "reviewer" },
+            entries[0].GetProperty("applies_to").GetProperty("roles").EnumerateArray().Select(item => item.GetString()).ToArray());
+
+        var manifest = result.GetProperty("manifest").EnumerateArray().ToArray();
+        var registryManifest = manifest[^1];
+        Assert.Equal("lessons-registry", registryManifest.GetProperty("kind").GetString());
+        Assert.Equal(".intent-cli/lessons/review_lessons.json", registryManifest.GetProperty("path").GetString());
+        Assert.Equal(registryBytes.Length, registryManifest.GetProperty("byte_length").GetInt32());
+        Assert.Equal(Hash(registryBytes), registryManifest.GetProperty("sha256").GetString());
+        Assert.Equal(ExpectedLessonsDigest(role, format, workspace, fixture.RulingPath, fixture.RulingBytes,
+            "review_lessons", registryBytes, ["L-ADVISORY", "L-DECLARED"]), result.GetProperty("input_digest").GetString());
+        Assert.DoesNotContain("BUILDER-ONLY-UNSELECTED-SECRET", output, StringComparison.Ordinal);
+        Assert.DoesNotContain(workspace.Root, output, StringComparison.Ordinal);
+        var reverseArgs = Args(role, format).Concat(LessonOptions(registryBytes, ["L-ADVISORY", "L-DECLARED"])).ToArray();
+        var (reverseExit, reverseOutput) = Render(workspace.Root, reverseArgs);
+        Assert.Equal(0, reverseExit);
+        Assert.Equal(output, reverseOutput);
+        Assert.Equal(before, workspace.Snapshot());
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void RegistryFormattingAndInitialBomChangeRawDigestWithoutChangingSelectedProjection(string format)
+    {
+        using var workspace = new BriefWorkspace();
+        var fixture = WritePinnedFixture(workspace);
+        var original = ValidLessonsRegistryBytes();
+        WriteLessonsRegistry(workspace, original);
+        var args = Args("reviewer", format);
+
+        var first = Render(workspace.Root, args.Concat(LessonOptions(original, ["L-ADVISORY"])).ToArray());
+        Assert.True(first.ExitCode == 0, first.Output);
+        using var firstDocument = ReadOutput(first.Output, format);
+        var firstSelection = firstDocument.RootElement.GetProperty("lessons").GetProperty("entries").GetRawText();
+        var firstDigest = firstDocument.RootElement.GetProperty("input_digest").GetString();
+
+        var formatted = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(original) + " \n\t");
+        WriteLessonsRegistry(workspace, formatted);
+        var second = Render(workspace.Root, args.Concat(LessonOptions(formatted, ["L-ADVISORY"])).ToArray());
+        Assert.True(second.ExitCode == 0, second.Output);
+        using var secondDocument = ReadOutput(second.Output, format);
+        Assert.Equal(firstSelection, secondDocument.RootElement.GetProperty("lessons").GetProperty("entries").GetRawText());
+        Assert.NotEqual(firstDigest, secondDocument.RootElement.GetProperty("input_digest").GetString());
+        Assert.Equal(Hash(formatted), secondDocument.RootElement.GetProperty("manifest").EnumerateArray().Last()
+            .GetProperty("sha256").GetString());
+        Assert.Equal(ExpectedLessonsDigest("reviewer", format, workspace, fixture.RulingPath, fixture.RulingBytes,
+            "review_lessons", formatted, ["L-ADVISORY"]), secondDocument.RootElement.GetProperty("input_digest").GetString());
+
+        var bom = new byte[formatted.Length + 3];
+        bom[0] = 0xef;
+        bom[1] = 0xbb;
+        bom[2] = 0xbf;
+        formatted.CopyTo(bom, 3);
+        WriteLessonsRegistry(workspace, bom);
+        var third = Render(workspace.Root, args.Concat(LessonOptions(bom, ["L-ADVISORY"])).ToArray());
+        Assert.True(third.ExitCode == 0, third.Output);
+        using var thirdDocument = ReadOutput(third.Output, format);
+        Assert.Equal(firstSelection, thirdDocument.RootElement.GetProperty("lessons").GetProperty("entries").GetRawText());
+        Assert.NotEqual(secondDocument.RootElement.GetProperty("input_digest").GetString(),
+            thirdDocument.RootElement.GetProperty("input_digest").GetString());
+        Assert.Equal(Hash(bom), thirdDocument.RootElement.GetProperty("manifest").EnumerateArray().Last()
+            .GetProperty("sha256").GetString());
+    }
+
+    [Theory]
+    [InlineData("json", "replace")]
+    [InlineData("markdown", "replace")]
+    [InlineData("json", "delete")]
+    [InlineData("markdown", "delete")]
+    public void LessonProjectionAndDigestUseTheOneCapturedRegistrySnapshot(string format, string mutation)
+    {
+        using var workspace = new BriefWorkspace();
+        var fixture = WritePinnedFixture(workspace);
+        var original = ValidLessonsRegistryBytes();
+        WriteLessonsRegistry(workspace, original);
+        var replacementNode = JsonNode.Parse(original)!.AsObject();
+        SelectedLesson(replacementNode)["rule"] = "replacement text must not enter captured output";
+        var replacement = JsonSerializer.SerializeToUtf8Bytes(replacementNode);
+        var callbacks = 0;
+
+        var (exit, output) = Render(workspace.Root,
+            Args("reviewer", format).Concat(LessonOptions(original, ["L-ADVISORY"])).ToArray(),
+            (operation, path) =>
+            {
+                if (operation != "after-lessons-captured") return;
+                Assert.Equal(".intent-cli/lessons/review_lessons.json", path);
+                callbacks++;
+                var capturedPath = Path.Combine(workspace.Root, path.Replace('/', Path.DirectorySeparatorChar));
+                if (mutation == "delete") File.Delete(capturedPath);
+                else File.WriteAllBytes(capturedPath, replacement);
+            });
+
+        Assert.True(exit == 0, output);
+        Assert.Equal(1, callbacks);
+        using var result = ReadOutput(output, format);
+        var lessons = result.RootElement.GetProperty("lessons");
+        Assert.Equal(Hash(original), lessons.GetProperty("registry_sha256").GetString());
+        Assert.Equal(Hash(original), result.RootElement.GetProperty("manifest").EnumerateArray().Last()
+            .GetProperty("sha256").GetString());
+        Assert.Equal("Use only the exact selected advisory row.", lessons.GetProperty("entries")[0].GetProperty("rule").GetString());
+        if (mutation == "replace")
+            Assert.DoesNotContain("replacement text must not enter captured output", output, StringComparison.Ordinal);
+        Assert.Equal(ExpectedLessonsDigest("reviewer", format, workspace, fixture.RulingPath, fixture.RulingBytes,
+            "review_lessons", original, ["L-ADVISORY"]), result.RootElement.GetProperty("input_digest").GetString());
+    }
+
+    [Fact]
+    public void CapturedRegistryRemainsAnOutputCollisionAfterItsPathIsRemoved()
+    {
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var registryBytes = ValidLessonsRegistryBytes();
+        WriteLessonsRegistry(workspace, registryBytes);
+        var registryPath = Path.Combine(workspace.Root, LessonsRegistry.RootRelativePath, "review_lessons.json");
+        var intentionalDeletionObserved = false;
+        var args = Args("builder", "json").Concat(["--out", registryPath])
+            .Concat(LessonOptions(registryBytes, ["L-ADVISORY"])).ToArray();
+
+        var (exit, output) = Render(workspace.Root, args, (operation, path) =>
+        {
+            if (operation != "after-lessons-captured") return;
+            Assert.Equal(".intent-cli/lessons/review_lessons.json", path);
+            File.Delete(registryPath);
+            intentionalDeletionObserved = true;
+        });
+
+        Assert.True(intentionalDeletionObserved);
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal("brief-output-conflict", refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(JsonValueKind.Null, refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("path").ValueKind);
+        Assert.False(File.Exists(registryPath));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void OptInSelectionOrderAndCreateOnlyOutPathDoNotChangeRenderedBytes(string format)
+    {
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var registry = ValidLessonsRegistryBytes();
+        WriteLessonsRegistry(workspace, registry);
+        var selected = new[] { "L-DECLARED", "L-ADVISORY" };
+        var reversed = new[] { "L-ADVISORY", "L-DECLARED" };
+        var first = Render(workspace.Root,
+            Args("reviewer", format).Concat(LessonOptions(registry, selected)).ToArray());
+        Assert.Equal(0, first.ExitCode);
+        var reordered = Render(workspace.Root,
+            Args("reviewer", format).Concat(LessonOptions(registry, reversed)).ToArray());
+        Assert.Equal(0, reordered.ExitCode);
+        Assert.Equal(first.Output, reordered.Output);
+
+        var outputDirectory = Path.Combine(workspace.Root, "brief-output");
+        Directory.CreateDirectory(outputDirectory);
+        var outputPath = Path.Combine(outputDirectory, format == "json" ? "rendered.json" : "rendered.md");
+        var withOut = Render(workspace.Root,
+            Args("reviewer", format).Concat(["--out", outputPath]).Concat(LessonOptions(registry, reversed)).ToArray());
+        Assert.Equal(0, withOut.ExitCode);
+        Assert.Equal(first.Output, withOut.Output);
+        Assert.Equal(Encoding.UTF8.GetBytes(first.Output), File.ReadAllBytes(outputPath));
+        File.Delete(outputPath);
+        Directory.Delete(outputDirectory);
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void LessonsOptInArgumentsAreAllOrNoneAndRefuseBeforeResolvingRoot(string format)
+    {
+        var validRegistry = LessonOptions(ValidLessonsRegistryBytes(), ["L-ADVISORY"]);
+        var invalidArguments = new List<(string Name, string[] Args)>
+        {
+            ("registry-only", Args("builder", format).Concat(["--lessons-registry", "review_lessons"]).ToArray()),
+            ("sha-only", Args("builder", format).Concat(["--lessons-sha256", new string('a', 64)]).ToArray()),
+            ("lesson-only", Args("builder", format).Concat(["--lesson", "L-ADVISORY"]).ToArray()),
+            ("missing-selected-id", Args("builder", format).Concat(["--lessons-registry", "review_lessons", "--lessons-sha256", new string('a', 64)]).ToArray()),
+            ("duplicate-registry", Args("builder", format).Concat(validRegistry).Concat(["--lessons-registry", "review_lessons"]).ToArray()),
+            ("duplicate-sha", Args("builder", format).Concat(validRegistry).Concat(["--lessons-sha256", new string('a', 64)]).ToArray()),
+            ("duplicate-lesson", Args("builder", format).Concat(LessonOptions(ValidLessonsRegistryBytes(), ["L-ADVISORY", "L-ADVISORY"])).ToArray()),
+            ("case-alias-lesson", Args("builder", format).Concat(LessonOptions(ValidLessonsRegistryBytes(), ["L-ADVISORY", "l-advisory"])).ToArray()),
+            ("too-many-selected-ids", Args("builder", format).Concat(LessonOptions(ValidLessonsRegistryBytes(), Enumerable.Range(0, 17).Select(i => $"L{i}").ToArray())).ToArray()),
+            ("uppercase-sha", Args("builder", format).Concat(LessonOptionsWithSha("review_lessons", new string('A', 64), ["L-ADVISORY"])).ToArray()),
+            ("short-sha", Args("builder", format).Concat(LessonOptionsWithSha("review_lessons", new string('a', 63), ["L-ADVISORY"])).ToArray()),
+            ("traversal-registry", Args("builder", format).Concat(LessonOptionsWithSha("../review_lessons", new string('a', 64), ["L-ADVISORY"])).ToArray()),
+            ("registry-id-65", Args("builder", format).Concat(LessonOptionsWithSha("R" + new string('a', 64), new string('a', 64), ["L-ADVISORY"])).ToArray()),
+            ("empty-lesson", Args("builder", format).Concat(LessonOptionsWithSha("review_lessons", new string('a', 64), [""])).ToArray()),
+            ("option-valued-registry", Args("builder", format).Concat(["--lessons-registry", "--lessons-sha256", new string('a', 64), "--lesson", "L-ADVISORY"]).ToArray()),
+            ("unknown-option", Args("builder", format).Concat(validRegistry).Concat(["--lesson-path", "other.json"]).ToArray()),
+        };
+
+        foreach (var (name, args) in invalidArguments)
+        {
+            var resolverCalls = 0;
+            using var writer = new StringWriter();
+            var exit = BriefRenderCommand.Execute(args, writer, () =>
+            {
+                resolverCalls++;
+                throw new InvalidOperationException($"{name} must refuse before root resolution");
+            });
+            Assert.Equal(1, exit);
+            using var refusal = ReadOutput(writer.ToString(), format);
+            Assert.Equal("brief-arguments-invalid", refusal.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(JsonValueKind.Null, refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("path").ValueKind);
+            Assert.Equal(0, resolverCalls);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void MaximumRegistryAndLessonIdentifiersAreAcceptedAndTheNextLengthIsRejected(string format)
+    {
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var registryId = "R" + new string('a', 63);
+        var lessonId = "L" + new string('b', 63);
+        var node = JsonNode.Parse(ValidLessonsRegistryBytes())!.AsObject();
+        node["registry_id"] = registryId;
+        SelectedLesson(node)["id"] = lessonId;
+        foreach (var row in node["lessons"]!.AsArray())
+        {
+            if (row!["lifecycle"]!["superseded_by"]?.GetValue<string>() == "L-DECLARED")
+                row["lifecycle"]!["superseded_by"] = lessonId;
+        }
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(node);
+        WriteLessonsRegistry(workspace, registryId, bytes);
+        var args = Args("builder", format).Concat(LessonOptions(registryId, bytes, [lessonId])).ToArray();
+        var (exit, output) = Render(workspace.Root, args);
+        Assert.True(exit == 0, output);
+        using var success = ReadOutput(output, format);
+        Assert.Equal(registryId, success.RootElement.GetProperty("lessons").GetProperty("registry_id").GetString());
+        Assert.Equal(lessonId, success.RootElement.GetProperty("lessons").GetProperty("selected_ids")[0].GetString());
+
+        var invalid = Args("builder", format).Concat(LessonOptionsWithSha(registryId, Hash(bytes), [lessonId + "x"])).ToArray();
+        var (invalidExit, invalidOutput) = Render(workspace.Root, invalid);
+        Assert.Equal(1, invalidExit);
+        using var refusal = ReadOutput(invalidOutput, format);
+        Assert.Equal("brief-arguments-invalid", refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(JsonValueKind.Null, refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("path").ValueKind);
+    }
+
+    [Fact]
+    public void NoMarkerNeverInspectsMalformedOversizedLessonsDirectoryAndKeepsV1Bytes()
+    {
+        using var baseline = new BriefWorkspace();
+        using var withUnrelatedRegistry = new BriefWorkspace();
+        _ = WritePinnedFixture(baseline);
+        _ = WritePinnedFixture(withUnrelatedRegistry);
+        var expected = Render(baseline.Root, Args("reviewer", "json"));
+        var lessonsDirectory = Path.Combine(withUnrelatedRegistry.Root, ".intent-cli", "lessons");
+        Directory.CreateDirectory(lessonsDirectory);
+        File.WriteAllBytes(Path.Combine(lessonsDirectory, "review_lessons.json"), [0xff, 0xfe]);
+        for (var index = 0; index < 4096; index++)
+            File.WriteAllBytes(Path.Combine(lessonsDirectory, $"unrelated-{index:D4}.bin"), []);
+        var before = withUnrelatedRegistry.Snapshot();
+        var observations = new List<string>();
+
+        var actual = Render(withUnrelatedRegistry.Root, Args("reviewer", "json"),
+            (operation, path) => observations.Add(operation + ":" + path));
+
+        Assert.Equal(0, expected.ExitCode);
+        Assert.Equal(0, actual.ExitCode);
+        Assert.Equal(expected.Output, actual.Output);
+        Assert.DoesNotContain(observations, item => item.Contains("lessons", StringComparison.Ordinal));
+        Assert.Equal(before, withUnrelatedRegistry.Snapshot());
+    }
+
+    [Theory]
+    [InlineData("builder", "json")]
+    [InlineData("builder", "markdown")]
+    [InlineData("reviewer", "json")]
+    [InlineData("reviewer", "markdown")]
+    public void NoMarkerMatchesDetachedBaselineBytesAndReadCallbackBudget(string role, string format)
+    {
+        using var goldens = ReadG871BaselineGoldens();
+        Assert.Equal("3a446fe2dac3925eaef9c2306e4e230ee618383a",
+            goldens.RootElement.GetProperty("baseline_commit").GetString());
+        Assert.Equal("1685b09573fa585dff7989c09c2f7826c2bc216ad05bb161c715b4b057bf4b1e",
+            goldens.RootElement.GetProperty("capture_harness_patch_sha256").GetString());
+        var baseline = goldens.RootElement.GetProperty("cases").EnumerateArray()
+            .Single(row => row.GetProperty("role").GetString() == role && row.GetProperty("format").GetString() == format);
+        var expectedStdout = Convert.FromBase64String(baseline.GetProperty("stdout_base64").GetString()!);
+        var expectedOut = Convert.FromBase64String(baseline.GetProperty("out_base64").GetString()!);
+        Assert.Equal(Hash(expectedStdout), baseline.GetProperty("stdout_sha256").GetString());
+        Assert.Equal(Hash(expectedOut), baseline.GetProperty("out_sha256").GetString());
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var before = workspace.Snapshot();
+        var callbacks = new List<string>();
+
+        var current = Render(workspace.Root, Args(role, format),
+            (operation, path) => callbacks.Add(operation + ":" + path));
+
+        Assert.Equal(0, current.ExitCode);
+        Assert.Equal(expectedStdout, Encoding.UTF8.GetBytes(current.Output));
+        Assert.Equal(baseline.GetProperty("callbacks").EnumerateArray().Select(item => item.GetString()).ToArray(),
+            callbacks);
+        Assert.Equal(before, workspace.Snapshot());
+
+        var outDirectory = Path.Combine(workspace.Root, "baseline-out");
+        Directory.CreateDirectory(outDirectory);
+        var outPath = Path.Combine(outDirectory, format == "json" ? "brief.json" : "brief.md");
+        var withOut = Render(workspace.Root, Args(role, format).Concat(["--out", outPath]).ToArray());
+        Assert.Equal(0, withOut.ExitCode);
+        Assert.Equal(expectedStdout, Encoding.UTF8.GetBytes(withOut.Output));
+        Assert.Equal(expectedOut, File.ReadAllBytes(outPath));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void LessonsRegistryAcceptsDeclaredMaximumsAndClassifiesLimitPlusOneAsResourceLimit(string format)
+    {
+        var maximum = MaximumLessonsRegistryNode();
+        var maximumBytes = JsonSerializer.SerializeToUtf8Bytes(maximum);
+        using (var workspace = new BriefWorkspace())
+        {
+            _ = WritePinnedFixture(workspace);
+            var (exit, output) = RenderWithLessons(workspace, maximumBytes, format, ["L-ADVISORY"]);
+            Assert.Equal(0, exit);
+            using var document = ReadOutput(output, format);
+            var selected = Assert.Single(document.RootElement.GetProperty("lessons").GetProperty("entries").EnumerateArray());
+            Assert.Equal(4096, selected.GetProperty("source").GetString()!.Length);
+            Assert.Equal(4096, selected.GetProperty("rule").GetString()!.Length);
+            Assert.Equal(8, selected.GetProperty("enforced_by").GetArrayLength());
+            Assert.Equal(16, selected.GetProperty("applies_to").GetProperty("execution_units").GetArrayLength());
+            Assert.Equal(128, maximum["lessons"]!.AsArray().Count);
+        }
+
+        using (var workspace = new BriefWorkspace())
+        {
+            _ = WritePinnedFixture(workspace);
+            var selectedMaximum = JsonNode.Parse(ValidLessonsRegistryBytes())!.AsObject();
+            var rows = selectedMaximum["lessons"]!.AsArray();
+            for (var index = 0; index < 14; index++)
+            {
+                var row = rows[1]!.DeepClone().AsObject();
+                row["id"] = $"L-SELECT-{index:D2}";
+                rows.Add(row);
+            }
+            var registry = JsonSerializer.SerializeToUtf8Bytes(selectedMaximum);
+            var selectedIds = rows.Select(row => row!["id"]!.GetValue<string>())
+                .Where(id => id != "L-BUILDER-ONLY").Take(16).ToArray();
+            Assert.Equal(16, selectedIds.Length);
+            var (exit, output) = RenderWithLessons(workspace, registry, format, selectedIds);
+            Assert.Equal(0, exit);
+            using var document = ReadOutput(output, format);
+            var lessons = document.RootElement.GetProperty("lessons");
+            Assert.Equal(16, lessons.GetProperty("selected_ids").GetArrayLength());
+            Assert.Equal(selectedIds.Order(StringComparer.Ordinal), lessons.GetProperty("selected_ids")
+                .EnumerateArray().Select(id => id.GetString()).ToArray());
+            Assert.Equal(16, lessons.GetProperty("entries").GetArrayLength());
+        }
+
+        var invalidCases = new (string Name, Action<JsonObject> Mutate)[]
+        {
+            ("source-utf16-4097", root => SelectedLesson(root)["source"] = new string('s', 4095) + "😀"),
+            ("rule-utf16-4097", root => SelectedLesson(root)["rule"] = new string('r', 4095) + "😀"),
+            ("enforced-by-257", root => SelectedLesson(root)["enforced_by"]!.AsArray()[0] = new string('e', 257)),
+            ("enforced-by-9", root => SelectedLesson(root)["enforced_by"]!.AsArray().Add("another declared surface")),
+            ("units-17", root => SelectedLesson(root)["applies_to"]!["execution_units"]!.AsArray().Add("G999")),
+            ("roles-3", root => SelectedLesson(root)["applies_to"]!["roles"]!.AsArray().Add("builder")),
+            ("lessons-129", root =>
+            {
+                var rows = root["lessons"]!.AsArray();
+                var extra = rows[2]!.DeepClone().AsObject();
+                extra["id"] = "L-EXTRA-129";
+                rows.Add(extra);
+            }),
+        };
+
+        foreach (var (name, mutate) in invalidCases)
+        {
+            var invalid = (JsonObject)maximum.DeepClone();
+            mutate(invalid);
+            var invalidBytes = JsonSerializer.SerializeToUtf8Bytes(invalid);
+            using var workspace = new BriefWorkspace();
+            _ = WritePinnedFixture(workspace);
+            WriteLessonsRegistry(workspace, invalidBytes);
+            var before = workspace.Snapshot();
+            var (exit, output) = Render(workspace.Root,
+                Args("builder", format).Concat(LessonOptions(invalidBytes, ["L-ADVISORY"])).ToArray());
+            Assert.Equal(1, exit);
+            using var refusal = ReadOutput(output, format);
+            Assert.Equal("brief-resource-limit", refusal.RootElement.GetProperty("cause").GetString());
+            var diagnostic = Assert.Single(refusal.RootElement.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal(".intent-cli/lessons/review_lessons.json", diagnostic.GetProperty("path").GetString());
+            Assert.DoesNotContain(workspace.Root, diagnostic.GetRawText(), StringComparison.Ordinal);
+            Assert.DoesNotContain(name, output, StringComparison.OrdinalIgnoreCase);
+            Assert.False(refusal.RootElement.TryGetProperty("lessons", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("manifest", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("input_digest", out _));
+            Assert.Equal(before, workspace.Snapshot());
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void LessonsRegistryRejectsMalformedSchemaAndDuplicatePropertiesWithoutPartialOutput(string format)
+    {
+        var cases = InvalidLessonsRegistryCases();
+        Assert.True(cases.Count >= 45);
+        foreach (var (name, bytes, expectedCause) in cases)
+        {
+            Assert.NotEqual(ValidLessonsRegistryBytes(), bytes);
+            using var workspace = new BriefWorkspace();
+            _ = WritePinnedFixture(workspace);
+            WriteLessonsRegistry(workspace, bytes);
+            var before = workspace.Snapshot();
+
+            var (exit, output) = Render(workspace.Root,
+                Args("builder", format).Concat(LessonOptions(bytes, ["L-ADVISORY"])).ToArray());
+
+            Assert.True(exit == 1, $"{name}: expected refusal, got {exit}: {output}");
+            using var refusal = ReadOutput(output, format);
+            Assert.Equal(expectedCause, refusal.RootElement.GetProperty("cause").GetString());
+            var diagnostic = Assert.Single(refusal.RootElement.GetProperty("diagnostics").EnumerateArray());
+            Assert.Equal(".intent-cli/lessons/review_lessons.json", diagnostic.GetProperty("path").GetString());
+            Assert.DoesNotContain(workspace.Root, output, StringComparison.Ordinal);
+            Assert.False(refusal.RootElement.TryGetProperty("lessons", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("manifest", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("input_digest", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("sections", out _));
+            Assert.Equal(before, workspace.Snapshot());
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void LessonsRegistryChecksPinnedIdentitySelectionAndLifecycleInContractOrder(string format)
+    {
+        var valid = JsonNode.Parse(ValidLessonsRegistryBytes())!.AsObject();
+        var cases = new (string Name, byte[] Bytes, string Cause)[]
+        {
+            ("selected-id-missing", ValidLessonsRegistryBytes(), "brief-lessons-missing"),
+            ("empty-registry-selected-id-missing", Encoding.UTF8.GetBytes("{\"schema_version\":1,\"registry_id\":\"review_lessons\",\"lessons\":[]}"), "brief-lessons-missing"),
+            ("selected-id-case-mismatch", ValidLessonsRegistryBytes(), "brief-lessons-missing"),
+            ("wrong-role", Change(valid, root => SelectedLesson(root)["applies_to"]!["roles"] = new JsonArray("reviewer")), "brief-lessons-inapplicable"),
+            ("wrong-repository", Change(valid, root => SelectedLesson(root)["applies_to"]!["target_repo"] = "other-owner/other-repo"), "brief-lessons-inapplicable"),
+            ("wrong-domain", Change(valid, root => SelectedLesson(root)["applies_to"]!["domain"] = "other-domain"), "brief-lessons-inapplicable"),
+            ("wrong-team", Change(valid, root => SelectedLesson(root)["applies_to"]!["team"] = "other-team"), "brief-lessons-inapplicable"),
+            ("wrong-unit", Change(valid, root => SelectedLesson(root)["applies_to"]!["execution_units"] = new JsonArray("G999")), "brief-lessons-inapplicable"),
+            ("future-active-from", Change(valid, root => SelectedLesson(root)["lifecycle"]!["active_from"] = "2026-10-16T00:00:00Z"), "brief-lessons-not-yet-active"),
+            ("active-at-as-of", Change(valid, root => SelectedLesson(root)["lifecycle"]!["active_from"] = "2026-10-15T12:00:00Z"), ""),
+            ("expires-before-as-of", Change(valid, root => SelectedLesson(root)["lifecycle"]!["expires_at"] = "2026-10-15T11:59:59Z"), "brief-lessons-expired"),
+            ("expires-at-as-of", Change(valid, root => SelectedLesson(root)["lifecycle"]!["expires_at"] = "2026-10-15T12:00:00Z"), "brief-lessons-expired"),
+            ("expires-one-second-after-as-of", Change(valid, root => SelectedLesson(root)["lifecycle"]!["expires_at"] = "2026-10-15T12:00:01Z"), ""),
+            ("selected-superseded", SupersededSelectedRegistry(), "brief-lessons-superseded"),
+            ("unselected-future-expired-superseded", ValidUnselectedInactiveRegistry(), ""),
+            ("two-missing-ids-ordinal-first", ValidLessonsRegistryBytes(), "brief-lessons-missing"),
+            ("two-missing-ids-reversed", ValidLessonsRegistryBytes(), "brief-lessons-missing"),
+        };
+
+        foreach (var (name, bytes, expectedCause) in cases)
+        {
+            using var workspace = new BriefWorkspace();
+            _ = WritePinnedFixture(workspace);
+            WriteLessonsRegistry(workspace, bytes);
+            var before = workspace.Snapshot();
+            var selectedIds = name switch
+            {
+                "selected-id-missing" => new[] { "L-NOT-PRESENT" },
+                "selected-id-case-mismatch" => new[] { "l-advisory" },
+                "unselected-future-expired-superseded" => new[] { "L-ADVISORY" },
+                "two-missing-ids-ordinal-first" => new[] { "L-Z-MISSING", "L-A-MISSING" },
+                "two-missing-ids-reversed" => new[] { "L-A-MISSING", "L-Z-MISSING" },
+                _ => new[] { "L-ADVISORY" },
+            };
+
+            var (exit, output) = Render(workspace.Root,
+                Args("builder", format).Concat(LessonOptions(bytes, selectedIds)).ToArray());
+
+            if (expectedCause.Length == 0)
+            {
+                Assert.True(exit == 0, $"{name}: {output}");
+                using var success = ReadOutput(output, format);
+                Assert.Equal("selected", success.RootElement.GetProperty("lessons_state").GetString());
+                Assert.Equal(new[] { "L-ADVISORY" }, success.RootElement.GetProperty("lessons").GetProperty("selected_ids")
+                    .EnumerateArray().Select(item => item.GetString()).ToArray());
+            }
+            else
+            {
+                Assert.True(exit == 1, $"{name}: expected refusal, got {exit}: {output}");
+                using var refusal = ReadOutput(output, format);
+                Assert.Equal(expectedCause, refusal.RootElement.GetProperty("cause").GetString());
+                if (name.StartsWith("two-missing-ids-", StringComparison.Ordinal))
+                    Assert.Equal("selected lesson 'L-A-MISSING' is not present in the registry",
+                        refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("detail").GetString());
+                Assert.False(refusal.RootElement.TryGetProperty("lessons", out _));
+                Assert.False(refusal.RootElement.TryGetProperty("manifest", out _));
+                Assert.False(refusal.RootElement.TryGetProperty("input_digest", out _));
+            }
+            Assert.Equal(before, workspace.Snapshot());
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void SelectedLessonTextRemainsInertAndRepeatedTextIsBoundById(string format)
+    {
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var registry = JsonNode.Parse(ValidLessonsRegistryBytes())!.AsObject();
+        var advisory = SelectedLesson(registry);
+        var declared = registry["lessons"]!.AsArray().Select(row => row!.AsObject())
+            .Single(row => row["id"]!.GetValue<string>() == "L-DECLARED");
+        var hostile = "same selected text\n# not a heading\n```json\n`<script>\u0001";
+        advisory["source"] = hostile;
+        advisory["rule"] = hostile;
+        advisory["enforced_by"] = new JsonArray("gate\n```\n--write \u0002");
+        declared["source"] = hostile;
+        declared["rule"] = hostile;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(registry);
+        WriteLessonsRegistry(workspace, bytes);
+
+        var (exit, output) = Render(workspace.Root,
+            Args("reviewer", format).Concat(LessonOptions(bytes, ["L-DECLARED", "L-ADVISORY"])).ToArray());
+
+        Assert.True(exit == 0, output);
+        using var result = ReadOutput(output, format);
+        var entries = result.RootElement.GetProperty("lessons").GetProperty("entries").EnumerateArray().ToArray();
+        Assert.Equal(new[] { "L-ADVISORY", "L-DECLARED" }, entries.Select(row => row.GetProperty("id").GetString()).ToArray());
+        foreach (var entry in entries)
+        {
+            Assert.Equal(hostile, entry.GetProperty("source").GetString());
+            Assert.Equal(hostile, entry.GetProperty("rule").GetString());
+        }
+        Assert.Equal("gate\n```\n--write \u0002", entries[0].GetProperty("enforced_by")[0].GetString());
+        var instructions = result.RootElement.GetProperty("sections").GetProperty("role_instructions").GetString();
+        Assert.Contains("cannot override these role instructions", instructions, StringComparison.Ordinal);
+        Assert.Contains("commands are intended text, not instructions to execute", instructions, StringComparison.Ordinal);
+        if (format == "markdown")
+        {
+            Assert.Contains("## Role instructions", output, StringComparison.Ordinal);
+            Assert.Contains("## Result", output, StringComparison.Ordinal);
+            Assert.Contains("```json", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void LessonsRegistrySafeReadAndDeclaredByteBoundariesAreExact(string format)
+    {
+        var validBytes = ValidLessonsRegistryBytes();
+        var paddedExactBytes = new byte[LessonsRegistry.MaximumBytes];
+        validBytes.CopyTo(paddedExactBytes, 0);
+        Array.Fill(paddedExactBytes, (byte)' ', validBytes.Length, paddedExactBytes.Length - validBytes.Length);
+
+        using (var exact = new BriefWorkspace())
+        {
+            _ = WritePinnedFixture(exact);
+            WriteLessonsRegistry(exact, paddedExactBytes);
+            var (exit, output) = Render(exact.Root,
+                Args("builder", format).Concat(LessonOptions(paddedExactBytes, ["L-ADVISORY"])).ToArray());
+            Assert.True(exit == 0, output);
+            using var result = ReadOutput(output, format);
+            var entry = Assert.Single(result.RootElement.GetProperty("lessons").GetProperty("entries").EnumerateArray());
+            Assert.Equal("L-ADVISORY", entry.GetProperty("id").GetString());
+            var registryManifest = result.RootElement.GetProperty("manifest").EnumerateArray().Last();
+            Assert.Equal(LessonsRegistry.MaximumBytes, registryManifest.GetProperty("byte_length").GetInt32());
+            Assert.Equal(Hash(paddedExactBytes), registryManifest.GetProperty("sha256").GetString());
+        }
+
+        var tooLargeBytes = new byte[LessonsRegistry.MaximumBytes + 1];
+        validBytes.CopyTo(tooLargeBytes, 0);
+        Array.Fill(tooLargeBytes, (byte)' ', validBytes.Length, tooLargeBytes.Length - validBytes.Length);
+        var failures = new (string Name, Action<BriefWorkspace> Configure, string Cause)[]
+        {
+            ("missing", _ => { }, "brief-lessons-unavailable"),
+            ("empty", workspace => WriteLessonsRegistry(workspace, []), "brief-lessons-unavailable"),
+            ("too-large", workspace => WriteLessonsRegistry(workspace, tooLargeBytes), "brief-resource-limit"),
+            ("leaf-directory", workspace =>
+            {
+                var parent = Path.Combine(workspace.Root, LessonsRegistry.RootRelativePath);
+                Directory.CreateDirectory(parent);
+                var leaf = Path.Combine(parent, "review_lessons.json");
+                Directory.CreateDirectory(leaf);
+                File.WriteAllText(Path.Combine(leaf, "outside-sentinel"), "do not read the directory as a registry");
+            }, "brief-lessons-unavailable"),
+            ("case-alias-leaf", workspace =>
+            {
+                var parent = Path.Combine(workspace.Root, LessonsRegistry.RootRelativePath);
+                Directory.CreateDirectory(parent);
+                File.WriteAllBytes(Path.Combine(parent, "Review_Lessons.JSON"), validBytes);
+            }, "brief-lessons-unavailable"),
+            ("parent-is-file", workspace =>
+            {
+                var lessonsDirectory = Path.Combine(workspace.Root, ".intent-cli", "lessons");
+                File.WriteAllText(lessonsDirectory, "not a directory");
+            }, "brief-lessons-unavailable"),
+        };
+        foreach (var (name, configure, cause) in failures)
+        {
+            using var workspace = new BriefWorkspace();
+            _ = WritePinnedFixture(workspace);
+            configure(workspace);
+            var before = workspace.Snapshot();
+            var registryReads = 0;
+            var (exit, output) = Render(workspace.Root,
+                Args("builder", format).Concat(LessonOptions(validBytes, ["L-ADVISORY"])).ToArray(),
+                (operation, path) =>
+                {
+                    if (operation == "after-lessons-captured") registryReads++;
+                });
+            Assert.True(exit == 1, $"{name}: {output}");
+            using var refusal = ReadOutput(output, format);
+            Assert.Equal(cause, refusal.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(".intent-cli/lessons/review_lessons.json",
+                refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("path").GetString());
+            Assert.Equal(0, registryReads);
+            Assert.False(refusal.RootElement.TryGetProperty("lessons", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("manifest", out _));
+            Assert.Equal(before, workspace.Snapshot());
+        }
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void LessonsRegistryPermissionDeniedReadIsProbedAndRefused(string format)
+    {
+        if (OperatingSystem.IsWindows())
+            throw Xunit.Sdk.SkipException.ForSkip("Unix mode-based registry read refusal is not available on Windows.");
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var bytes = ValidLessonsRegistryBytes();
+        WriteLessonsRegistry(workspace, bytes);
+        var path = Path.Combine(workspace.Root, LessonsRegistry.RootRelativePath, "review_lessons.json");
+        var originalMode = File.GetUnixFileMode(path);
+        var before = workspace.Snapshot();
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.None);
+            try
+            {
+                _ = File.ReadAllBytes(path);
+                throw Xunit.Sdk.SkipException.ForSkip("The OS did not reject a direct read of the mode-000 lessons registry.");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                var registryCallbacks = 0;
+                var (exit, output) = Render(workspace.Root,
+                    Args("reviewer", format).Concat(LessonOptions(bytes, ["L-ADVISORY"])).ToArray(),
+                    (operation, _) => { if (operation == "after-lessons-captured") registryCallbacks++; });
+                Assert.Equal(1, exit);
+                using var refusal = ReadOutput(output, format);
+                Assert.Equal("brief-lessons-unavailable", refusal.RootElement.GetProperty("cause").GetString());
+                Assert.Equal(".intent-cli/lessons/review_lessons.json",
+                    refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("path").GetString());
+                Assert.Equal(0, registryCallbacks);
+                Assert.False(refusal.RootElement.TryGetProperty("lessons", out _));
+            }
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, originalMode);
+        }
+        Assert.Equal(before, workspace.Snapshot());
+    }
+
+    [Theory]
+    [InlineData("parent")]
+    [InlineData("leaf")]
+    public void LessonsRegistryRejectsPopulatedSymlinkTargetsWithoutOpeningThem(string linkedPart)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var bytes = ValidLessonsRegistryBytes();
+        var outside = Path.Combine(workspace.Root, "outside-lessons");
+        Directory.CreateDirectory(outside);
+        var outsideFile = Path.Combine(outside, "review_lessons.json");
+        File.WriteAllBytes(outsideFile, bytes);
+        var outsideBefore = File.ReadAllBytes(outsideFile);
+        var lessonsDirectory = Path.Combine(workspace.Root, ".intent-cli", "lessons");
+        var registryPath = Path.Combine(lessonsDirectory, "review_lessons.json");
+        if (linkedPart == "parent") Directory.CreateSymbolicLink(lessonsDirectory, outside);
+        else
+        {
+            Directory.CreateDirectory(lessonsDirectory);
+            File.CreateSymbolicLink(registryPath, outsideFile);
+        }
+        var before = workspace.Snapshot();
+        var registryReads = 0;
+
+        var (exit, output) = Render(workspace.Root,
+            Args("builder", "json").Concat(LessonOptions(bytes, ["L-ADVISORY"])).ToArray(),
+            (operation, _) => { if (operation == "after-lessons-captured") registryReads++; });
+
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal("brief-lessons-unavailable", refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(".intent-cli/lessons/review_lessons.json",
+            refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("path").GetString());
+        Assert.Equal(0, registryReads);
+        Assert.Equal(outsideBefore, File.ReadAllBytes(outsideFile));
+        Assert.Equal(before, workspace.Snapshot());
+    }
+
+    [Theory]
+    [InlineData("exact")]
+    [InlineData("over")]
+    public void LessonsSiblingInspectionUsesTheShared4096EntryLimit(string boundary)
+    {
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var bytes = ValidLessonsRegistryBytes();
+        WriteLessonsRegistry(workspace, bytes);
+        var directory = Path.Combine(workspace.Root, LessonsRegistry.RootRelativePath);
+        var entryCount = boundary == "exact" ? 4096 : 4097;
+        for (var index = 1; index < entryCount; index++)
+            File.WriteAllBytes(Path.Combine(directory, $"unrelated-{index:D4}.json"), []);
+        Assert.Equal(entryCount, Directory.EnumerateFileSystemEntries(directory).Count());
+        var before = workspace.Snapshot();
+        var readCallbacks = 0;
+
+        var (exit, output) = Render(workspace.Root,
+            Args("builder", "json").Concat(LessonOptions(bytes, ["L-ADVISORY"])).ToArray(),
+            (operation, path) =>
+            {
+                if (operation == "after-lessons-captured" && path == ".intent-cli/lessons/review_lessons.json")
+                    readCallbacks++;
+            });
+
+        if (boundary == "exact")
+        {
+            Assert.True(exit == 0, output);
+            Assert.Equal(1, readCallbacks);
+            using var success = JsonDocument.Parse(output);
+            Assert.Equal("selected", success.RootElement.GetProperty("lessons_state").GetString());
+        }
+        else
+        {
+            Assert.Equal(1, exit);
+            using var refusal = JsonDocument.Parse(output);
+            Assert.Equal("brief-lessons-unavailable", refusal.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(0, readCallbacks);
+        }
+        Assert.Equal(before, workspace.Snapshot());
+    }
+
+    [Fact]
+    public async Task LessonsRegistryFifoLeafIsRefusedWithoutOpeningWhenSupported()
+    {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
+        using var workspace = new BriefWorkspace();
+        _ = WritePinnedFixture(workspace);
+        var directory = Path.Combine(workspace.Root, LessonsRegistry.RootRelativePath);
+        Directory.CreateDirectory(directory);
+        var fifoPath = Path.Combine(directory, "review_lessons.json");
+        try
+        {
+            if (MkFifo(fifoPath, 0x180) != 0) return;
+        }
+        catch (DllNotFoundException) { return; }
+        catch (EntryPointNotFoundException) { return; }
+
+        var before = SnapshotWithFifo(workspace.Root, fifoPath);
+        var callbackCount = 0;
+        var work = Task.Run(() => Render(workspace.Root,
+            Args("builder", "json").Concat(LessonOptions(ValidLessonsRegistryBytes(), ["L-ADVISORY"])).ToArray(),
+            (operation, _) => { if (operation == "after-lessons-captured") callbackCount++; }));
+        Assert.Same(work, await Task.WhenAny(work, Task.Delay(TimeSpan.FromSeconds(2))));
+        var (exit, output) = await work;
+        Assert.Equal(1, exit);
+        using var refusal = JsonDocument.Parse(output);
+        Assert.Equal("brief-lessons-unavailable", refusal.RootElement.GetProperty("cause").GetString());
+        Assert.Equal(".intent-cli/lessons/review_lessons.json",
+            refusal.RootElement.GetProperty("diagnostics")[0].GetProperty("path").GetString());
+        Assert.Equal(0, callbackCount);
+        Assert.Equal(before, SnapshotWithFifo(workspace.Root, fifoPath));
+    }
+
+    [Theory]
+    [InlineData("json")]
+    [InlineData("markdown")]
+    public void EarlierPacketG863AndG865RefusalsSuppressTheLessonsCapture(string format)
+    {
+        var cases = new (string Name, Action<BriefWorkspace> Mutate, string Cause)[]
+        {
+            ("missing-packet", workspace => File.Delete(workspace.Path("packet.yaml")), "brief-input-unavailable"),
+            ("invalid-packet", workspace => File.WriteAllText(workspace.Path("packet.yaml"), "implementation_issue_packet: ["), "brief-packet-unavailable"),
+            ("g863-refusal", workspace => File.WriteAllText(workspace.Path("github-body.md"), "# provenance was changed\n"), "brief-scope-sources-refused"),
+            ("g865-refusal", workspace =>
+            {
+                var packet = File.ReadAllText(workspace.Path("packet.yaml"));
+                packet = Encoding.UTF8.GetString(ReplaceJsonOnce(packet, "version: 1", "version: 9"));
+                File.WriteAllText(workspace.Path("packet.yaml"), packet);
+            }, "brief-verification-contract-refused"),
+        };
+
+        foreach (var (name, mutate, expectedCause) in cases)
+        {
+            using var workspace = new BriefWorkspace();
+            _ = WritePinnedFixture(workspace);
+            var registry = ValidLessonsRegistryBytes();
+            WriteLessonsRegistry(workspace, registry);
+            mutate(workspace);
+            var before = workspace.Snapshot();
+            var registryCaptures = 0;
+
+            var (exit, output) = Render(workspace.Root,
+                Args("builder", format).Concat(LessonOptions(registry, ["L-ADVISORY"])).ToArray(),
+                (operation, _) => { if (operation == "after-lessons-captured") registryCaptures++; });
+
+            Assert.True(exit == 1, $"{name}: {output}");
+            using var refusal = ReadOutput(output, format);
+            Assert.Equal(expectedCause, refusal.RootElement.GetProperty("cause").GetString());
+            Assert.Equal(0, registryCaptures);
+            Assert.False(refusal.RootElement.TryGetProperty("lessons", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("manifest", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("input_digest", out _));
+            Assert.False(refusal.RootElement.TryGetProperty("sections", out _));
+            Assert.Equal(before, workspace.Snapshot());
+        }
     }
 
     [Theory]
@@ -257,6 +1135,123 @@ public sealed class BriefRenderCommandTests
             Assert.False(changedResult.GetProperty("sections").TryGetProperty("implementation", out _));
         }
         if (setting == "format") Assert.Equal("markdown", changedResult.GetProperty("format").GetString());
+    }
+
+    [Theory]
+    [InlineData("selected-id")]
+    [InlineData("role")]
+    [InlineData("head")]
+    [InlineData("as-of")]
+    [InlineData("format")]
+    public void OptInV2DigestTracksEachSelectedSettingIndependently(string setting)
+    {
+        using var workspace = new BriefWorkspace();
+        var fixture = WritePinnedFixture(workspace);
+        var registryBytes = ValidLessonsRegistryBytes();
+        WriteLessonsRegistry(workspace, registryBytes);
+        var selectedIds = new[] { "L-ADVISORY" };
+        var baselineArgs = Args("reviewer", "json")
+            .Concat(LessonOptions(registryBytes, selectedIds)).ToArray();
+        var baseline = Render(workspace.Root, baselineArgs);
+        Assert.True(baseline.ExitCode == 0, baseline.Output);
+        using var baselineDocument = ReadOutput(baseline.Output, "json");
+        var baselineResult = baselineDocument.RootElement;
+        var baselineDigest = baselineResult.GetProperty("input_digest").GetString();
+
+        string[] changedArgs;
+        string changedRole = "reviewer";
+        string changedFormat = "json";
+        var changedHead = "0123456789abcdef0123456789abcdef01234567";
+        var changedAsOf = "2026-10-15T12:00:00Z";
+        IReadOnlyList<string> changedSelectedIds = selectedIds;
+        switch (setting)
+        {
+            case "selected-id":
+                changedSelectedIds = ["L-DECLARED"];
+                changedArgs = Args(changedRole, changedFormat)
+                    .Concat(LessonOptions(registryBytes, changedSelectedIds)).ToArray();
+                break;
+            case "role":
+                changedRole = "builder";
+                changedArgs = Args(changedRole, changedFormat)
+                    .Concat(LessonOptions(registryBytes, changedSelectedIds)).ToArray();
+                break;
+            case "head":
+                changedHead = "abcdef0123456789abcdef0123456789abcdef01";
+                changedArgs = Args(changedRole, changedFormat)
+                    .Select((value, index) => index == 11
+                        ? changedHead : value)
+                    .Concat(LessonOptions(registryBytes, changedSelectedIds)).ToArray();
+                break;
+            case "as-of":
+                changedAsOf = "2026-10-15T12:00:01Z";
+                changedArgs = Args(changedRole, changedFormat)
+                    .Select((value, index) => index == 13 ? changedAsOf : value)
+                    .Concat(LessonOptions(registryBytes, changedSelectedIds)).ToArray();
+                break;
+            case "format":
+                changedFormat = "markdown";
+                changedArgs = Args(changedRole, changedFormat)
+                    .Concat(LessonOptions(registryBytes, changedSelectedIds)).ToArray();
+                break;
+            default:
+                throw new InvalidOperationException("Unknown v2 digest setting.");
+        }
+
+        Assert.False(baselineArgs.SequenceEqual(changedArgs));
+        var changed = Render(workspace.Root, changedArgs);
+        Assert.True(changed.ExitCode == 0, changed.Output);
+        using var changedDocument = ReadOutput(changed.Output, changedFormat);
+        var changedResult = changedDocument.RootElement;
+        Assert.NotEqual(baselineDigest, changedResult.GetProperty("input_digest").GetString());
+        Assert.Equal(ExpectedLessonsDigest(changedRole, changedFormat, workspace,
+            fixture.RulingPath, fixture.RulingBytes, "review_lessons", registryBytes,
+            changedSelectedIds, changedHead, changedAsOf), changedResult.GetProperty("input_digest").GetString());
+        Assert.Equal(changedSelectedIds.Order(StringComparer.Ordinal), changedResult.GetProperty("lessons")
+            .GetProperty("selected_ids").EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.Equal(changedSelectedIds.Single(), changedResult.GetProperty("lessons")
+            .GetProperty("entries")[0].GetProperty("id").GetString());
+        if (setting == "role") Assert.Equal("builder", changedResult.GetProperty("role").GetString());
+        if (setting == "head") Assert.Equal(changedHead, changedResult.GetProperty("head_sha").GetString());
+        if (setting == "as-of") Assert.Equal(changedAsOf, changedResult.GetProperty("as_of").GetString());
+        if (setting == "format") Assert.Equal("markdown", changedResult.GetProperty("format").GetString());
+    }
+
+    [Fact]
+    public void OptInV2RepeatedAndCopiedRootWithOutAreByteIdentical()
+    {
+        using var first = new BriefWorkspace();
+        using var copy = new BriefWorkspace();
+        var fixture = WritePinnedFixture(first);
+        var copiedFixture = WritePinnedFixture(copy);
+        Assert.Equal(fixture.RulingBytes, copiedFixture.RulingBytes);
+        var registryBytes = ValidLessonsRegistryBytes();
+        WriteLessonsRegistry(first, registryBytes);
+        WriteLessonsRegistry(copy, registryBytes);
+        var selection = new[] { "L-ADVISORY", "L-DECLARED" };
+        var args = Args("reviewer", "json").Concat(LessonOptions(registryBytes, selection)).ToArray();
+
+        var initial = Render(first.Root, args);
+        var repeated = Render(first.Root, args);
+        var outputDirectory = Path.Combine(copy.Root, "brief-output");
+        Directory.CreateDirectory(outputDirectory);
+        var copiedBeforeOutput = copy.Snapshot();
+        var copiedWithOut = Render(copy.Root, args.Concat(["--out", Path.Combine(outputDirectory, "brief.json")]).ToArray());
+
+        Assert.True(initial.ExitCode == 0, initial.Output);
+        Assert.True(repeated.ExitCode == 0, repeated.Output);
+        Assert.True(copiedWithOut.ExitCode == 0, copiedWithOut.Output);
+        Assert.Equal(initial.Output, repeated.Output);
+        Assert.Equal(initial.Output, copiedWithOut.Output);
+        Assert.Equal(new UTF8Encoding(false, true).GetBytes(initial.Output),
+            File.ReadAllBytes(Path.Combine(outputDirectory, "brief.json")));
+        using var result = JsonDocument.Parse(initial.Output);
+        Assert.Equal(ExpectedLessonsDigest("reviewer", "json", first, fixture.RulingPath,
+            fixture.RulingBytes, "review_lessons", registryBytes, selection),
+            result.RootElement.GetProperty("input_digest").GetString());
+        var copiedAfterOutput = string.Join("\n", copy.Snapshot().Split('\n')
+            .Where(row => !row.StartsWith("brief-output/brief.json:", StringComparison.Ordinal)));
+        Assert.Equal(copiedBeforeOutput, copiedAfterOutput);
     }
 
     [Theory]
@@ -1721,6 +2716,321 @@ public sealed class BriefRenderCommandTests
         return "# Issue body\n\n" + PacketScopeSources.FormatProvenanceBlock([provenance]) + "\n";
     }
 
+    private static byte[] ValidLessonsRegistryBytes() => Encoding.UTF8.GetBytes("""
+        {
+          "schema_version": 1,
+          "registry_id": "review_lessons",
+          "lessons": [
+            {
+              "id": "L-DECLARED",
+              "source": "Keep supplied provenance local and explicit.",
+              "applies_to": {
+                "roles": ["builder", "reviewer"],
+                "target_repo": "J-Tech-Japan/intent-system",
+                "domain": "intent-cli",
+                "team": "intent-cli-dev",
+                "execution_units": ["G870"]
+              },
+              "rule": "Preserve the authored scope without expanding it.",
+              "enforced_by": ["G871 display only"],
+              "lifecycle": {
+                "state": "active",
+                "active_from": "2026-10-01T00:00:00Z",
+                "expires_at": null,
+                "superseded_by": null
+              }
+            },
+            {
+              "id": "L-ADVISORY",
+              "source": "The explicit source supports one narrow advisory lesson.",
+              "applies_to": {
+                "roles": ["builder", "reviewer"],
+                "target_repo": "J-Tech-Japan/intent-system",
+                "domain": "intent-cli",
+                "team": "intent-cli-dev",
+                "execution_units": ["G870"]
+              },
+              "rule": "Use only the exact selected advisory row.",
+              "enforced_by": [],
+              "lifecycle": {
+                "state": "active",
+                "active_from": "2026-10-01T00:00:00Z",
+                "expires_at": null,
+                "superseded_by": null
+              }
+            },
+            {
+              "id": "L-BUILDER-ONLY",
+              "source": "BUILDER-ONLY-UNSELECTED-SECRET",
+              "applies_to": {
+                "roles": ["builder"],
+                "target_repo": "J-Tech-Japan/intent-system",
+                "domain": "intent-cli",
+                "team": "intent-cli-dev",
+                "execution_units": ["G870"]
+              },
+              "rule": "BUILDER-ONLY-UNSELECTED-SECRET",
+              "enforced_by": ["BUILDER-ONLY-UNSELECTED-SECRET"],
+              "lifecycle": {
+                "state": "active",
+                "active_from": "2026-10-01T00:00:00Z",
+                "expires_at": null,
+                "superseded_by": null
+              }
+            }
+          ]
+        }
+        """);
+
+    private static List<(string Name, byte[] Bytes, string Cause)> InvalidLessonsRegistryCases()
+    {
+        var cases = new List<(string, byte[], string)>();
+        var baselineText = Encoding.UTF8.GetString(ValidLessonsRegistryBytes());
+        byte[] ChangeCase(Action<JsonObject> mutate) => Change(JsonNode.Parse(ValidLessonsRegistryBytes())!.AsObject(), mutate);
+        void Add(string name, byte[] bytes, string cause = "brief-lessons-invalid") => cases.Add((name, bytes, cause));
+
+        Add("root-null", Encoding.UTF8.GetBytes("null"));
+        Add("root-sequence", Encoding.UTF8.GetBytes("[]"));
+        Add("root-scalar", Encoding.UTF8.GetBytes("true"));
+        Add("root-unknown", ChangeCase(root => root["unknown"] = true));
+        Add("root-missing-schema-version", ChangeCase(root => root.Remove("schema_version")));
+        Add("root-duplicate-schema-version", ReplaceJsonOnce(baselineText, "\"schema_version\": 1", "\"schema_version\": 1, \"schema_version\": 1"));
+        Add("root-key-unpaired-surrogate", ReplaceJsonOnce(baselineText, "\"schema_version\"", "\"\\uD800\""));
+        foreach (var (name, value) in new (string, JsonNode?)[ ]
+                 {
+                     ("null", null), ("string", JsonValue.Create("1")), ("boolean", JsonValue.Create(true)),
+                     ("array", new JsonArray(1)), ("object", new JsonObject { ["value"] = 1 }),
+                 })
+            Add("schema-version-" + name, ChangeCase(root => root["schema_version"] = value?.DeepClone()));
+        Add("schema-version-decimal-lexeme", ReplaceJsonOnce(baselineText, "\"schema_version\": 1", "\"schema_version\": 1.0"));
+        Add("schema-version-exponent-lexeme", ReplaceJsonOnce(baselineText, "\"schema_version\": 1", "\"schema_version\": 1e0"));
+        foreach (var (name, value) in new (string, JsonNode?)[ ]
+                 {
+                     ("null", null), ("number", JsonValue.Create(1)), ("array", new JsonArray("review_lessons")),
+                     ("object", new JsonObject { ["value"] = "review_lessons" }),
+                 })
+            Add("registry-id-" + name, ChangeCase(root => root["registry_id"] = value?.DeepClone()));
+        Add("registry-id-mismatch", ChangeCase(root => root["registry_id"] = "other_registry"));
+        Add("registry-id-invalid", ChangeCase(root => root["registry_id"] = "../review_lessons"));
+        Add("lessons-null", ChangeCase(root => root["lessons"] = null));
+        Add("lessons-scalar", ChangeCase(root => root["lessons"] = 4));
+        Add("lessons-object", ChangeCase(root => root["lessons"] = new JsonObject()));
+        Add("lesson-null", ChangeCase(root => root["lessons"]!.AsArray()[0] = null));
+        Add("lesson-scalar", ChangeCase(root => root["lessons"]!.AsArray()[0] = "not-an-object"));
+        Add("lesson-unknown", ChangeCase(root => root["lessons"]!.AsArray()[0]!["unknown"] = "x"));
+        foreach (var property in new[] { "id", "source", "applies_to", "rule", "enforced_by", "lifecycle" })
+            Add("lesson-missing-" + property, ChangeCase(root => SelectedLesson(root).Remove(property)));
+        Add("lesson-duplicate-id-property", ReplaceJsonOnce(baselineText, "\"id\": \"L-DECLARED\"", "\"id\": \"L-DECLARED\", \"id\": \"L-DECLARED\""));
+
+        Add("lesson-id-empty", ChangeCase(root => SelectedLesson(root)["id"] = ""));
+        Add("lesson-id-non-ascii", ChangeCase(root => SelectedLesson(root)["id"] = "L-😀"));
+        Add("lesson-source-null", ChangeCase(root => SelectedLesson(root)["source"] = null));
+        Add("lesson-source-number", ChangeCase(root => SelectedLesson(root)["source"] = 1));
+        Add("lesson-source-empty", ChangeCase(root => SelectedLesson(root)["source"] = ""));
+        Add("lesson-source-whitespace", ChangeCase(root => SelectedLesson(root)["source"] = " \t\n"));
+        Add("lesson-source-unpaired-surrogate", ReplaceJsonOnce(baselineText, "The explicit source supports one narrow advisory lesson.", "\\uD800"));
+        Add("lesson-rule-null", ChangeCase(root => SelectedLesson(root)["rule"] = null));
+        Add("lesson-rule-number", ChangeCase(root => SelectedLesson(root)["rule"] = 2));
+        Add("lesson-rule-empty", ChangeCase(root => SelectedLesson(root)["rule"] = ""));
+        Add("lesson-rule-whitespace", ChangeCase(root => SelectedLesson(root)["rule"] = " \t"));
+        Add("applies-null", ChangeCase(root => SelectedLesson(root)["applies_to"] = null));
+        Add("applies-sequence", ChangeCase(root => SelectedLesson(root)["applies_to"] = new JsonArray()));
+        Add("applies-scalar", ChangeCase(root => SelectedLesson(root)["applies_to"] = "scope"));
+        Add("applies-number", ChangeCase(root => SelectedLesson(root)["applies_to"] = 1));
+        Add("applies-unknown", ChangeCase(root => SelectedLesson(root)["applies_to"]!["unknown"] = false));
+        Add("applies-duplicate-roles", ReplaceJsonOnce(baselineText, "\"roles\": [\"builder\", \"reviewer\"]", "\"roles\": [\"builder\", \"reviewer\"], \"roles\": [\"builder\"]"));
+        foreach (var property in new[] { "roles", "target_repo", "domain", "team", "execution_units" })
+        {
+            Add("applies-missing-" + property, ChangeCase(root => SelectedLesson(root)["applies_to"]!.AsObject().Remove(property)));
+            foreach (var (name, replacement) in new (string, Func<JsonNode?>)[]
+                     {
+                         ("null", () => null), ("number", () => JsonValue.Create(3)),
+                         ("array", () => new JsonArray()), ("object", () => new JsonObject()),
+                     })
+                Add($"applies-{property}-{name}", ChangeCase(root => SelectedLesson(root)["applies_to"]![property] = replacement()));
+        }
+        Add("roles-null", ChangeCase(root => SelectedLesson(root)["applies_to"]!["roles"] = null));
+        Add("roles-object", ChangeCase(root => SelectedLesson(root)["applies_to"]!["roles"] = new JsonObject()));
+        Add("roles-empty", ChangeCase(root => SelectedLesson(root)["applies_to"]!["roles"] = new JsonArray()));
+        Add("roles-invalid-member", ChangeCase(root => SelectedLesson(root)["applies_to"]!["roles"] = new JsonArray("builder", "worker")));
+        Add("roles-duplicate-member", ChangeCase(root => SelectedLesson(root)["applies_to"]!["roles"] = new JsonArray("builder", "builder")));
+        Add("target-repo-invalid", ChangeCase(root => SelectedLesson(root)["applies_to"]!["target_repo"] = "../repo"));
+        Add("domain-invalid", ChangeCase(root => SelectedLesson(root)["applies_to"]!["domain"] = ""));
+        Add("units-null", ChangeCase(root => SelectedLesson(root)["applies_to"]!["execution_units"] = null));
+        Add("units-object", ChangeCase(root => SelectedLesson(root)["applies_to"]!["execution_units"] = new JsonObject()));
+        Add("units-empty", ChangeCase(root => SelectedLesson(root)["applies_to"]!["execution_units"] = new JsonArray()));
+        Add("units-invalid-member", ChangeCase(root => SelectedLesson(root)["applies_to"]!["execution_units"] = new JsonArray("../G871")));
+        Add("units-duplicate", ChangeCase(root => SelectedLesson(root)["applies_to"]!["execution_units"] = new JsonArray("G870", "G870")));
+        Add("units-case-alias", ChangeCase(root => SelectedLesson(root)["applies_to"]!["execution_units"] = new JsonArray("G870", "g870")));
+        Add("enforced-null", ChangeCase(root => SelectedLesson(root)["enforced_by"] = null));
+        Add("enforced-object", ChangeCase(root => SelectedLesson(root)["enforced_by"] = new JsonObject()));
+        Add("enforced-empty-member", ChangeCase(root => SelectedLesson(root)["enforced_by"] = new JsonArray("")));
+        Add("enforced-nonstring-member", ChangeCase(root => SelectedLesson(root)["enforced_by"] = new JsonArray(1)));
+        Add("enforced-duplicate-member", ChangeCase(root => SelectedLesson(root)["enforced_by"] = new JsonArray("same", "same")));
+        Add("lifecycle-null", ChangeCase(root => SelectedLesson(root)["lifecycle"] = null));
+        Add("lifecycle-sequence", ChangeCase(root => SelectedLesson(root)["lifecycle"] = new JsonArray()));
+        Add("lifecycle-scalar", ChangeCase(root => SelectedLesson(root)["lifecycle"] = "active"));
+        Add("lifecycle-number", ChangeCase(root => SelectedLesson(root)["lifecycle"] = 1));
+        Add("lifecycle-unknown", ChangeCase(root => SelectedLesson(root)["lifecycle"]!["unknown"] = false));
+        Add("lifecycle-duplicate-state", ReplaceJsonOnce(baselineText, "\"state\": \"active\"", "\"state\": \"active\", \"state\": \"active\""));
+        foreach (var property in new[] { "state", "active_from", "expires_at", "superseded_by" })
+        {
+            Add("lifecycle-missing-" + property, ChangeCase(root => SelectedLesson(root)["lifecycle"]!.AsObject().Remove(property)));
+            foreach (var (name, replacement) in new (string, Func<JsonNode?>)[]
+                     {
+                         ("null", () => null), ("number", () => JsonValue.Create(3)),
+                         ("array", () => new JsonArray()), ("object", () => new JsonObject()),
+                     })
+            {
+                // Null is an authored value only for the two explicitly nullable lifecycle members.
+                if (name == "null" && property is "expires_at" or "superseded_by") continue;
+                Add($"lifecycle-{property}-{name}", ChangeCase(root => SelectedLesson(root)["lifecycle"]![property] = replacement()));
+            }
+        }
+        Add("lifecycle-invalid-state", ChangeCase(root => SelectedLesson(root)["lifecycle"]!["state"] = "paused"));
+        Add("lifecycle-invalid-active-from", ChangeCase(root => SelectedLesson(root)["lifecycle"]!["active_from"] = "2026-10-01T00:00:00+00:00"));
+        Add("lifecycle-invalid-expiry", ChangeCase(root => SelectedLesson(root)["lifecycle"]!["expires_at"] = "yesterday"));
+        Add("lifecycle-expiry-not-after-start", ChangeCase(root => SelectedLesson(root)["lifecycle"]!["expires_at"] = "2026-10-01T00:00:00Z"));
+        Add("active-has-successor", ChangeCase(root => SelectedLesson(root)["lifecycle"]!["superseded_by"] = "L-DECLARED"));
+        Add("superseded-missing-successor", ChangeCase(root =>
+        {
+            SelectedLesson(root)["lifecycle"]!["state"] = "superseded";
+            SelectedLesson(root)["lifecycle"]!["superseded_by"] = null;
+        }));
+        Add("superseded-self-reference", ChangeCase(root =>
+        {
+            SelectedLesson(root)["lifecycle"]!["state"] = "superseded";
+            SelectedLesson(root)["lifecycle"]!["superseded_by"] = "L-ADVISORY";
+        }));
+        Add("superseded-missing-reference", ChangeCase(root =>
+        {
+            SelectedLesson(root)["lifecycle"]!["state"] = "superseded";
+            SelectedLesson(root)["lifecycle"]!["superseded_by"] = "L-NOT-PRESENT";
+        }));
+        Add("superseded-successor-is-superseded", ChangeCase(root =>
+        {
+            SelectedLesson(root)["lifecycle"]!["state"] = "superseded";
+            SelectedLesson(root)["lifecycle"]!["superseded_by"] = "L-DECLARED";
+            var declared = root["lessons"]!.AsArray().Select(row => row!.AsObject())
+                .Single(row => row["id"]!.GetValue<string>() == "L-DECLARED");
+            declared["lifecycle"]!["state"] = "superseded";
+            declared["lifecycle"]!["superseded_by"] = "L-BUILDER-ONLY";
+        }));
+        Add("duplicate-id", ChangeCase(root => root["lessons"]!.AsArray()[2]!["id"] = "L-ADVISORY"));
+        Add("case-alias-id", ChangeCase(root => root["lessons"]!.AsArray()[2]!["id"] = "l-advisory"));
+
+        var nested = new JsonObject { ["leaf"] = true };
+        for (var index = 0; index < 8; index++) nested = new JsonObject { ["next"] = nested };
+        Add("depth-nine", ChangeCase(root => root["unknown"] = nested), "brief-resource-limit");
+        Add("json-comment", Encoding.UTF8.GetBytes("{\n  // comment\n" + baselineText[2..]));
+        var trimmedBaseline = baselineText.TrimEnd();
+        Add("json-trailing-comma", Encoding.UTF8.GetBytes(trimmedBaseline[..^1] + ",}\n"));
+        Add("json-trailing-document", Encoding.UTF8.GetBytes(baselineText + "\n{}\n"));
+        Add("strict-utf8", [0xc3, 0x28]);
+        Add("whitespace-only", Encoding.UTF8.GetBytes(" \n\t"), "brief-lessons-unavailable");
+        return cases;
+    }
+
+    private static byte[] Change(JsonObject source, Action<JsonObject> mutate)
+    {
+        var clone = (JsonObject)source.DeepClone();
+        mutate(clone);
+        return JsonSerializer.SerializeToUtf8Bytes(clone);
+    }
+
+    private static byte[] ReplaceJsonOnce(string source, string expected, string replacement)
+    {
+        var index = source.IndexOf(expected, StringComparison.Ordinal);
+        if (index < 0) throw new InvalidOperationException("The JSON fixture replacement target was not found.");
+        return Encoding.UTF8.GetBytes(source[..index] + replacement + source[(index + expected.Length)..]);
+    }
+
+    private static byte[] SupersededSelectedRegistry()
+    {
+        var root = JsonNode.Parse(ValidLessonsRegistryBytes())!.AsObject();
+        SelectedLesson(root)["lifecycle"]!["state"] = "superseded";
+        SelectedLesson(root)["lifecycle"]!["superseded_by"] = "L-DECLARED";
+        return JsonSerializer.SerializeToUtf8Bytes(root);
+    }
+
+    private static byte[] ValidUnselectedInactiveRegistry()
+    {
+        var root = JsonNode.Parse(ValidLessonsRegistryBytes())!.AsObject();
+        var rows = root["lessons"]!.AsArray();
+        var future = rows[0]!.AsObject();
+        future["lifecycle"]!["state"] = "superseded";
+        future["lifecycle"]!["active_from"] = "2026-10-16T00:00:00Z";
+        future["lifecycle"]!["expires_at"] = "2026-10-20T00:00:00Z";
+        future["lifecycle"]!["superseded_by"] = "L-BUILDER-ONLY";
+        rows[2]!["lifecycle"]!["expires_at"] = "2026-10-10T00:00:00Z";
+        return JsonSerializer.SerializeToUtf8Bytes(root);
+    }
+
+    private static JsonObject MaximumLessonsRegistryNode()
+    {
+        var root = JsonNode.Parse(ValidLessonsRegistryBytes())!.AsObject();
+        var selected = SelectedLesson(root);
+        selected["source"] = new string('s', 4094) + "😀";
+        selected["rule"] = new string('r', 4094) + "😀";
+        selected["enforced_by"] = new JsonArray(Enumerable.Range(0, 8)
+            .Select(index => (JsonNode?)JsonValue.Create(((char)('a' + index)).ToString().PadRight(256, (char)('a' + index))))
+            .ToArray());
+        selected["applies_to"]!["execution_units"] = new JsonArray(
+            Enumerable.Range(0, 16).Select(index => (JsonNode?)JsonValue.Create(index == 0 ? "G870" : $"X{index:00}"))
+                .ToArray());
+
+        var rows = root["lessons"]!.AsArray();
+        while (rows.Count < 128)
+        {
+            var row = rows[2]!.DeepClone().AsObject();
+            row["id"] = $"L-EXTRA-{rows.Count + 1}";
+            rows.Add(row);
+        }
+        return root;
+    }
+
+    private static JsonObject SelectedLesson(JsonObject root) => root["lessons"]!.AsArray()
+        .Select(row => row!.AsObject())
+        .Single(row => row["id"]!.GetValue<string>() == "L-ADVISORY");
+
+    private static void WriteLessonsRegistry(BriefWorkspace workspace, byte[] registryBytes)
+        => WriteLessonsRegistry(workspace, "review_lessons", registryBytes);
+
+    private static void WriteLessonsRegistry(BriefWorkspace workspace, string registryId, byte[] registryBytes)
+    {
+        var directory = Path.Combine(workspace.Root, ".intent-cli", "lessons");
+        Directory.CreateDirectory(directory);
+        File.WriteAllBytes(Path.Combine(directory, registryId + ".json"), registryBytes);
+    }
+
+    private static string[] LessonOptions(byte[] registryBytes, IReadOnlyList<string> selectedIds)
+        => LessonOptions("review_lessons", registryBytes, selectedIds);
+
+    private static string[] LessonOptions(string registryId, byte[] registryBytes, IReadOnlyList<string> selectedIds)
+        => LessonOptionsWithSha(registryId, Hash(registryBytes), selectedIds);
+
+    private static string[] LessonOptionsWithSha(string registryId, string sha256, IReadOnlyList<string> selectedIds)
+    {
+        var options = new List<string>
+        {
+            "--lessons-registry", registryId,
+            "--lessons-sha256", sha256,
+        };
+        foreach (var selectedId in selectedIds)
+        {
+            options.Add("--lesson");
+            options.Add(selectedId);
+        }
+        return options.ToArray();
+    }
+
+    private static (int Exit, string Output) RenderWithLessons(BriefWorkspace workspace, byte[] registryBytes,
+        string format, IReadOnlyList<string> selectedIds, string role = "builder")
+    {
+        WriteLessonsRegistry(workspace, registryBytes);
+        return Render(workspace.Root, Args(role, format).Concat(LessonOptions(registryBytes, selectedIds)).ToArray());
+    }
+
     private static void SeedRuling(string root, string id, byte[] bytes)
     {
         var path = Path.Combine(root, RulingPath(id).Replace('/', Path.DirectorySeparatorChar));
@@ -1904,6 +3214,59 @@ public sealed class BriefRenderCommandTests
         return Hash(stream.ToArray());
     }
 
+    private static string ExpectedLessonsDigest(string role, string format, BriefWorkspace workspace,
+        string rulingPath, byte[] rulingBytes, string registryId, byte[] registryBytes,
+        IReadOnlyList<string> selectedIds, string headSha = "0123456789abcdef0123456789abcdef01234567",
+        string asOf = "2026-10-15T12:00:00Z")
+    {
+        using var stream = new MemoryStream();
+        stream.Write(Encoding.UTF8.GetBytes("intent-cli-brief-v2"));
+        stream.WriteByte(0);
+        foreach (var (key, value) in new[]
+                 {
+                     ("role", role), ("domain", Domain), ("team", Team), ("target_repo", Repo),
+                     ("execution_unit", Unit), ("head_sha", headSha),
+                     ("as_of", asOf), ("format", format),
+                     ("lessons_registry", registryId), ("lessons_sha256", Hash(registryBytes)),
+                 })
+            WriteDigestSetting(stream, key, value);
+        foreach (var id in selectedIds.Order(StringComparer.Ordinal)) WriteDigestSetting(stream, "lesson", id);
+
+        var sources = new List<(string Path, byte[] Bytes)>
+        {
+            ($".intent-cli/issues/{Unit}/packet.yaml", File.ReadAllBytes(workspace.Path("packet.yaml"))),
+            ($".intent-cli/issues/{Unit}/github-body.md", File.ReadAllBytes(workspace.Path("github-body.md"))),
+            ($".intent-cli/issues/{Unit}/review-context.md", File.ReadAllBytes(workspace.Path("review-context.md"))),
+        };
+        if (role == "builder")
+            sources.Add(($".intent-cli/issues/{Unit}/implementation.md", File.ReadAllBytes(workspace.Path("implementation.md"))));
+        sources.Add((rulingPath, rulingBytes));
+        sources.Add(($"{LessonsRegistry.RootRelativePath}/{registryId}.json", registryBytes));
+        var packetCount = role == "builder" ? 4 : 3;
+        foreach (var source in sources.Take(packetCount)
+                     .Concat(sources.Skip(packetCount).Take(1))
+                     .Concat(sources.Skip(packetCount + 1)))
+        {
+            stream.Write(Encoding.UTF8.GetBytes(source.Path));
+            stream.WriteByte(0);
+            stream.Write(Encoding.UTF8.GetBytes(source.Bytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            stream.WriteByte(0);
+            stream.Write(source.Bytes);
+        }
+        return Hash(stream.ToArray());
+    }
+
+    private static void WriteDigestSetting(Stream stream, string key, string value)
+    {
+        var keyBytes = Encoding.UTF8.GetBytes(key);
+        var valueBytes = Encoding.UTF8.GetBytes(value);
+        stream.Write(keyBytes);
+        stream.WriteByte(0);
+        stream.Write(Encoding.UTF8.GetBytes(valueBytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        stream.WriteByte(0);
+        stream.Write(valueBytes);
+    }
+
     private static string[] Args(string role, string format) =>
     [
         "--role", role,
@@ -1939,6 +3302,16 @@ public sealed class BriefRenderCommandTests
         var end = normalized.LastIndexOf("\n```", StringComparison.Ordinal);
         Assert.True(end > start, output);
         return JsonDocument.Parse(normalized[start..end]);
+    }
+
+    private static JsonDocument ReadG871BaselineGoldens()
+    {
+        using var stream = typeof(BriefRenderCommandTests).Assembly
+            .GetManifestResourceStream("g871-no-marker-base-goldens.json");
+        Assert.NotNull(stream);
+        using var memory = new MemoryStream();
+        stream!.CopyTo(memory);
+        return JsonDocument.Parse(memory.ToArray());
     }
 
     private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
