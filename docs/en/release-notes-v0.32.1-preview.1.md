@@ -82,10 +82,22 @@ The remaining broader work includes shared-state semantic conflict recovery
 (#1864), a public issue-template/privacy renderer (#1865), ruling-backed
 hosted deferral (#1866), broader legacy/ruling acceptance reconciliation
 (#1867), and remote public-PR composition/registry authoring (#1868). The
-scoped solo-conductor approval, completion, debt, and claim duties in
-G856–G861 do not make #1857 an authenticated history oracle. These items are
-backlog boundaries, not claims that all related issues are complete or
-prerequisites for this preview.
+G856–G861 solo-conductor approval and release checks now enforce the
+previously documented duties: approval requires a posted independent review
+for the exact head, and eligible builder claim release requires canonical
+closeout plus the applicable receipts: when knowledge write-back is declared
+required, one attributed architect and one attributed orchestrator
+knowledge-writeback receipt; when a guide route is declared, an architect
+guide-reachability receipt. The only exceptions are the documented, narrowly scoped paths:
+`claim release --override-loop-evidence` needs an explicit nonblank reason and
+applies only to the listed missing receipts after closeout;
+`automation pr-transition --override-loop-evidence --override-id <uuid>` needs
+the explicit flag and reason and applies only to missing canonical posting
+after the local and other approval checks pass. `--reason` alone does not waive
+duties, and neither path fabricates receipts or generally bypasses approval,
+ownership, closeout, or other gates. These duties do not make #1857 an
+authenticated history oracle. These items are backlog boundaries, not claims
+that all related issues are complete or prerequisites for this preview.
 
 ## Installation and publication
 

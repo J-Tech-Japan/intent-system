@@ -48,7 +48,9 @@
 - brief の出力に失敗すると、不完全な出力や別プロセスが置いたファイルが残ることがあります。別途確認してください。renderer は元に戻す処理や公開を保証しません。
 - G872 は文書のみを変更します。release workflow の実行、タグの作成、package の公開は行わず、候補 artifact が後の公開 asset と一致することも証明しません。`workflow_dispatch` の候補と公開時の GitHub Release event は別々に build されます。以前の `0.32.1-preview.483.1` artifact の確認は別の証拠であり、この `preview.1` 候補ではありません。
 
-今後も残る広い作業には、共有状態における意味上の競合からの復旧（#1864）、公開 issue template のプライバシー表示（#1865）、ruling に基づく hosted deferral（#1866）、従来仕様と ruling に関する受け入れ条件の広い調整（#1867）、公開 PR の構成と registry の作成（#1868）があります。G856–G861 で追加された solo-conductor の承認、完了、debt、claim に関する手順があっても、#1857 が認証済みの履歴照合手段になるわけではありません。これらは今後の作業範囲であり、関連 issue がすべて完了したという主張でも、この preview の前提条件でもありません。
+今後も残る広い作業には、共有状態における意味上の競合からの復旧（#1864）、公開 issue template のプライバシー表示（#1865）、ruling に基づく hosted deferral（#1866）、従来仕様と ruling に関する受け入れ条件の広い調整（#1867）、公開 PR の構成と registry の作成（#1868）があります。
+
+G856–G861 の solo-conductor approval/release checks は、これまでに文書化されていた責務を実際に確認します。approval には対象 head に対する independent review の投稿が必要です。対象となる builder の claim release には canonical closeout と、該当する receipt が必要です。knowledge write-back が必須として宣言された場合は、architect と orchestrator それぞれに帰属する knowledge-writeback receipt が必要です。guide route が宣言された場合は、architect に帰属する guide-reachability receipt が必要です。例外は、明示的な flag と空でない理由を伴う、記録済みの限定経路だけです。`claim release --override-loop-evidence` は closeout 後に所定の receipt が不足する場合に限ります。`automation pr-transition --override-loop-evidence --override-id <uuid>` は G834 の local gate と他の承認条件が満たされ、canonical review の投稿不足だけが残る場合に限ります。`--reason` 単独では責務を免除せず、どちらの経路も receipt を捏造したり、承認、所有権、closeout、その他の gate を一般に迂回したりできません。これらの責務があっても、#1857 は認証済みの履歴照合手段にはなりません。これらは今後の作業範囲であり、関連 issue がすべて完了したという主張でも、この preview の前提条件でもありません。
 
 ## インストールと公開
 

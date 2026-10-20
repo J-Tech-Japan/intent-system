@@ -77,6 +77,7 @@ public sealed class ReleaseNotesV0321Preview1DocsTests
         var root = RepoVersionPolicySource.RepoRoot();
         var index = File.ReadAllText(Path.Combine(root, "docs", language, "README.md"));
         var install = Read(language, "01-install.md");
+        var notes = Read(language, $"release-notes-v{Version}.md");
 
         Assert.Contains($"release-notes-v{Version}.md", index, StringComparison.Ordinal);
         Assert.Contains("dotnet tool install -g JTechJapan.IntentSystem.Cli", install, StringComparison.Ordinal);
@@ -93,6 +94,32 @@ public sealed class ReleaseNotesV0321Preview1DocsTests
         Assert.Contains("Windows-x64", install, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(".sha256", install, StringComparison.Ordinal);
         Assert.Contains("PATH", install, StringComparison.Ordinal);
+
+        var indexLink = language == "en"
+            ? "[Release notes: 0.32.1-preview.1](release-notes-v0.32.1-preview.1.md)"
+            : "[リリースノート: 0.32.1-preview.1](release-notes-v0.32.1-preview.1.md)";
+        var installNotesLink = language == "en"
+            ? "[0.32.1-preview.1 release notes](release-notes-v0.32.1-preview.1.md)"
+            : "[0.32.1-preview.1 リリースノート](release-notes-v0.32.1-preview.1.md)";
+        const string previewReleaseUrl = "https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.32.1-preview.1";
+        const string stableLatestUrl = "https://github.com/J-Tech-Japan/intent-system/releases/latest";
+        Assert.Contains(indexLink, index, StringComparison.Ordinal);
+        Assert.Contains(installNotesLink, install, StringComparison.Ordinal);
+        Assert.Contains(previewReleaseUrl, install, StringComparison.Ordinal);
+        Assert.Contains(stableLatestUrl, install, StringComparison.Ordinal);
+        Assert.Contains(previewReleaseUrl, notes, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.32.0",
+            install,
+            StringComparison.Ordinal);
+        if (language == "en")
+        {
+            Assert.Contains("`latest` remains the stable channel.", install, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("`latest` は安定版の配布経路にとどまります。", install, StringComparison.Ordinal);
+        }
     }
 
     [Theory]
@@ -117,6 +144,17 @@ public sealed class ReleaseNotesV0321Preview1DocsTests
             Assert.Contains("separate from the replaceable", notes, StringComparison.Ordinal);
             Assert.Contains("destination, not evidence", notes, StringComparison.Ordinal);
             Assert.Contains("not authenticated", notes, StringComparison.Ordinal);
+            Assert.Contains("previously documented duties", notes, StringComparison.Ordinal);
+            Assert.Contains("posted independent review for the exact head", notes, StringComparison.Ordinal);
+            Assert.Contains("when knowledge write-back is declared required", notes, StringComparison.Ordinal);
+            Assert.Contains(
+                "one attributed architect and one attributed orchestrator knowledge-writeback receipt",
+                notes,
+                StringComparison.Ordinal);
+            Assert.Contains("architect guide-reachability receipt", notes, StringComparison.Ordinal);
+            Assert.Contains("--override-loop-evidence", notes, StringComparison.Ordinal);
+            Assert.Contains("--override-id <uuid>", notes, StringComparison.Ordinal);
+            Assert.Contains("--reason` alone does not waive duties", notes, StringComparison.Ordinal);
             Assert.Contains("declared-not-verified", notes, StringComparison.Ordinal);
             Assert.Contains("partial or foreign residual", notes, StringComparison.Ordinal);
             Assert.Contains("published GitHub Release event rebuilds", notes, StringComparison.Ordinal);
@@ -130,6 +168,14 @@ public sealed class ReleaseNotesV0321Preview1DocsTests
             Assert.Contains("公開先", notes, StringComparison.Ordinal);
             Assert.Contains("証拠ではありません", notes, StringComparison.Ordinal);
             Assert.Contains("認証されません", notes, StringComparison.Ordinal);
+            Assert.Contains("文書化されていた責務を実際に確認します", notes, StringComparison.Ordinal);
+            Assert.Contains("対象 head に対する independent review の投稿", notes, StringComparison.Ordinal);
+            Assert.Contains("knowledge write-back が必須として宣言された場合", notes, StringComparison.Ordinal);
+            Assert.Contains("architect と orchestrator それぞれに帰属する knowledge-writeback receipt", notes, StringComparison.Ordinal);
+            Assert.Contains("architect に帰属する guide-reachability receipt", notes, StringComparison.Ordinal);
+            Assert.Contains("--override-loop-evidence", notes, StringComparison.Ordinal);
+            Assert.Contains("--override-id <uuid>", notes, StringComparison.Ordinal);
+            Assert.Contains("`--reason` 単独では責務を免除せず", notes, StringComparison.Ordinal);
             Assert.Contains("declared-not-verified", notes, StringComparison.Ordinal);
             Assert.Contains("不完全な出力や別プロセスが置いたファイル", notes, StringComparison.Ordinal);
             Assert.Contains("別途確認", notes, StringComparison.Ordinal);
