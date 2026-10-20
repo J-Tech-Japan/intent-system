@@ -41,6 +41,7 @@ agmsg 投資があるチームには、非推奨（G829。引き続き動作し�
 10. [1.0 互換性の約束](1.0-compatibility-promise.md) — 対象となる機械向けサーフェス、廃止規則、ledger
 11. [日本語ドキュメントの用語ポリシー](00-terminology-policy.md)
 13. [npm 配布](13-npm-distribution.md) — global/npx エントリーポイント、リリース整合性、.NET tool との共存
+14. [リリースノート: 0.32.1-preview.1](release-notes-v0.32.1-preview.1.md) — prerelease candidate の準備内容と opt-in 移行ガイド
 
 ## Intent Storming とは
 

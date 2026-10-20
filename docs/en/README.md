@@ -44,6 +44,7 @@ primary. For the single-seat mode, see page 12 below or run
 9. [Developer reference](09-developer-reference.md) — packaged invocation, preview channel, version flow
 10. [1.0 compatibility promise](1.0-compatibility-promise.md) — covered machine surfaces, deprecation rule, and ledger
 13. [npm distribution](13-npm-distribution.md) — global/npx entry points, release integrity, and .NET tool coexistence
+14. [Release notes: 0.32.1-preview.1](release-notes-v0.32.1-preview.1.md) — prepared prerelease candidate notes and opt-in migration guidance
 
 ## What is Intent Storming?
 
