@@ -3018,7 +3018,52 @@ rotated by this command; the result and `shrink-audit.jsonl` say so explicitly.
 out of scope. Use `--dry-run` to inspect the measured plan without writing the
 manifest, JSONL files, or audit.
 
-### Next release readiness (v0.32.1)
+### Stable release readiness (v0.32.1)
+
+**PREPARED — NOT PUBLISHED.**
+
+This is the current stable-release preparation. Product main is
+`dba5724bc00f2207f601b5643cfb87595dc27795`; `eng/version.json` targets stable
+`0.32.1` and next development `0.32.2`. The prepared EN/JA notes are
+[`release-notes-v0.32.1.md`](release-notes-v0.32.1.md); the replaceable
+`release-notes-v0.32.2.md` is a development placeholder. The exact destination
+is the [v0.32.1 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.32.1),
+but no stable tag, GitHub Release, NuGet package, npm version, or native asset
+is created by this preparation. Until actual publication, public stable remains
+`0.32.0` and the separately published `0.32.1-preview.1` remains unchanged.
+
+G873 covers version policy, release notes, current install/index/ledger wording,
+and bounded documentation guards. It does not modify product runtime, workflow,
+package templates, or preview release data. A candidate build and a published
+release-event rebuild require separate verification; source tests or preview
+smoke do not prove stable artifact identity. After publication, stable npm
+`latest` moves to `0.32.1` while `preview` remains `0.32.1-preview.1`.
+
+### Next release readiness (v0.32.2)
+
+**DRAFT / UNRELEASED — PLACEHOLDER ONLY.**
+
+The stable `0.32.1` preparation above is **RELEASE PREPARED / NOT PUBLISHED**
+and remains prepare-only until the conductor verifies its public release.
+The prepared stable line is `v0.32.1`, while the public stable release remains
+`v0.32.0` until that separate publication. The current policy records
+`stableVersion 0.32.1` and `nextVersion 0.32.2`.
+The current next-line example is `release-prep:<owner/repo>:0.32.2`; it is a
+planning example, not evidence that a release or package is available.
+The prepared `release-notes-v0.32.1.md` documents the measured stable line;
+`release-notes-v0.32.2.md` and
+`JTechJapan.IntentSystem.Cli.0.32.2.nupkg` are replaceable next-line placeholders,
+not a selected scope or a release promise. The next release-prep replaces the
+placeholder after measuring its actual range.
+
+Keep the existing release safeguards in that future preparation: preserve the
+`metadata_write_branch` topology evidence, distinguish command-route changes
+from option-level changes, and verify the `--verify`, `--accept-evidence-gap`,
+and `--shell-policy` option-level surfaces. A GitHub Release is created only
+after its separate candidate and publication checks succeed.
+
+<a id="next-release-readiness-v0321"></a>
+### Previous v0.32.0 release-prep evidence (retained in history only)
 
 **RELEASE PREPARED / NOT PUBLISHED.**
 
@@ -3032,7 +3077,7 @@ from the release tag's `RAW` value in `release.yml`; `eng/version.json` governs
 local builds and dry runs only.
 
 The prepared files are `release-notes-v0.32.0.md` and the
-`release-notes-v0.32.1.md` DRAFT stub. The current policy is:
+`release-notes-v0.32.1.md` DRAFT stub. Policy at that time was:
 
 ```json
 {
@@ -3045,7 +3090,7 @@ The prepared files are `release-notes-v0.32.0.md` and the
 number. No tag, GitHub Release, package publish, workflow change, or product
 source change belongs to this prepare-only slice.
 
-The active package-policy evidence is `stableVersion 0.32.0`, `nextVersion 0.32.1`,
+The package-policy evidence recorded at that time was `stableVersion 0.32.0`, `nextVersion 0.32.1`,
 and local candidate `JTechJapan.IntentSystem.Cli.0.32.1.nupkg`.
 The host-only release-prep claim boundary is `release-prep:<owner/repo>:0.32.0`;
 this child release-prep uses supplied authority and does not inspect or mutate host state.
@@ -3055,7 +3100,7 @@ measured identities, alias promises, and placeholder checks; `ReleasePackageMeta
 continues to guard the release-policy shape and demanded next-version note.
 G796 and G800 are command-route additions and are counted for the minor bump;
 the alias table/config repair, guide rendering, and npm dist-tag behavior are
-listed but explicitly not counted as routes. The current readiness record keeps
+listed but explicitly not counted as routes. That historical readiness record kept
 all existing route names and option-level surfaces unchanged; no GitHub Release exists yet.
 The policy-derived next-version placeholder boundary remains
 `release-prep:<owner/repo>:0.32.1`; the prepared release target above is

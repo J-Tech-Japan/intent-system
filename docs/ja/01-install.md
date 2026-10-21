@@ -59,6 +59,47 @@ checksum、release gate、.NET tool と同じ `PATH` で共存するルールは
 [開発者リファレンスのプレビューセクション](09-developer-reference.md#preview-インストール)
 を参照。
 
+## 安定版 0.32.1（準備済み・未提供）
+
+この節は予定する安定版を説明するもので、公開を行いません。正確な
+[`v0.32.1` GitHub release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.32.1)
+が実際に公開されるまでは、公開中の安定版は `0.32.0` です。次の固定 version command は、
+まだ install できません。.NET tool には .NET 10 SDK が必要です。公開後に既存の global tool を
+残すには、隔離した directory へ install します:
+
+```bash
+dotnet tool install --tool-path <isolated-directory> JTechJapan.IntentSystem.Cli --version 0.32.1
+<isolated-directory>/intent-cli --version
+```
+
+公開後に npm から明示して選ぶ場合:
+
+```bash
+npm install -g intent-system@0.32.1
+intent-cli --version
+```
+
+安定版の公開後、preview から stable へ移る場合は、`0.32.1` を明示して
+`dotnet tool update -g JTechJapan.IntentSystem.Cli --version 0.32.1` または上記の npm command を
+実行します。SemVer では同じ `0.32.1` の stable は `0.32.1-preview.1` より後の版です。
+既定値から移行先を推測せず、stable version を明示してください。
+
+npm の global install は同じ prefix の package を置き換えることがあります。安定版には
+macOS-arm64、Linux-x64、Windows-x64 向けのランタイム同梱 asset が含まれる予定です。
+使用前に `.sha256` sidecar と照合してください。.NET tool、npm shim、native binary は同じ
+`intent-cli` command 名を使うため、`command -v intent-cli`（macOS/Linux）または
+`where intent-cli`（Windows）を実行し、その後 `intent-cli --version` で実体を確かめます。
+
+安定版を公開すると npm の `latest` は `0.32.1` に移ります。既存の
+`0.32.1-preview.1` version と `preview` tag は別のままです。公開までは `latest` は安定版
+`0.32.0` を指します。npm global install を意図して戻す場合は
+`npm install -g intent-system@0.32.0`、.NET global tool の場合は
+`dotnet tool update -g JTechJapan.IntentSystem.Cli --allow-downgrade --version 0.32.0` を実行します。
+隔離した .NET tool-path install は directory を削除し、既存の安定版 command を使います。
+
+測定範囲と公開境界は[安定版 0.32.1 リリースノート](release-notes-v0.32.1.md)を参照してください。
+[preview のノート](release-notes-v0.32.1-preview.1.md)は、公開済み preview の別記録です。
+
 ## 0.32.1-preview.1 を選んでインストールする場合
 
 以下は、`0.32.1-preview.1` の公開後に利用者が選べる手順です。

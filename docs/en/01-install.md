@@ -60,6 +60,52 @@ the runtime is bundled. Verify the `.sha256` sidecar before use. See the
 **Preview channel users** consuming the `preview-pack` artifact: see the
 [developer reference preview section](09-developer-reference.md#preview-install).
 
+## Stable 0.32.1 (prepared, not yet available)
+
+This section documents the planned stable version; it does not publish it. Until
+the exact [v0.32.1 GitHub release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.32.1)
+is actually published, the public stable version remains `0.32.0`, and the
+pinned commands below are not yet installable. The .NET tool requires the
+.NET 10 SDK. After publication, an isolated install keeps an existing global
+stable tool untouched:
+
+```bash
+dotnet tool install --tool-path <isolated-directory> JTechJapan.IntentSystem.Cli --version 0.32.1
+<isolated-directory>/intent-cli --version
+```
+
+After publication, the explicit npm choice is:
+
+```bash
+npm install -g intent-system@0.32.1
+intent-cli --version
+```
+
+After the stable release is published, a preview user can deliberately move to
+stable by selecting `0.32.1` with `dotnet tool update -g
+JTechJapan.IntentSystem.Cli --version 0.32.1` or the npm command above. Under
+SemVer, stable `0.32.1` follows the prerelease `0.32.1-preview.1`; select the
+stable version explicitly rather than relying on an inferred default.
+
+A global npm install can replace the package in that npm prefix. The stable
+release will include self-contained macOS-arm64, Linux-x64, and Windows-x64
+assets. Verify each downloaded asset against its `.sha256` sidecar before use.
+Use `command -v intent-cli` (macOS/Linux) or `where intent-cli` (Windows), then
+`intent-cli --version`, because the .NET tool, npm shim, and native binary share
+the command name and the first `PATH` match runs.
+
+Actual stable publication moves npm `latest` to `0.32.1`; the existing
+`0.32.1-preview.1` version and `preview` tag remain separate. Until publication,
+`latest` remains stable `0.32.0`. To roll an npm global install back deliberately,
+run `npm install -g intent-system@0.32.0`; to roll back a .NET global tool,
+run `dotnet tool update -g JTechJapan.IntentSystem.Cli --allow-downgrade --version 0.32.0`. For
+an isolated .NET tool-path install, remove its directory and continue using the
+existing stable command.
+
+See the [stable 0.32.1 release notes](release-notes-v0.32.1.md) for the
+measured scope and publication boundary. The [preview notes](release-notes-v0.32.1-preview.1.md)
+remain a separate record of the published preview.
+
 ## Optional 0.32.1-preview.1 install
 
 The version-specific commands below are opt-in instructions for after
