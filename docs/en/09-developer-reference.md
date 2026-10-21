@@ -3048,6 +3048,8 @@ and remains prepare-only until the conductor verifies its public release.
 The prepared stable line is `v0.32.1`, while the public stable release remains
 `v0.32.0` until that separate publication. The current policy records
 `stableVersion 0.32.1` and `nextVersion 0.32.2`.
+The current next-line example is `release-prep:<owner/repo>:0.32.2`; it is a
+planning example, not evidence that a release or package is available.
 The prepared `release-notes-v0.32.1.md` documents the measured stable line;
 `release-notes-v0.32.2.md` and
 `JTechJapan.IntentSystem.Cli.0.32.2.nupkg` are replaceable next-line placeholders,

@@ -195,6 +195,7 @@ public sealed class ReleaseNotesV0321StableDocsTests
             ? "<a id=\"next-release-readiness-v0321\"></a>\n### Stable release readiness"
             : "<a id=\"next-release-readiness-v0321\"></a>\n<a id=\"次リリース準備v0321\"></a>\n### 安定版リリース準備", reference, StringComparison.Ordinal);
         Assert.Contains("v0.32.2", reference, StringComparison.Ordinal);
+        Assert.Contains("release-prep:<owner/repo>:0.32.2", reference, StringComparison.Ordinal);
         Assert.Contains($"]({StableReleaseUrl})", reference, StringComparison.Ordinal);
         Assert.Contains("0.32.1-preview.1", reference, StringComparison.Ordinal);
         Assert.Contains("stableVersion", reference, StringComparison.Ordinal);

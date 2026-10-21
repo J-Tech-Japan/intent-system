@@ -3078,6 +3078,8 @@ product runtime、workflow、package template、preview release data は変更�
 確認するまでは prepare-only です。準備中の安定版は `v0.32.1` ですが、別途公開されるまでは
 公開済みの安定版は `v0.32.0` です。
 現在の policy は `stableVersion 0.32.1` と `nextVersion 0.32.2` を記録しています。
+現在の次の release-prep の例は `release-prep:<owner/repo>:0.32.2` です。これは計画上の例であり、
+release や package が利用可能であることを示しません。
 準備済みの `release-notes-v0.32.1.md` は測定済みの安定版範囲を記録します。
 `release-notes-v0.32.2.md` と
 `JTechJapan.IntentSystem.Cli.0.32.2.nupkg` は次の release-prep で置き換える placeholder であり、
