@@ -517,23 +517,23 @@ public sealed class ReleaseNotesV0320G802Tests
     {
         var root = RepoVersionPolicySource.RepoRoot();
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.32.0\",\n  \"nextVersion\": \"0.32.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.32.1\",\n  \"nextVersion\": \"0.32.2\"\n}\n",
             File.ReadAllText(Path.Combine(root, "eng", "version.json")));
 
         var policy = RepoVersionPolicySource.Read();
-        Assert.Equal("0.32.0", policy.StableVersion);
-        Assert.Equal("0.32.1", policy.NextVersion);
+        Assert.Equal("0.32.1", policy.StableVersion);
+        Assert.Equal("0.32.2", policy.NextVersion);
 
         foreach (var language in new[] { "en", "ja" })
         {
-            var stub = File.ReadAllText(Path.Combine(root, "docs", language, "release-notes-v0.32.1.md"));
+            var stub = File.ReadAllText(Path.Combine(root, "docs", language, "release-notes-v0.32.2.md"));
             Assert.Contains("DRAFT", stub, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("replaceable", stub, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(language == "en" ? "replaceable" : "差し替え可能", stub, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("changelog", stub, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("- G", stub, StringComparison.Ordinal);
         }
 
-        Console.WriteLine("G804 AC6 policy: stableVersion=0.32.0; nextVersion=0.32.1; placeholders=en,ja; version_policy_diff=empty");
+        Console.WriteLine("G804 AC6 current policy: stableVersion=0.32.1; nextVersion=0.32.2; English replaceable placeholder and Japanese 差し替え可能 placeholder");
     }
 
     [Theory]

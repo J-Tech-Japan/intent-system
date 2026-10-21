@@ -3050,7 +3050,48 @@ result は literal bytes の削減、追加した reference bytes、record の n
 `shrink-audit.jsonl` に明記します。`.intent-cli/runs/*.provider.jsonl` は別の provider-run state なので
 scope 外です。`--dry-run` なら manifest、JSONL、audit を書き込まずに測定済み plan だけを確認できます。
 
-### 次リリース準備(v0.32.1)
+### 安定版リリース準備 (v0.32.1)
+
+**準備済み — 未公開。**
+
+ここが現在の安定版公開準備です。product main は
+`dba5724bc00f2207f601b5643cfb87595dc27795` で、`eng/version.json` は安定版
+`0.32.1`、次の開発版 `0.32.2` を対象にします。EN/JA の準備済みノートは
+[`release-notes-v0.32.1.md`](release-notes-v0.32.1.md) です。差し替え可能な
+`release-notes-v0.32.2.md` は開発用 placeholder です。正確な公開先は
+[v0.32.1 GitHub Release](https://github.com/J-Tech-Japan/intent-system/releases/tag/v0.32.1)
+ですが、この準備で stable tag、GitHub Release、NuGet package、npm version、native asset は
+作成されません。実際に公開するまでは公開中の安定版 `0.32.0` と、別 channel の
+`0.32.1-preview.1` を維持します。
+
+G873 は version policy、release note、現在の install/index/ledger の説明と文書 guard を対象にします。
+product runtime、workflow、package template、preview release data は変更しません。候補 build と
+公開時の release-event rebuild は別々に確認します。source test や preview smoke は安定版 artifact の
+同一性を証明しません。公開後は npm `latest` が `0.32.1` を指し、`preview` は
+`0.32.1-preview.1` のままです。
+
+### 次リリース準備(v0.32.2)
+
+**DRAFT / 未リリース — placeholder のみ。**
+
+上記の安定版 `0.32.1` 準備は **RELEASE PREPARED / NOT PUBLISHED** であり、conductor が公開内容を
+確認するまでは prepare-only です。準備中の安定版は `v0.32.1` ですが、別途公開されるまでは
+公開済みの安定版は `v0.32.0` です。
+現在の policy は `stableVersion 0.32.1` と `nextVersion 0.32.2` を記録しています。
+準備済みの `release-notes-v0.32.1.md` は測定済みの安定版範囲を記録します。
+`release-notes-v0.32.2.md` と
+`JTechJapan.IntentSystem.Cli.0.32.2.nupkg` は次の release-prep で置き換える placeholder であり、
+対象範囲の決定や公開の約束ではありません。次の準備作業では、実際の変更範囲を測定してから
+placeholder を置き換えます。
+
+今後の準備でも既存の release safeguard を維持してください。`metadata_write_branch` topology の証拠を
+残し、command-route の変更と option-level の変更を区別し、`--verify`、`--accept-evidence-gap`、
+`--shell-policy` の option-level surface を確認します。GitHub Release は、候補と公開前の確認が
+別途すべて成功した後にのみ作成します。
+
+<a id="next-release-readiness-v0321"></a>
+<a id="次リリース準備v0321"></a>
+### 以前の v0.32.0 release-prep evidence（履歴のみ）
 
 **RELEASE PREPARED / NOT PUBLISHED。**
 
@@ -3063,7 +3104,7 @@ published v0.32.0 は `release.yml` の release tag の `RAW` から `VERSION` �
 `eng/version.json` は local builds と dry runs だけを管理します。
 
 prepared files は `release-notes-v0.32.0.md` と
-`release-notes-v0.32.1.md` の DRAFT stub です。current policy は次のとおりです:
+`release-notes-v0.32.1.md` の DRAFT stub です。当時の policy は次のとおりでした:
 
 ```json
 {
@@ -3076,7 +3117,7 @@ prepared files は `release-notes-v0.32.0.md` と
 ではありません。tag、GitHub Release、package publish、workflow change、product source
 change はこの prepare-only slice に含みません。
 
-active package-policy evidence は `stableVersion 0.32.0`、`nextVersion 0.32.1`、local
+当時の package-policy evidence は `stableVersion 0.32.0`、`nextVersion 0.32.1`、local
 candidate `JTechJapan.IntentSystem.Cli.0.32.1.nupkg` です。host-only release-prep claim boundary は
 `release-prep:<owner/repo>:0.32.0` で、この child release-prep は提供済みの権限を使い、
 host state を inspect/mutate しません。exact six-unit inventory は G795、G798、G796、G800、G797、G801

@@ -4,9 +4,9 @@ using IntentSystem.Cli.Infrastructure;
 namespace IntentSystem.Cli.Tests;
 
 /// <summary>
-/// G872: the 0.32.1-preview.1 notes and install guidance describe the measured
-/// source candidate without changing stable release policy or claiming that
-/// candidate assets have been published.
+/// G872: the published 0.32.1-preview.1 notes remain a separate record from
+/// G873's stable 0.32.1 preparation and make no claim that preview assets are
+/// stable assets.
 /// </summary>
 public sealed class ReleaseNotesV0321Preview1DocsTests
 {
@@ -96,8 +96,8 @@ public sealed class ReleaseNotesV0321Preview1DocsTests
         Assert.Contains("PATH", install, StringComparison.Ordinal);
 
         var indexLink = language == "en"
-            ? "[Release notes: 0.32.1-preview.1](release-notes-v0.32.1-preview.1.md)"
-            : "[リリースノート: 0.32.1-preview.1](release-notes-v0.32.1-preview.1.md)";
+            ? "[Published preview notes: 0.32.1-preview.1](release-notes-v0.32.1-preview.1.md)"
+            : "[公開済み preview のノート: 0.32.1-preview.1](release-notes-v0.32.1-preview.1.md)";
         var installNotesLink = language == "en"
             ? "[0.32.1-preview.1 release notes](release-notes-v0.32.1-preview.1.md)"
             : "[0.32.1-preview.1 リリースノート](release-notes-v0.32.1-preview.1.md)";
@@ -185,19 +185,22 @@ public sealed class ReleaseNotesV0321Preview1DocsTests
     }
 
     [Fact]
-    public void StablePolicyAndReplaceablePlaceholdersRemainUnchanged()
+    public void PreviewRemainsSeparateFromCurrentStablePolicyAndNextPlaceholder()
     {
         var root = RepoVersionPolicySource.RepoRoot();
         Assert.Equal(
-            "{\n  \"stableVersion\": \"0.32.0\",\n  \"nextVersion\": \"0.32.1\"\n}\n",
+            "{\n  \"stableVersion\": \"0.32.1\",\n  \"nextVersion\": \"0.32.2\"\n}\n",
             File.ReadAllText(Path.Combine(root, "eng", "version.json")));
 
         foreach (var language in new[] { "en", "ja" })
         {
-            var placeholder = Read(language, "release-notes-v0.32.1.md");
+            var placeholder = Read(language, "release-notes-v0.32.2.md");
             Assert.Contains("DRAFT", placeholder, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("replaceable", placeholder, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(language == "en" ? "replaceable" : "差し替え可能", placeholder, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("G851", placeholder, StringComparison.Ordinal);
+            var stableNotes = Read(language, "release-notes-v0.32.1.md");
+            Assert.Contains(language == "en" ? "PREPARED" : "準備済み", stableNotes, StringComparison.Ordinal);
+            Assert.Contains(language == "en" ? "NOT PUBLISHED" : "未公開", stableNotes, StringComparison.Ordinal);
         }
     }
 
